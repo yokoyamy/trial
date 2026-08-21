@@ -315,17 +315,14 @@ function survey_parse_proxy(string $input): array
 
 function survey_last_headers(): array
 {
-    if (function_exists('http_get_last_response_headers')) {
-        $headers = http_get_last_response_headers();
-        return is_array($headers) ? $headers : [];
+    if (!function_exists('http_get_last_response_headers')) {
+        return [];
     }
 
-    global $http_response_header;
-    return isset($http_response_header) && is_array($http_response_header)
-        ? $http_response_header
-        : [];
-}
+    $headers = http_get_last_response_headers();
 
+    return is_array($headers) ? $headers : [];
+}
 function survey_status_from_headers(array $headers): int
 {
     foreach ($headers as $header) {
