@@ -1,4 +1,5 @@
 <?php
+
 /*
 ========================================================================
 GUARD COMMENT — 固定名称一覧
@@ -152,163 +153,306 @@ HTML DOM ID / JS参照名:
 ========================================================================
 */
 
+/*
+ * デバッグ用。
+ * 本番公開時には display_errors を 0 に戻してください。
+ */
+error_reporting(E_ALL);
+ini_set('display_errors', '1');
+ini_set('display_startup_errors', '1');
+
 const SURVEY_STORAGE_DIRECTORY = __DIR__ . DIRECTORY_SEPARATOR . 'survey_storage';
 const SURVEY_STORAGE_FILE = SURVEY_STORAGE_DIRECTORY . DIRECTORY_SEPARATOR . 'survey_data.json';
 const SURVEY_ADMIN_SESSION = 'survey_admin_session_v1';
 
-/**
- * JSONデータストレージを安全に初期化する。
- *
- * 「ディレクトリが存在するか」
- * 「ディレクトリに書き込めるか」
- * 「JSONファイルを作成できるか」
- * 「JSONを読み込めるか」
- * を個別に検証する。
+/*
+ * 最初にPHPそのものが実行されているか確認。
+ * これすら表示されない場合、index.phpがPHPとして実行されていません。
  */
-function survey_storage_init(): array
-{
-    /* ディレクトリが存在しなければ作成 */
-    if (!is_dir(SURVEY_STORAGE_DIRECTORY)) {
-        if (!@mkdir(SURVEY_STORAGE_DIRECTORY, 0775, true)) {
-            $error = error_get_last();
+echo '<!-- SURVEY_APP_PHP_START -->';
 
-            return [
-                'ok' => false,
-                'message' =>
-                    'survey_storage ディレクトリを作成できませんでした。'
-                    . ' パス: ' . SURVEY_STORAGE_DIRECTORY
-                    . ' / PHP実行ユーザーに書き込み権限が必要です。'
-                    . (!empty($error['message']) ? ' / ' . $error['message'] : '')
-            ];
-        }
-    }
-
-    /* ディレクトリが本当に存在するか */
-    if (!is_dir(SURVEY_STORAGE_DIRECTORY)) {
-        return [
-            'ok' => false,
-            'message' => 'survey_storage ディレクトリが存在しません: '
-                . SURVEY_STORAGE_DIRECTORY
-        ];
-    }
-
-    /* ディレクトリへの書き込み確認 */
-    if (!is_writable(SURVEY_STORAGE_DIRECTORY)) {
-        return [
-            'ok' => false,
-            'message' =>
-                'survey_storage ディレクトリに書き込み権限がありません。'
-                . ' PHP実行ユーザーに書き込み権限を付与してください。'
-                . ' パス: ' . SURVEY_STORAGE_DIRECTORY
-        ];
-    }
-
-    /* JSONファイルが存在しなければ初期データを作成 */
-    if (!file_exists(SURVEY_STORAGE_FILE)) {
-        $initial_data = [
-            'surveys' => [],
-            'responses' => [],
-            'customers' => [],
-            'settings' => [
-                'subdomain' => '',
-                'login_name' => '',
-                'password' => '',
-                'app_id' => '',
-                'ssl_verify' => false,
-                'proxy' => '',
-                'field_company' => '',
-                'field_name' => '',
-                'field_email' => '',
-                'field_department' => '',
-                'field_phone' => '',
-                'field_address' => []
-            ],
-            'mail_logs' => []
-        ];
-
-        $json = json_encode(
-            $initial_data,
-            JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE
-        );
-
-        if ($json === false) {
-            return [
-                'ok' => false,
-                'message' => '初期データのJSON生成に失敗しました。'
-            ];
-        }
-
-        $written = @file_put_contents(
-            SURVEY_STORAGE_FILE,
-            $json,
-            LOCK_EX
-        );
-
-        if ($written === false) {
-            $error = error_get_last();
-
-            return [
-                'ok' => false,
-                'message' =>
-                    'survey_data.json を作成できませんでした。'
-                    . ' ファイル書き込み権限を確認してください。'
-                    . (!empty($error['message']) ? ' / ' . $error['message'] : '')
-            ];
-        }
-    }
-
-    /* ファイルが存在しても書き込み不能ならエラー */
-    if (!is_writable(SURVEY_STORAGE_FILE)) {
-        return [
-            'ok' => false,
-            'message' =>
-                'survey_data.json に書き込み権限がありません。'
-                . ' ファイル: ' . SURVEY_STORAGE_FILE
-        ];
-    }
-
-    /* JSON読み込み確認 */
-    $raw = @file_get_contents(SURVEY_STORAGE_FILE);
-
-    if ($raw === false) {
-        $error = error_get_last();
-
-        return [
-            'ok' => false,
-            'message' =>
-                'survey_data.json を読み込めませんでした。'
-                . (!empty($error['message']) ? ' / ' . $error['message'] : '')
-        ];
-    }
-
-    $data = json_decode($raw, true);
-
-    if (!is_array($data)) {
-        return [
-            'ok' => false,
-            'message' =>
-                'survey_data.json のJSON形式が壊れています。'
-                . ' ファイルを確認してください。'
-        ];
-    }
-
-    /* 必須トップキーを補完 */
-    foreach (
-        [
-            'surveys',
-            'responses',
-            'customers',
-            'settings',
-            'mail_logs'
-        ] as $key
-    ) {
-        if (!array_key_exists($key, $data)) {
-            $data[$key] = $key === 'settings' ? [] : [];
-        }
-    }
-
-    return [
-        'ok' => true,
-        'data' => $data
-    ];
+/*
+ * セッション開始。
+ */
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_name(SURVEY_ADMIN_SESSION);
+    session_start();
 }
+
+/*
+ * ストレージ初期化。
+ */
+if (!is_dir(SURVEY_STORAGE_DIRECTORY)) {
+    if (!@mkdir(SURVEY_STORAGE_DIRECTORY, 0775, true)) {
+        $e = error_get_last();
+
+        exit(
+            '<h1>ストレージディレクトリ作成失敗</h1>' .
+            '<pre>' .
+            htmlspecialchars(
+                $e['message'] ?? 'mkdir failed',
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            ) .
+            "\n\nPATH: " .
+            htmlspecialchars(
+                SURVEY_STORAGE_DIRECTORY,
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            ) .
+            '</pre>'
+        );
+    }
+}
+
+if (!is_dir(SURVEY_STORAGE_DIRECTORY)) {
+    exit(
+        '<h1>survey_storage が存在しません</h1>' .
+        '<pre>' .
+        htmlspecialchars(
+            SURVEY_STORAGE_DIRECTORY,
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8'
+        ) .
+        '</pre>'
+    );
+}
+
+if (!is_writable(SURVEY_STORAGE_DIRECTORY)) {
+    exit(
+        '<h1>survey_storage に書き込み権限がありません</h1>' .
+        '<pre>' .
+        htmlspecialchars(
+            SURVEY_STORAGE_DIRECTORY,
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8'
+        ) .
+        '</pre>'
+    );
+}
+
+/*
+ * JSONファイルを作成。
+ */
+if (!file_exists(SURVEY_STORAGE_FILE)) {
+
+    $initial = [
+        'surveys' => [],
+        'responses' => [],
+        'customers' => [],
+        'settings' => [
+            'subdomain' => '',
+            'login_name' => '',
+            'password' => '',
+            'app_id' => '',
+            'ssl_verify' => false,
+            'proxy' => '',
+            'field_company' => '',
+            'field_name' => '',
+            'field_email' => '',
+            'field_department' => '',
+            'field_phone' => '',
+            'field_address' => []
+        ],
+        'mail_logs' => []
+    ];
+
+    $json = json_encode(
+        $initial,
+        JSON_UNESCAPED_UNICODE |
+        JSON_UNESCAPED_SLASHES |
+        JSON_PRETTY_PRINT |
+        JSON_INVALID_UTF8_SUBSTITUTE
+    );
+
+    if ($json === false) {
+        exit(
+            '<h1>JSON生成エラー</h1><pre>' .
+            htmlspecialchars(
+                json_last_error_msg(),
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            ) .
+            '</pre>'
+        );
+    }
+
+    $result = @file_put_contents(
+        SURVEY_STORAGE_FILE,
+        $json,
+        LOCK_EX
+    );
+
+    if ($result === false) {
+        $e = error_get_last();
+
+        exit(
+            '<h1>survey_data.json 作成失敗</h1>' .
+            '<pre>' .
+            htmlspecialchars(
+                $e['message'] ?? 'file_put_contents failed',
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            ) .
+            "\n\nFILE: " .
+            htmlspecialchars(
+                SURVEY_STORAGE_FILE,
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            ) .
+            '</pre>'
+        );
+    }
+}
+
+/*
+ * JSON読み込み。
+ */
+$survey_raw = @file_get_contents(SURVEY_STORAGE_FILE);
+
+if ($survey_raw === false) {
+    $e = error_get_last();
+
+    exit(
+        '<h1>survey_data.json 読み込み失敗</h1>' .
+        '<pre>' .
+        htmlspecialchars(
+            $e['message'] ?? 'file_get_contents failed',
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8'
+        ) .
+        "\n\nFILE: " .
+        htmlspecialchars(
+            SURVEY_STORAGE_FILE,
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8'
+        ) .
+        '</pre>'
+    );
+}
+
+$survey_data = json_decode($survey_raw, true);
+
+if (!is_array($survey_data)) {
+    exit(
+        '<h1>JSONデータ破損</h1>' .
+        '<pre>' .
+        htmlspecialchars(
+            json_last_error_msg(),
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8'
+        ) .
+        '</pre>'
+    );
+}
+
+/*
+ * ここまで来ればPHPバックエンドは正常。
+ */
+?>
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>アンケート管理システム</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+</head>
+
+<body class="bg-slate-100 text-slate-800">
+
+<div id="app" class="min-h-screen p-8">
+
+    <div class="max-w-7xl mx-auto">
+
+        <header class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 mb-6">
+            <h1 class="text-2xl font-bold">
+                アンケート管理システム
+            </h1>
+
+            <p class="text-sm text-slate-500 mt-2">
+                PHPバックエンド正常稼働確認済み
+            </p>
+        </header>
+
+        <main class="bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
+
+            <div class="flex items-center justify-between mb-6">
+
+                <div>
+                    <h2 class="text-xl font-bold">
+                        アンケート一覧
+                    </h2>
+
+                    <p class="text-sm text-slate-500 mt-1">
+                        登録アンケート：
+                        <?= htmlspecialchars(
+                            (string)count($survey_data['surveys'] ?? []),
+                            ENT_QUOTES | ENT_SUBSTITUTE,
+                            'UTF-8'
+                        ) ?>
+                        件
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    class="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-3 rounded-xl font-semibold"
+                    onclick="App.actions.newSurvey()"
+                >
+                    ＋ 新規アンケート作成
+                </button>
+
+            </div>
+
+            <div class="border border-dashed border-slate-300 rounded-xl p-10 text-center text-slate-500">
+                <p class="text-lg">
+                    アプリケーションの初期描画に成功しました。
+                </p>
+
+                <p class="text-sm mt-2">
+                    ここまで表示されれば、PHPの白画面問題は解消しています。
+                </p>
+            </div>
+
+        </main>
+
+    </div>
+
+</div>
+
+<script>
+window.App = {
+    State: {
+        surveys: <?= json_encode(
+            $survey_data['surveys'] ?? [],
+            JSON_UNESCAPED_UNICODE |
+            JSON_UNESCAPED_SLASHES |
+            JSON_INVALID_UTF8_SUBSTITUTE
+        ) ?>
+    },
+
+    actions: {
+        newSurvey: function () {
+            alert('新規アンケート作成');
+        }
+    },
+
+    init: function () {
+        console.log('Survey App initialized.');
+    }
+};
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () {
+        App.init();
+    }, { once: true });
+} else {
+    App.init();
+}
+</script>
+
+</body>
+</html>
