@@ -1,15 +1,15 @@
 <?php
-/*
- * 顧客宛先選択・メール送信 / 回答フォロー モック
- * file: index.php
- */
+// ============================================================
+// アンケート管理システム：回答集計・分析画面 モック
+// index.php
+// ============================================================
 ?>
 <!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>顧客選択・送信・送信履歴</title>
+<title>回答集計・分析 | アンケート管理システム</title>
 
 <style>
 * {
@@ -19,27 +19,16 @@
 body {
     margin: 0;
     font-family:
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        "Hiragino Kaku Gothic ProN",
-        "Hiragino Sans",
-        Meiryo,
-        sans-serif;
-    color: #1f2937;
+        -apple-system, BlinkMacSystemFont,
+        "Segoe UI", "Hiragino Kaku Gothic ProN",
+        "Hiragino Sans", Meiryo, sans-serif;
     background: #f5f7fa;
+    color: #1f2937;
 }
 
-button,
-input,
-textarea,
-select {
-    font-family: inherit;
-}
-
-/* =====================================
+/* =========================
    Header
-===================================== */
+========================= */
 
 .header {
     height: 64px;
@@ -47,6 +36,7 @@ select {
     border-bottom: 1px solid #e5e7eb;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     padding: 0 28px;
     position: sticky;
     top: 0;
@@ -56,55 +46,35 @@ select {
 .logo {
     font-size: 18px;
     font-weight: 700;
-    color: #111827;
-    margin-right: 40px;
-}
-
-.nav {
-    height: 100%;
-    display: flex;
-    gap: 5px;
-}
-
-.nav a {
-    height: 100%;
-    display: flex;
-    align-items: center;
-    padding: 0 15px;
-    text-decoration: none;
-    color: #6b7280;
-    font-size: 14px;
-}
-
-.nav a:hover {
-    background: #f9fafb;
-    color: #111827;
-}
-
-.nav a.active {
     color: #2563eb;
-    font-weight: 600;
-    border-bottom: 2px solid #2563eb;
 }
 
 .header-right {
-    margin-left: auto;
+    display: flex;
+    gap: 8px;
 }
 
-.logout {
-    color: #6b7280;
-    font-size: 14px;
-    text-decoration: none;
+.nav-btn {
+    border: 0;
+    background: transparent;
+    color: #4b5563;
+    padding: 9px 14px;
+    border-radius: 7px;
+    cursor: pointer;
 }
 
-/* =====================================
-   Main
-===================================== */
+.nav-btn:hover {
+    background: #f3f4f6;
+}
+
+/* =========================
+   Layout
+========================= */
 
 .container {
-    max-width: 1450px;
+    max-width: 1400px;
     margin: 0 auto;
-    padding: 26px 30px 60px;
+    padding: 28px;
 }
 
 .breadcrumb {
@@ -114,502 +84,476 @@ select {
 }
 
 .breadcrumb span {
-    margin: 0 7px;
-    color: #9ca3af;
+    color: #2563eb;
 }
 
 .page-header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: 22px;
+    align-items: flex-start;
+    gap: 20px;
+    margin-bottom: 24px;
 }
 
 .page-title {
     margin: 0;
     font-size: 26px;
-    color: #111827;
-}
-
-.page-subtitle {
-    margin-top: 6px;
-    font-size: 13px;
-    color: #6b7280;
-}
-
-.primary-button {
-    height: 42px;
-    padding: 0 20px;
-    border: 0;
-    border-radius: 7px;
-    background: #2563eb;
-    color: #fff;
-    font-size: 14px;
     font-weight: 700;
-    cursor: pointer;
 }
 
-.primary-button:hover {
+.survey-title {
+    margin-top: 8px;
+    font-size: 16px;
+    color: #4b5563;
+}
+
+.header-actions {
+    display: flex;
+    gap: 10px;
+}
+
+/* =========================
+   Buttons
+========================= */
+
+.btn {
+    border: 1px solid #d1d5db;
+    background: #fff;
+    color: #374151;
+    border-radius: 7px;
+    padding: 10px 16px;
+    min-height: 42px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: .15s;
+}
+
+.btn:hover {
+    background: #f9fafb;
+}
+
+.btn-primary {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: #fff;
+}
+
+.btn-primary:hover {
     background: #1d4ed8;
 }
 
-.primary-button:disabled {
-    background: #9ca3af;
-    cursor: not-allowed;
+.btn-success {
+    background: #059669;
+    border-color: #059669;
+    color: #fff;
 }
 
-/* =====================================
-   Alert
-===================================== */
-
-.alert {
-    display: flex;
-    align-items: flex-start;
-    gap: 13px;
-    background: #fff7ed;
-    border: 1px solid #fed7aa;
-    color: #9a3412;
-    border-radius: 9px;
-    padding: 15px 18px;
-    margin-bottom: 18px;
-}
-
-.alert-icon {
-    font-size: 20px;
-}
-
-.alert-title {
-    font-weight: 700;
-    margin-bottom: 3px;
-}
-
-.alert-text {
-    font-size: 13px;
-    line-height: 1.6;
-}
-
-/* =====================================
-   Card
-===================================== */
+/* =========================
+   Cards
+========================= */
 
 .card {
     background: #fff;
     border: 1px solid #e5e7eb;
     border-radius: 10px;
-    margin-bottom: 18px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.03);
 }
 
 .card-header {
-    padding: 17px 20px;
-    border-bottom: 1px solid #e5e7eb;
+    padding: 18px 20px;
+    border-bottom: 1px solid #edf0f3;
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    justify-content: space-between;
 }
 
 .card-title {
-    margin: 0;
-    font-size: 16px;
     font-weight: 700;
-    color: #111827;
-}
-
-.card-description {
-    margin-top: 4px;
-    font-size: 12px;
-    color: #6b7280;
+    font-size: 16px;
 }
 
 .card-body {
     padding: 20px;
 }
 
-/* =====================================
-   Template
-===================================== */
+/* =========================
+   Summary
+========================= */
 
-.template-grid {
+.summary-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 18px;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 14px;
 }
 
-.form-item {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
+.summary-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 20px;
 }
 
-.form-item.full {
-    grid-column: 1 / -1;
+.summary-label {
+    color: #6b7280;
+    font-size: 13px;
+    margin-bottom: 10px;
 }
 
-.form-label {
-    font-size: 12px;
+.summary-value {
+    font-size: 27px;
     font-weight: 700;
-    color: #4b5563;
 }
 
-.form-label .required {
-    color: #dc2626;
+.summary-value small {
+    font-size: 14px;
+    font-weight: 500;
     margin-left: 3px;
 }
 
-input[type="text"],
-textarea,
-select {
-    width: 100%;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    padding: 10px 12px;
-    outline: none;
-    font-size: 14px;
-    background: #fff;
+.summary-sub {
+    font-size: 12px;
+    color: #9ca3af;
+    margin-top: 7px;
 }
 
-input[type="text"]:focus,
-textarea:focus,
-select:focus {
-    border-color: #2563eb;
-    box-shadow: 0 0 0 3px rgba(37,99,235,.10);
+.blue {
+    color: #2563eb;
 }
 
-textarea {
-    min-height: 175px;
-    resize: vertical;
-    line-height: 1.7;
+.green {
+    color: #059669;
 }
 
-.variables {
+.orange {
+    color: #d97706;
+}
+
+.red {
+    color: #dc2626;
+}
+
+/* =========================
+   Question filter
+========================= */
+
+.filter-actions {
     display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-    margin-top: 5px;
+    gap: 8px;
 }
 
-.variable {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 8px;
-    border-radius: 5px;
-    background: #eff6ff;
-    color: #1d4ed8;
-    font-size: 11px;
-    cursor: pointer;
-    border: 1px solid #bfdbfe;
-}
-
-.variable:hover {
-    background: #dbeafe;
-}
-
-/* =====================================
-   Search
-===================================== */
-
-.filter-row {
+.question-list {
     display: grid;
-    grid-template-columns: 1fr 1fr 180px auto;
-    gap: 10px;
-    align-items: end;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
 }
 
-.filter-buttons {
+.question-check {
+    border: 1px solid #e5e7eb;
+    padding: 12px;
+    border-radius: 7px;
     display: flex;
-    gap: 7px;
-}
-
-.secondary-button {
-    height: 40px;
-    padding: 0 15px;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    background: #fff;
-    color: #374151;
-    font-size: 13px;
-    font-weight: 600;
+    gap: 10px;
+    align-items: flex-start;
     cursor: pointer;
 }
 
-.secondary-button:hover {
+.question-check:hover {
     background: #f9fafb;
 }
 
-.small-label {
-    display: block;
-    font-size: 11px;
-    color: #6b7280;
+.question-check input {
+    margin-top: 3px;
+}
+
+.question-number {
     font-weight: 700;
-    margin-bottom: 6px;
-}
-
-/* =====================================
-   Selection summary
-===================================== */
-
-.selection-bar {
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-    padding: 12px 16px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-radius: 7px;
-    margin-bottom: 12px;
-    font-size: 13px;
-}
-
-.selection-count {
-    color: #1d4ed8;
-    font-weight: 700;
-}
-
-.clear-selection {
-    border: 0;
-    background: transparent;
     color: #2563eb;
+}
+
+.question-text {
+    font-size: 14px;
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 20px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 5px;
+}
+
+.badge-blue {
+    background: #eff6ff;
+    color: #2563eb;
+}
+
+.badge-green {
+    background: #ecfdf5;
+    color: #047857;
+}
+
+.badge-gray {
+    background: #f3f4f6;
+    color: #4b5563;
+}
+
+.badge-orange {
+    background: #fff7ed;
+    color: #c2410c;
+}
+
+/* =========================
+   Charts
+========================= */
+
+.group-title {
+    font-size: 18px;
+    margin: 0;
+    font-weight: 700;
+}
+
+.chart-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 9px;
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+
+.chart-header {
+    background: #fafafa;
+    padding: 16px;
+    border-bottom: 1px solid #eee;
+}
+
+.chart-body {
+    padding: 20px;
+}
+
+.bar-row {
+    display: grid;
+    grid-template-columns: 180px 1fr 90px;
+    align-items: center;
+    gap: 14px;
+    margin: 14px 0;
+}
+
+.bar-label {
+    font-size: 14px;
+}
+
+.bar-bg {
+    height: 18px;
+    background: #eef2f7;
+    border-radius: 20px;
+    overflow: hidden;
+}
+
+.bar {
+    height: 100%;
+    border-radius: 20px;
+    background: #3b82f6;
+    transition: width .4s ease;
+}
+
+.bar.green-bar {
+    background: #10b981;
+}
+
+.bar.orange-bar {
+    background: #f59e0b;
+}
+
+.bar-value {
+    font-size: 13px;
+    text-align: right;
+    color: #4b5563;
+}
+
+/* =========================
+   Other answers
+========================= */
+
+.other-box {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 8px;
+    margin-top: 20px;
+    overflow: hidden;
+}
+
+.other-header {
+    padding: 12px 15px;
+    font-weight: 700;
+    color: #92400e;
     cursor: pointer;
+}
+
+.other-content {
+    display: none;
+    border-top: 1px solid #fde68a;
+    background: #fff;
+}
+
+.other-content.open {
+    display: block;
+}
+
+.other-item {
+    padding: 13px 15px;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.other-item:last-child {
+    border-bottom: 0;
+}
+
+.customer-name {
+    font-weight: 700;
+}
+
+.customer-company {
+    color: #6b7280;
     font-size: 12px;
 }
 
-/* =====================================
-   Table
-===================================== */
+.answer-text {
+    margin-top: 5px;
+}
+
+/* =========================
+   Timeline
+========================= */
+
+.timeline {
+    max-height: 330px;
+    overflow-y: auto;
+}
+
+.timeline-item {
+    position: relative;
+    padding: 0 0 20px 22px;
+    margin-left: 5px;
+    border-left: 2px solid #dbeafe;
+}
+
+.timeline-item:last-child {
+    border-left-color: transparent;
+}
+
+.timeline-item::before {
+    content: "";
+    position: absolute;
+    left: -6px;
+    top: 2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #3b82f6;
+}
+
+.timeline-date {
+    color: #9ca3af;
+    font-size: 12px;
+}
+
+.timeline-answer {
+    margin-top: 6px;
+    line-height: 1.7;
+}
+
+/* =========================
+   Individual answers
+========================= */
+
+.search-box {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.search-box input {
+    flex: 1;
+    border: 1px solid #d1d5db;
+    border-radius: 7px;
+    padding: 11px 13px;
+    font-size: 14px;
+}
 
 .table-wrapper {
     overflow-x: auto;
 }
 
-.customer-table {
+table {
     width: 100%;
-    min-width: 1250px;
     border-collapse: collapse;
+    min-width: 900px;
 }
 
-.customer-table th {
-    background: #f9fafb;
-    height: 48px;
-    padding: 0 13px;
-    border-bottom: 1px solid #e5e7eb;
+th {
+    background: #f8fafc;
+    color: #4b5563;
+    font-size: 12px;
     text-align: left;
-    font-size: 11px;
-    color: #6b7280;
+    padding: 12px;
+    border-bottom: 1px solid #e5e7eb;
     white-space: nowrap;
 }
 
-.customer-table td {
-    padding: 14px 13px;
+td {
+    padding: 14px 12px;
     border-bottom: 1px solid #edf0f3;
-    vertical-align: middle;
-    font-size: 12px;
+    font-size: 13px;
+    vertical-align: top;
 }
 
-.customer-table tbody tr:hover {
-    background: #fafcff;
-}
-
-.customer-table tbody tr:last-child td {
-    border-bottom: 0;
-}
-
-.customer-table tr.web-row {
-    background: #fafafa;
-}
-
-.customer-table tr.web-row:hover {
-    background: #f5f5f5;
-}
-
-.customer-info {
-    line-height: 1.55;
-    min-width: 210px;
-}
-
-.company {
-    font-weight: 700;
-    color: #111827;
-}
-
-.name {
+.answer-highlight {
+    color: #c2410c;
     font-weight: 600;
-    color: #374151;
 }
 
-.contact {
-    color: #6b7280;
-    font-size: 11px;
-}
-
-.history {
-    line-height: 1.7;
-    min-width: 180px;
-}
-
-.history-date {
-    color: #374151;
-}
-
-.history-count {
-    color: #6b7280;
-}
-
-.link-button {
+.link-btn {
     border: 0;
-    background: transparent;
-    padding: 0;
+    background: none;
     color: #2563eb;
     cursor: pointer;
-    font-size: 11px;
-    text-decoration: underline;
+    font-weight: 600;
+    padding: 0;
 }
 
-.link-button:hover {
-    color: #1d4ed8;
-}
-
-/* =====================================
-   Badges
-===================================== */
-
-.badge {
-    display: inline-flex;
-    align-items: center;
-    white-space: nowrap;
-    padding: 5px 9px;
-    border-radius: 999px;
-    font-size: 10px;
-    font-weight: 700;
-}
-
-.badge.unanswered {
-    background: #fef3c7;
-    color: #92400e;
-}
-
-.badge.answered {
-    background: #d1fae5;
-    color: #047857;
-}
-
-.badge.not-sent {
-    background: #f3f4f6;
-    color: #6b7280;
-}
-
-.badge.web {
-    background: #ede9fe;
-    color: #6d28d9;
-}
-
-.badge.unregistered {
-    background: #fee2e2;
-    color: #b91c1c;
-}
-
-.badge.registered {
-    background: #d1fae5;
-    color: #047857;
-}
-
-/* =====================================
-   Register Button
-===================================== */
-
-.register-button {
-    height: 31px;
-    padding: 0 10px;
-    border-radius: 5px;
-    border: 1px solid #fecaca;
-    background: #fff;
-    color: #dc2626;
-    cursor: pointer;
-    font-size: 11px;
-    font-weight: 700;
-}
-
-.register-button:hover {
-    background: #fef2f2;
-}
-
-.registered-text {
-    color: #047857;
-    font-weight: 700;
-    white-space: nowrap;
-}
-
-/* =====================================
-   History
-===================================== */
-
-.log-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-.log-table th {
-    background: #f9fafb;
-    padding: 11px 13px;
-    text-align: left;
-    font-size: 11px;
-    color: #6b7280;
-    border-bottom: 1px solid #e5e7eb;
-}
-
-.log-table td {
-    padding: 13px;
-    border-bottom: 1px solid #edf0f3;
-    font-size: 12px;
-}
-
-.log-table tr:last-child td {
-    border-bottom: 0;
-}
-
-.type-badge {
-    display: inline-flex;
-    padding: 4px 8px;
-    border-radius: 5px;
-    background: #eff6ff;
-    color: #1d4ed8;
-    font-size: 10px;
-    font-weight: 700;
-}
-
-/* =====================================
+/* =========================
    Modal
-===================================== */
+========================= */
 
-.modal-overlay {
+.modal-backdrop {
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(15,23,42,.48);
+    background: rgba(15,23,42,.55);
     z-index: 100;
     align-items: center;
     justify-content: center;
     padding: 20px;
 }
 
-.modal-overlay.show {
+.modal-backdrop.show {
     display: flex;
 }
 
 .modal {
-    width: 100%;
-    max-width: 560px;
-    max-height: 90vh;
-    overflow: auto;
     background: #fff;
+    width: min(760px, 100%);
+    max-height: 85vh;
     border-radius: 12px;
-    box-shadow: 0 20px 60px rgba(0,0,0,.22);
-}
-
-.modal.large {
-    max-width: 760px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,.2);
 }
 
 .modal-header {
-    padding: 18px 21px;
+    padding: 18px 20px;
     border-bottom: 1px solid #e5e7eb;
     display: flex;
     justify-content: space-between;
@@ -617,105 +561,72 @@ textarea {
 }
 
 .modal-title {
-    margin: 0;
-    font-size: 17px;
     font-weight: 700;
 }
 
 .modal-close {
-    width: 32px;
-    height: 32px;
     border: 0;
-    border-radius: 5px;
-    background: transparent;
-    color: #6b7280;
-    font-size: 22px;
-    cursor: pointer;
-}
-
-.modal-close:hover {
     background: #f3f4f6;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    cursor: pointer;
 }
 
 .modal-body {
-    padding: 21px;
-    font-size: 13px;
-    line-height: 1.8;
-    color: #4b5563;
+    padding: 20px;
+    overflow-y: auto;
+    max-height: 65vh;
 }
 
-.modal-footer {
-    padding: 15px 21px;
-    border-top: 1px solid #e5e7eb;
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
+.answer-detail {
+    border-bottom: 1px solid #eee;
+    padding: 15px 0;
 }
 
-.modal-button {
-    height: 38px;
-    padding: 0 17px;
-    border-radius: 6px;
-    border: 1px solid #d1d5db;
-    background: #fff;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 600;
+.answer-detail:last-child {
+    border-bottom: 0;
 }
 
-.modal-button.primary {
-    color: #fff;
-    background: #2563eb;
-    border-color: #2563eb;
-}
-
-.modal-button.primary:hover {
-    background: #1d4ed8;
-}
-
-.modal-button.danger {
-    color: #fff;
-    background: #dc2626;
-    border-color: #dc2626;
-}
-
-.mail-preview {
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    background: #f9fafb;
-    padding: 16px;
-    white-space: pre-wrap;
-    line-height: 1.8;
-    max-height: 380px;
-    overflow: auto;
-}
-
-.mail-subject {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    padding: 12px;
-    border-radius: 7px;
-    margin-bottom: 10px;
+.answer-detail-q {
     font-weight: 700;
+    margin-bottom: 7px;
 }
 
-/* =====================================
+.answer-detail-a {
+    color: #4b5563;
+    line-height: 1.7;
+}
+
+/* =========================
+   Empty
+========================= */
+
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #6b7280;
+}
+
+.empty-icon {
+    font-size: 42px;
+    margin-bottom: 10px;
+}
+
+/* =========================
    Toast
-===================================== */
+========================= */
 
 .toast {
     position: fixed;
-    right: 24px;
-    bottom: 24px;
+    right: 25px;
+    bottom: 25px;
     background: #111827;
     color: #fff;
     padding: 13px 18px;
     border-radius: 8px;
-    font-size: 13px;
-    box-shadow: 0 10px 30px rgba(0,0,0,.22);
     opacity: 0;
-    transform: translateY(15px);
-    pointer-events: none;
+    transform: translateY(20px);
     transition: .25s;
     z-index: 200;
 }
@@ -725,88 +636,96 @@ textarea {
     transform: translateY(0);
 }
 
-/* =====================================
+/* =========================
    Responsive
-===================================== */
+========================= */
 
-@media (max-width: 900px) {
-
-    .template-grid {
-        grid-template-columns: 1fr;
+@media (max-width: 1000px) {
+    .summary-grid {
+        grid-template-columns: repeat(3, 1fr);
     }
-
-    .form-item.full {
-        grid-column: auto;
-    }
-
-    .filter-row {
-        grid-template-columns: 1fr 1fr;
-    }
-
-    .filter-buttons {
-        grid-column: 1 / -1;
-    }
-
 }
 
 @media (max-width: 700px) {
-
     .header {
-        padding: 0 14px;
+        padding: 0 15px;
     }
 
-    .logo {
-        margin-right: 12px;
-        font-size: 15px;
-    }
-
-    .nav a {
-        padding: 0 8px;
-        font-size: 11px;
-    }
-
-    .header-right {
+    .header-right .nav-btn:not(:first-child) {
         display: none;
     }
 
     .container {
-        padding: 20px 14px 40px;
+        padding: 18px 12px;
     }
 
     .page-header {
-        align-items: flex-start;
-        gap: 12px;
-    }
-
-    .page-title {
-        font-size: 21px;
-    }
-
-    .primary-button {
-        padding: 0 12px;
-        font-size: 12px;
-        white-space: nowrap;
-    }
-
-    .filter-row {
-        grid-template-columns: 1fr;
-    }
-
-    .filter-buttons {
-        grid-column: auto;
-    }
-
-    .selection-bar {
-        align-items: flex-start;
-        gap: 8px;
         flex-direction: column;
     }
 
-    .toast {
-        left: 14px;
-        right: 14px;
-        bottom: 14px;
-        text-align: center;
+    .header-actions {
+        width: 100%;
+    }
+
+    .header-actions .btn {
+        flex: 1;
+    }
+
+    .summary-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .question-list {
+        grid-template-columns: 1fr;
+    }
+
+    .bar-row {
+        grid-template-columns: 110px 1fr 70px;
+        gap: 8px;
+    }
+
+    .bar-label {
+        font-size: 12px;
+    }
+}
+
+@media (max-width: 450px) {
+    .summary-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .summary-value {
+        font-size: 23px;
+    }
+}
+
+/* =========================
+   Print / PDF
+========================= */
+
+@media print {
+    .header,
+    .header-actions,
+    .filter-actions,
+    .search-box,
+    .individual-card,
+    .modal-backdrop {
+        display: none !important;
+    }
+
+    body {
+        background: white;
+    }
+
+    .container {
+        max-width: none;
+        padding: 0;
+    }
+
+    .card,
+    .summary-card {
+        box-shadow: none;
+        break-inside: avoid;
     }
 }
 </style>
@@ -814,201 +733,433 @@ textarea {
 
 <body>
 
-<!-- =====================================
+<!-- =========================
      Header
-===================================== -->
+========================= -->
 
 <header class="header">
-
-    <div class="logo">
-        Survey Admin
-    </div>
-
-    <nav class="nav">
-
-        <a href="#"
-           onclick="showToast('アンケート一覧へ戻ります（モック）'); return false;">
-            アンケート一覧
-        </a>
-
-        <a href="#"
-           onclick="showToast('キントーン連携設定画面へ遷移します（モック）'); return false;">
-            キントーン連携設定
-        </a>
-
-    </nav>
+    <div class="logo">アンケート管理システム</div>
 
     <div class="header-right">
-        <a href="#"
-           class="logout"
-           onclick="showToast('ログアウトしました（モック）'); return false;">
+        <button class="nav-btn" onclick="goList()">アンケート一覧</button>
+        <button class="nav-btn" onclick="alert('キントーン連携設定画面へ遷移します')">
+            キントーン連携設定
+        </button>
+        <button class="nav-btn" onclick="alert('ログアウトしました')">
             ログアウト
-        </a>
+        </button>
     </div>
-
 </header>
 
-
-<!-- =====================================
-     Main
-===================================== -->
 
 <main class="container">
 
     <!-- Breadcrumb -->
-
     <div class="breadcrumb">
-        ホーム
-        <span>›</span>
-        アンケート一覧
-        <span>›</span>
-        顧客選択・送信・送信履歴
+        ホーム　&gt;　<span>アンケート一覧</span>　&gt;
+        回答集計・分析
     </div>
 
 
-    <!-- Header -->
-
-    <div class="page-header">
+    <!-- Page Header -->
+    <section class="page-header">
 
         <div>
+            <h1 class="page-title">回答集計・分析</h1>
 
-            <h1 class="page-title">
-                顧客選択・送信・送信履歴
-            </h1>
-
-            <div class="page-subtitle">
-                顧客へのアンケート送信、回答状況、送信履歴を管理します。
+            <div class="survey-title">
+                対象アンケート：
+                <strong>2026年度 顧客満足度調査</strong>
             </div>
-
         </div>
 
-        <button
-            id="sendButton"
-            class="primary-button"
-            onclick="bulkSend()"
-            disabled>
-            選択した顧客へ一括送信
-        </button>
+        <div class="header-actions">
+            <button class="btn" onclick="downloadCSV()">
+                CSVダウンロード
+            </button>
 
-    </div>
-
-
-    <!-- =====================================
-         Kintone Alert
-    ===================================== -->
-
-    <div
-        id="unregisteredAlert"
-        class="alert">
-
-        <div class="alert-icon">
-            ⚠
+            <button class="btn btn-primary" onclick="exportPDF()">
+                PDF出力
+            </button>
         </div>
 
-        <div>
+    </section>
 
-            <div class="alert-title">
-                キントーン未登録の回答者がいます
+
+    <!-- =========================
+         Summary
+    ========================= -->
+
+    <section class="summary-grid">
+
+        <div class="summary-card">
+            <div class="summary-label">送信対象者数</div>
+            <div class="summary-value blue">
+                200 <small>人</small>
             </div>
-
-            <div class="alert-text">
-                Web公開フォームから回答した顧客のうち、
-                キントーンに未登録の顧客が
-                <strong id="unregisteredCount">2</strong>名います。
-                顧客情報を確認し、登録完了後に「キントーン登録完了」を押してください。
-            </div>
-
+            <div class="summary-sub">メール送信対象</div>
         </div>
 
-    </div>
+        <div class="summary-card">
+            <div class="summary-label">回答数</div>
+            <div class="summary-value green">
+                128 <small>件</small>
+            </div>
+            <div class="summary-sub">有効回答数</div>
+        </div>
+
+        <div class="summary-card">
+            <div class="summary-label">未登録顧客からの回答数</div>
+            <div class="summary-value orange">
+                8 <small>件</small>
+            </div>
+            <div class="summary-sub">Web公開URL経由</div>
+        </div>
+
+        <div class="summary-card">
+            <div class="summary-label">未回答数</div>
+            <div class="summary-value red">
+                80 <small>人</small>
+            </div>
+            <div class="summary-sub">送信済み・未回答</div>
+        </div>
+
+        <div class="summary-card">
+            <div class="summary-label">回答率</div>
+            <div class="summary-value blue">
+                60.0 <small>%</small>
+            </div>
+            <div class="summary-sub">
+                128 / 200
+            </div>
+        </div>
+
+    </section>
 
 
-    <!-- =====================================
-         Mail Template
-    ===================================== -->
+    <!-- =========================
+         Question Filter
+    ========================= -->
 
     <section class="card">
 
         <div class="card-header">
 
-            <div>
-                <h2 class="card-title">
-                    送信メールテンプレート
-                </h2>
-
-                <div class="card-description">
-                    今回送信するメール内容を設定してください。
-                </div>
+            <div class="card-title">
+                集計対象の設問
             </div>
 
-            <button
-                class="secondary-button"
-                onclick="previewTemplate()">
-                メールプレビュー
-            </button>
+            <div class="filter-actions">
+                <button class="btn" onclick="selectAllQuestions()">
+                    すべて選択
+                </button>
+
+                <button class="btn" onclick="clearAllQuestions()">
+                    すべて解除
+                </button>
+            </div>
 
         </div>
 
+        <div class="card-body">
+
+            <div class="question-list">
+
+                <label class="question-check">
+                    <input
+                        type="checkbox"
+                        class="question-filter"
+                        data-target="q1"
+                        checked
+                        onchange="toggleQuestion('q1')"
+                    >
+
+                    <div>
+                        <div>
+                            <span class="question-number">Q1.</span>
+                            サービス全体の満足度を教えてください
+                        </div>
+
+                        <span class="badge badge-blue">
+                            単一選択
+                        </span>
+                    </div>
+                </label>
+
+
+                <label class="question-check">
+                    <input
+                        type="checkbox"
+                        class="question-filter"
+                        data-target="q2"
+                        checked
+                        onchange="toggleQuestion('q2')"
+                    >
+
+                    <div>
+                        <div>
+                            <span class="question-number">Q2.</span>
+                            当社サービスをどの程度おすすめしますか？
+                        </div>
+
+                        <span class="badge badge-blue">
+                            単一選択
+                        </span>
+                    </div>
+                </label>
+
+
+                <label class="question-check">
+                    <input
+                        type="checkbox"
+                        class="question-filter"
+                        data-target="q3"
+                        checked
+                        onchange="toggleQuestion('q3')"
+                    >
+
+                    <div>
+                        <div>
+                            <span class="question-number">Q3.</span>
+                            利用しているサービスを選択してください
+                        </div>
+
+                        <span class="badge badge-green">
+                            複数選択
+                        </span>
+                    </div>
+                </label>
+
+
+                <label class="question-check">
+                    <input
+                        type="checkbox"
+                        class="question-filter"
+                        data-target="q4"
+                        checked
+                        onchange="toggleQuestion('q4')"
+                    >
+
+                    <div>
+                        <div>
+                            <span class="question-number">Q4.</span>
+                            改善してほしい点があれば教えてください
+                        </div>
+
+                        <span class="badge badge-gray">
+                            テキスト
+                        </span>
+                    </div>
+                </label>
+
+            </div>
+
+        </div>
+
+    </section>
+
+
+    <!-- =========================
+         Group 1
+    ========================= -->
+
+    <section class="card">
+
+        <div class="card-header">
+            <div class="group-title">
+                グループ1：サービス評価
+            </div>
+        </div>
 
         <div class="card-body">
 
-            <div class="template-grid">
 
-                <div class="form-item full">
+            <!-- Q1 -->
 
-                    <label class="form-label">
-                        メール件名
-                        <span class="required">*</span>
-                    </label>
+            <div class="chart-card" id="q1">
 
-                    <input
-                        type="text"
-                        id="mailSubject"
-                        value="【アンケートのお願い】顧客満足度調査へのご協力をお願いします">
+                <div class="chart-header">
+                    <strong>Q1. サービス全体の満足度を教えてください</strong>
+                    <span class="badge badge-blue">単一選択</span>
+                </div>
+
+                <div class="chart-body">
+
+                    <div class="bar-row">
+                        <div class="bar-label">非常に満足</div>
+                        <div class="bar-bg">
+                            <div class="bar" style="width:72%"></div>
+                        </div>
+                        <div class="bar-value">72件 / 56.3%</div>
+                    </div>
+
+                    <div class="bar-row">
+                        <div class="bar-label">満足</div>
+                        <div class="bar-bg">
+                            <div class="bar green-bar" style="width:38%"></div>
+                        </div>
+                        <div class="bar-value">38件 / 29.7%</div>
+                    </div>
+
+                    <div class="bar-row">
+                        <div class="bar-label">普通</div>
+                        <div class="bar-bg">
+                            <div class="bar orange-bar" style="width:14%"></div>
+                        </div>
+                        <div class="bar-value">14件 / 10.9%</div>
+                    </div>
+
+                    <div class="bar-row">
+                        <div class="bar-label">不満</div>
+                        <div class="bar-bg">
+                            <div class="bar" style="width:4%;background:#ef4444"></div>
+                        </div>
+                        <div class="bar-value">4件 / 3.1%</div>
+                    </div>
 
                 </div>
 
+            </div>
 
-                <div class="form-item full">
 
-                    <label class="form-label">
-                        メール本文
-                        <span class="required">*</span>
-                    </label>
+            <!-- Q2 -->
 
-                    <textarea
-                        id="mailBody">{顧客名} 様
+            <div class="chart-card" id="q2">
 
-いつもお世話になっております。
+                <div class="chart-header">
+                    <strong>
+                        Q2. 当社サービスをどの程度おすすめしますか？
+                    </strong>
+                    <span class="badge badge-blue">単一選択</span>
+                </div>
 
-この度、サービス向上を目的としてアンケートを実施しております。
+                <div class="chart-body">
 
-以下のURLよりアンケートへのご回答をお願いいたします。
+                    <div class="bar-row">
+                        <div class="bar-label">ぜひおすすめしたい</div>
+                        <div class="bar-bg">
+                            <div class="bar" style="width:65%"></div>
+                        </div>
+                        <div class="bar-value">65件 / 50.8%</div>
+                    </div>
 
-{アンケートURL}
+                    <div class="bar-row">
+                        <div class="bar-label">おすすめしたい</div>
+                        <div class="bar-bg">
+                            <div class="bar green-bar" style="width:43%"></div>
+                        </div>
+                        <div class="bar-value">43件 / 33.6%</div>
+                    </div>
 
-お忙しいところ恐れ入りますが、
-ご協力のほどよろしくお願いいたします。</textarea>
+                    <div class="bar-row">
+                        <div class="bar-label">どちらともいえない</div>
+                        <div class="bar-bg">
+                            <div class="bar orange-bar" style="width:15%"></div>
+                        </div>
+                        <div class="bar-value">15件 / 11.7%</div>
+                    </div>
 
-                    <div>
+                    <div class="bar-row">
+                        <div class="bar-label">おすすめしない</div>
+                        <div class="bar-bg">
+                            <div class="bar" style="width:5%;background:#ef4444"></div>
+                        </div>
+                        <div class="bar-value">5件 / 3.9%</div>
+                    </div>
 
-                        <div class="small-label">
-                            利用可能な差し込み変数
+                </div>
+
+            </div>
+
+
+            <!-- Q3 -->
+
+            <div class="chart-card" id="q3">
+
+                <div class="chart-header">
+                    <strong>
+                        Q3. 利用しているサービスを選択してください
+                    </strong>
+                    <span class="badge badge-green">複数選択</span>
+                </div>
+
+                <div class="chart-body">
+
+                    <div class="bar-row">
+                        <div class="bar-label">クラウドサービス</div>
+                        <div class="bar-bg">
+                            <div class="bar" style="width:80%"></div>
+                        </div>
+                        <div class="bar-value">102件 / 79.7%</div>
+                    </div>
+
+                    <div class="bar-row">
+                        <div class="bar-label">業務システム</div>
+                        <div class="bar-bg">
+                            <div class="bar green-bar" style="width:58%"></div>
+                        </div>
+                        <div class="bar-value">74件 / 57.8%</div>
+                    </div>
+
+                    <div class="bar-row">
+                        <div class="bar-label">サポートサービス</div>
+                        <div class="bar-bg">
+                            <div class="bar orange-bar" style="width:36%"></div>
+                        </div>
+                        <div class="bar-value">46件 / 35.9%</div>
+                    </div>
+
+
+                    <div class="other-box">
+
+                        <div
+                            class="other-header"
+                            onclick="toggleOther(this)"
+                        >
+                            その他　4件
+                            <span class="badge badge-orange">
+                                自由記述 4件
+                            </span>
+                            <span style="float:right">▼</span>
                         </div>
 
-                        <div class="variables">
+                        <div class="other-content">
 
-                            <button
-                                class="variable"
-                                onclick="insertVariable('{顧客名}')">
-                                {顧客名}
-                            </button>
+                            <div class="other-item">
+                                <div class="customer-name">
+                                    株式会社サンプル
+                                </div>
+                                <div class="customer-company">
+                                    山田 太郎
+                                </div>
+                                <div class="answer-text">
+                                    新しい分析サービス
+                                </div>
+                            </div>
 
-                            <button
-                                class="variable"
-                                onclick="insertVariable('{アンケートURL}')">
-                                {アンケートURL}
-                            </button>
+                            <div class="other-item">
+                                <div class="customer-name">
+                                    株式会社ABC
+                                </div>
+                                <div class="customer-company">
+                                    佐藤 花子
+                                </div>
+                                <div class="answer-text">
+                                    データ連携サービス
+                                </div>
+                            </div>
+
+                            <div class="other-item">
+                                <div class="customer-name">
+                                    株式会社XYZ
+                                </div>
+                                <div class="customer-company">
+                                    鈴木 一郎
+                                </div>
+                                <div class="answer-text">
+                                    AI関連サービス
+                                </div>
+                            </div>
 
                         </div>
 
@@ -1023,103 +1174,110 @@ textarea {
     </section>
 
 
-    <!-- =====================================
-         Customer Search
-    ===================================== -->
+    <!-- =========================
+         Group 2
+    ========================= -->
 
-    <section class="card">
+    <section class="card" id="q4">
 
         <div class="card-header">
 
-            <div>
-                <h2 class="card-title">
-                    顧客検索・絞り込み
-                </h2>
-
-                <div class="card-description">
-                    顧客名、メールアドレス、送信・回答状況などから絞り込みできます。
-                </div>
+            <div class="group-title">
+                グループ2：改善要望
             </div>
 
         </div>
 
-
         <div class="card-body">
 
-            <div class="filter-row">
+            <div class="chart-card">
 
-                <div>
+                <div class="chart-header">
+                    <strong>
+                        Q4. 改善してほしい点があれば教えてください
+                    </strong>
 
-                    <label class="small-label">
-                        顧客名・会社名
-                    </label>
-
-                    <input
-                        type="text"
-                        id="customerKeyword"
-                        placeholder="例：山田 / 株式会社〇〇"
-                        onkeydown="if(event.key==='Enter') filterCustomers();">
-
+                    <span class="badge badge-gray">
+                        テキスト
+                    </span>
                 </div>
 
+                <div class="chart-body">
 
-                <div>
+                    <div class="timeline">
 
-                    <label class="small-label">
-                        メールアドレス
-                    </label>
+                        <div class="timeline-item">
 
-                    <input
-                        type="text"
-                        id="emailKeyword"
-                        placeholder="example@example.com"
-                        onkeydown="if(event.key==='Enter') filterCustomers();">
+                            <div class="timeline-date">
+                                2026/08/24 10:32
+                            </div>
 
-                </div>
+                            <div class="customer-name">
+                                株式会社サンプル　山田 太郎
+                            </div>
 
+                            <div class="timeline-answer">
+                                管理画面の検索機能をもう少し
+                                高速にしてほしいです。
+                            </div>
 
-                <div>
-
-                    <label class="small-label">
-                        回答ステータス
-                    </label>
-
-                    <select id="answerFilter">
-
-                        <option value="all">
-                            すべて
-                        </option>
-
-                        <option value="not_sent">
-                            未送信
-                        </option>
-
-                        <option value="unanswered">
-                            送信済み（未回答）
-                        </option>
-
-                        <option value="answered">
-                            回答済み
-                        </option>
-
-                    </select>
-
-                </div>
+                        </div>
 
 
-                <div class="filter-buttons">
+                        <div class="timeline-item">
 
-                    <button
-                        class="secondary-button"
-                        onclick="filterCustomers()">
-                        検索
-                    </button>
+                            <div class="timeline-date">
+                                2026/08/23 16:18
+                            </div>
 
-                    <button
-                        class="secondary-button"
-                        onclick="resetFilter()">
-                        リセット
-                    </button>
+                            <div class="customer-name">
+                                株式会社ABC　佐藤 花子
+                            </div>
+
+                            <div class="timeline-answer">
+                                スマートフォンからも
+                                操作しやすくしてほしいです。
+                            </div>
+
+                        </div>
+
+
+                        <div class="timeline-item">
+
+                            <div class="timeline-date">
+                                2026/08/23 13:04
+                            </div>
+
+                            <div class="customer-name">
+                                株式会社XYZ　鈴木 一郎
+                            </div>
+
+                            <div class="timeline-answer">
+                                レポートの出力形式を
+                                増やしてほしいです。
+                            </div>
+
+                        </div>
+
+
+                        <div class="timeline-item">
+
+                            <div class="timeline-date">
+                                2026/08/22 09:51
+                            </div>
+
+                            <div class="customer-name">
+                                株式会社DEF　高橋 美咲
+                            </div>
+
+                            <div class="timeline-answer">
+                                通知メールのテンプレートを
+                                複数登録したいです。
+                            </div>
+
+                        </div>
+
+                    </div>
 
                 </div>
 
@@ -1130,52 +1288,37 @@ textarea {
     </section>
 
 
-    <!-- =====================================
-         Customer Table
-    ===================================== -->
+    <!-- =========================
+         Individual Answers
+    ========================= -->
 
-    <section class="card">
+    <section class="card individual-card">
 
         <div class="card-header">
 
-            <div>
-
-                <h2 class="card-title">
-                    顧客一覧・送信追跡
-                </h2>
-
-                <div class="card-description">
-                    Web直接回答者は送信対象として選択できません。
-                </div>
-
+            <div class="card-title">
+                個別回答一覧
             </div>
 
-            <div style="font-size:12px;color:#6b7280;">
-                全 <strong id="customerTotal">0</strong> 件
+            <div style="font-size:13px;color:#6b7280;">
+                128件
             </div>
 
         </div>
 
-
         <div class="card-body">
 
-            <div
-                id="selectionBar"
-                class="selection-bar"
-                style="display:none;">
+            <div class="search-box">
 
-                <div>
-                    <span id="selectedCount"
-                          class="selection-count">
-                        0
-                    </span>
-                    件選択中
-                </div>
+                <input
+                    type="text"
+                    id="answerSearch"
+                    placeholder="会社名・氏名で検索..."
+                    oninput="filterAnswers()"
+                >
 
-                <button
-                    class="clear-selection"
-                    onclick="clearSelection()">
-                    選択を解除
+                <button class="btn" onclick="clearSearch()">
+                    クリア
                 </button>
 
             </div>
@@ -1183,40 +1326,140 @@ textarea {
 
             <div class="table-wrapper">
 
-                <table class="customer-table">
+                <table>
 
                     <thead>
 
-                    <tr>
-
-                        <th style="width:45px;">
-                            <input
-                                type="checkbox"
-                                id="selectAll"
-                                onchange="toggleAll(this)">
-                        </th>
-
-                        <th>
-                            会社名 / 氏名等
-                        </th>
-
-                        <th>
-                            送信ステータス / 履歴
-                        </th>
-
-                        <th>
-                            回答ステータス
-                        </th>
-
-                        <th>
-                            キントーン対応
-                        </th>
-
-                    </tr>
+                        <tr>
+                            <th>会社名 / 氏名</th>
+                            <th>回答日時</th>
+                            <th>回答概要</th>
+                            <th>操作</th>
+                        </tr>
 
                     </thead>
 
-                    <tbody id="customerTableBody">
+                    <tbody id="answerTable">
+
+                        <tr data-search="株式会社サンプル 山田太郎">
+
+                            <td>
+                                <strong>株式会社サンプル</strong><br>
+                                山田 太郎
+                            </td>
+
+                            <td>
+                                2026/08/24<br>
+                                10:32
+                            </td>
+
+                            <td>
+                                満足 / ぜひおすすめしたい<br>
+                                <span class="answer-highlight">
+                                    その他：新しい分析サービス
+                                </span>
+                            </td>
+
+                            <td>
+                                <button
+                                    class="link-btn"
+                                    onclick="openAnswer(1)"
+                                >
+                                    全回答を表示
+                                </button>
+                            </td>
+
+                        </tr>
+
+
+                        <tr data-search="株式会社ABC 佐藤花子">
+
+                            <td>
+                                <strong>株式会社ABC</strong><br>
+                                佐藤 花子
+                            </td>
+
+                            <td>
+                                2026/08/23<br>
+                                16:18
+                            </td>
+
+                            <td>
+                                非常に満足 / おすすめしたい<br>
+                                その他なし
+                            </td>
+
+                            <td>
+                                <button
+                                    class="link-btn"
+                                    onclick="openAnswer(2)"
+                                >
+                                    全回答を表示
+                                </button>
+                            </td>
+
+                        </tr>
+
+
+                        <tr data-search="株式会社XYZ 鈴木一郎">
+
+                            <td>
+                                <strong>株式会社XYZ</strong><br>
+                                鈴木 一郎
+                            </td>
+
+                            <td>
+                                2026/08/23<br>
+                                13:04
+                            </td>
+
+                            <td>
+                                満足 / ぜひおすすめしたい<br>
+                                <span class="answer-highlight">
+                                    その他：AI関連サービス
+                                </span>
+                            </td>
+
+                            <td>
+                                <button
+                                    class="link-btn"
+                                    onclick="openAnswer(3)"
+                                >
+                                    全回答を表示
+                                </button>
+                            </td>
+
+                        </tr>
+
+
+                        <tr data-search="株式会社DEF 高橋美咲">
+
+                            <td>
+                                <strong>株式会社DEF</strong><br>
+                                高橋 美咲
+                            </td>
+
+                            <td>
+                                2026/08/22<br>
+                                09:51
+                            </td>
+
+                            <td>
+                                普通 / どちらともいえない<br>
+                                その他なし
+                            </td>
+
+                            <td>
+                                <button
+                                    class="link-btn"
+                                    onclick="openAnswer(4)"
+                                >
+                                    全回答を表示
+                                </button>
+                            </td>
+
+                        </tr>
+
                     </tbody>
 
                 </table>
@@ -1227,106 +1470,94 @@ textarea {
 
     </section>
 
-
-    <!-- =====================================
-         Send Logs
-    ===================================== -->
-
-    <section class="card">
-
-        <div class="card-header">
-
-            <div>
-
-                <h2 class="card-title">
-                    一括送信ログ・履歴
-                </h2>
-
-                <div class="card-description">
-                    過去に実行したメール送信の履歴を確認できます。
-                </div>
-
-            </div>
-
-        </div>
-
-
-        <div class="table-wrapper">
-
-            <table class="log-table">
-
-                <thead>
-
-                <tr>
-                    <th>送信日時</th>
-                    <th>送信種別</th>
-                    <th>送信件数</th>
-                    <th>送信件名</th>
-                    <th>送信実行者</th>
-                    <th>送信文</th>
-                </tr>
-
-                </thead>
-
-                <tbody id="logTableBody">
-                </tbody>
-
-            </table>
-
-        </div>
-
-    </section>
-
 </main>
 
 
-<!-- =====================================
-     Modal
-===================================== -->
+<!-- =========================
+     Answer Modal
+========================= -->
 
 <div
-    id="modalOverlay"
-    class="modal-overlay"
-    onclick="overlayClick(event)">
+    class="modal-backdrop"
+    id="answerModal"
+    onclick="closeModalByBackdrop(event)"
+>
 
-    <div
-        id="modal"
-        class="modal">
+    <div class="modal">
 
         <div class="modal-header">
 
-            <h2
-                id="modalTitle"
-                class="modal-title">
-                確認
-            </h2>
+            <div class="modal-title" id="modalCustomer">
+                全回答
+            </div>
 
             <button
                 class="modal-close"
-                onclick="closeModal()">
+                onclick="closeAnswerModal()"
+            >
                 ×
             </button>
 
         </div>
 
-        <div
-            id="modalBody"
-            class="modal-body">
-        </div>
 
-        <div class="modal-footer">
+        <div class="modal-body">
 
-            <button
-                class="modal-button"
-                onclick="closeModal()">
-                キャンセル
-            </button>
+            <div class="answer-detail">
 
-            <button
-                id="modalConfirm"
-                class="modal-button primary">
-                OK
-            </button>
+                <div class="answer-detail-q">
+                    Q1. サービス全体の満足度を教えてください
+                </div>
+
+                <div class="answer-detail-a">
+                    <strong>満足</strong>
+                </div>
+
+            </div>
+
+
+            <div class="answer-detail">
+
+                <div class="answer-detail-q">
+                    Q2. 当社サービスをどの程度おすすめしますか？
+                </div>
+
+                <div class="answer-detail-a">
+                    <strong>ぜひおすすめしたい</strong>
+                </div>
+
+            </div>
+
+
+            <div class="answer-detail">
+
+                <div class="answer-detail-q">
+                    Q3. 利用しているサービスを選択してください
+                </div>
+
+                <div class="answer-detail-a">
+                    クラウドサービス<br>
+                    業務システム<br>
+                    <span class="answer-highlight">
+                        その他：新しい分析サービス
+                    </span>
+                </div>
+
+            </div>
+
+
+            <div class="answer-detail">
+
+                <div class="answer-detail-q">
+                    Q4. 改善してほしい点があれば教えてください
+                </div>
+
+                <div class="answer-detail-a">
+                    管理画面の検索機能をもう少し
+                    高速にしてほしいです。
+                </div>
+
+            </div>
 
         </div>
 
@@ -1335,1348 +1566,325 @@ textarea {
 </div>
 
 
-<!-- =====================================
-     Toast
-===================================== -->
+<!-- Toast -->
 
-<div
-    id="toast"
-    class="toast">
-</div>
+<div class="toast" id="toast"></div>
 
 
 <script>
+// ============================================================
+// JavaScript
+// ============================================================
 
-/* =====================================================
-   Mock Customer Data
-===================================================== */
 
-let customers = [
-
-    {
-        id: 1,
-        company: "株式会社サンプル商事",
-        name: "山田 太郎",
-        email: "yamada@example.co.jp",
-        phone: "03-1234-5678",
-        address: "東京都港区赤坂1-1-1",
-        type: "customer",
-        sentAt: "2026/08/20 10:12",
-        sendCount: 1,
-        answerStatus: "unanswered",
-        kintone: "registered"
-    },
-
-    {
-        id: 2,
-        company: "株式会社ABC",
-        name: "佐藤 花子",
-        email: "sato@example.co.jp",
-        phone: "03-2222-3333",
-        address: "東京都千代田区丸の内2-2-2",
-        type: "customer",
-        sentAt: "2026/08/19 14:30",
-        sendCount: 1,
-        answerStatus: "answered",
-        kintone: "registered"
-    },
-
-    {
-        id: 3,
-        company: "〇〇株式会社",
-        name: "鈴木 一郎",
-        email: "suzuki@example.co.jp",
-        phone: "03-4444-5555",
-        address: "東京都新宿区西新宿3-3-3",
-        type: "customer",
-        sentAt: "",
-        sendCount: 0,
-        answerStatus: "not_sent",
-        kintone: "registered"
-    },
-
-    {
-        id: 4,
-        company: "△△商事株式会社",
-        name: "高橋 美咲",
-        email: "takahashi@example.co.jp",
-        phone: "03-6666-7777",
-        address: "東京都渋谷区渋谷4-4-4",
-        type: "customer",
-        sentAt: "2026/08/18 09:15",
-        sendCount: 2,
-        answerStatus: "unanswered",
-        kintone: "registered"
-    },
-
-    {
-        id: 5,
-        company: "Webフォーム回答者",
-        name: "田中 健一",
-        email: "tanaka.web@example.com",
-        phone: "090-1111-2222",
-        address: "東京都港区",
-        type: "web",
-        sentAt: "",
-        sendCount: 0,
-        answerStatus: "answered",
-        kintone: "unregistered"
-    },
-
-    {
-        id: 6,
-        company: "Webフォーム回答者",
-        name: "伊藤 由美",
-        email: "ito.web@example.com",
-        phone: "090-3333-4444",
-        address: "東京都品川区",
-        type: "web",
-        sentAt: "",
-        sendCount: 0,
-        answerStatus: "answered",
-        kintone: "unregistered"
-    },
-
-    {
-        id: 7,
-        company: "株式会社テスト",
-        name: "渡辺 翔太",
-        email: "watanabe@example.com",
-        phone: "03-8888-9999",
-        address: "東京都中央区銀座5-5-5",
-        type: "customer",
-        sentAt: "2026/08/10 11:00",
-        sendCount: 1,
-        answerStatus: "answered",
-        kintone: "registered"
-    }
-
-];
-
-
-/* =====================================================
-   Send Logs
-===================================================== */
-
-let sendLogs = [
-
-    {
-        date: "2026/08/20 10:12",
-        type: "初回一括送信",
-        count: 3,
-        subject: "【アンケートのお願い】顧客満足度調査へのご協力をお願いします",
-        user: "管理者"
-    },
-
-    {
-        date: "2026/08/18 09:15",
-        type: "リマインド送信",
-        count: 1,
-        subject: "【再送】アンケートご回答のお願い",
-        user: "田中 太郎"
-    },
-
-    {
-        date: "2026/08/10 11:00",
-        type: "初回一括送信",
-        count: 5,
-        subject: "サービスに関するアンケートのお願い",
-        user: "管理者"
-    }
-
-];
-
-
-/* =====================================================
-   Render Customers
-===================================================== */
-
-function renderCustomers(data = customers) {
-
-    const tbody =
-        document.getElementById("customerTableBody");
-
-    tbody.innerHTML = "";
-
-    document.getElementById("customerTotal")
-        .textContent = data.length;
-
-
-    data.forEach(customer => {
-
-        const tr =
-            document.createElement("tr");
-
-        if (customer.type === "web") {
-            tr.classList.add("web-row");
-        }
-
-
-        const selectable =
-            customer.type !== "web";
-
-
-        tr.innerHTML = `
-
-            <td>
-                ${
-                    selectable
-                    ?
-                    `
-                    <input
-                        type="checkbox"
-                        class="customer-check"
-                        value="${customer.id}"
-                        onchange="updateSelection()">
-                    `
-                    :
-                    `
-                    <input
-                        type="checkbox"
-                        disabled
-                        title="Web直接回答者は送信対象外です">
-                    `
-                }
-            </td>
-
-
-            <td>
-
-                <div class="customer-info">
-
-                    <div class="company">
-                        ${escapeHtml(customer.company)}
-                    </div>
-
-                    <div class="name">
-                        ${escapeHtml(customer.name)}
-                    </div>
-
-                    <div class="contact">
-                        ${escapeHtml(customer.email)}
-                    </div>
-
-                    <div class="contact">
-                        ${escapeHtml(customer.phone)}
-                    </div>
-
-                    <div class="contact">
-                        ${escapeHtml(customer.address)}
-                    </div>
-
-                    ${
-                        customer.type === "web"
-                        ?
-                        `
-                        <div style="margin-top:5px;">
-                            <span class="badge web">
-                                Web直接回答
-                            </span>
-                        </div>
-                        `
-                        :
-                        ""
-                    }
-
-                </div>
-
-            </td>
-
-
-            <td>
-
-                <div class="history">
-
-                    ${
-                        customer.sentAt
-                        ?
-                        `
-                        <div class="history-date">
-                            最終送信：
-                            ${customer.sentAt}
-                        </div>
-
-                        <div class="history-count">
-                            送信回数：
-                            ${customer.sendCount}回
-                        </div>
-
-                        <button
-                            class="link-button"
-                            onclick="viewCustomerMail(${customer.id})">
-                            送信文を確認
-                        </button>
-                        `
-                        :
-                        `
-                        <div style="color:#9ca3af;">
-                            ${
-                                customer.type === "web"
-                                ? "Web直接回答"
-                                : "送信未実施"
-                            }
-                        </div>
-                        `
-                    }
-
-                </div>
-
-            </td>
-
-
-            <td>
-
-                ${getAnswerBadge(customer)}
-
-            </td>
-
-
-            <td>
-
-                ${getKintoneStatus(customer)}
-
-            </td>
-
-        `;
-
-        tbody.appendChild(tr);
-
-    });
-
-
-    updateSelection();
-
-}
-
-
-/* =====================================================
-   Answer Badge
-===================================================== */
-
-function getAnswerBadge(customer) {
-
-    if (customer.type === "web") {
-
-        return `
-            <span class="badge answered">
-                回答済み
-            </span>
-        `;
-
-    }
-
-
-    if (customer.answerStatus === "answered") {
-
-        return `
-            <span class="badge answered">
-                回答済み
-            </span>
-        `;
-
-    }
-
-
-    if (customer.answerStatus === "unanswered") {
-
-        return `
-            <span class="badge unanswered">
-                送信済み（未回答）
-            </span>
-        `;
-
-    }
-
-
-    return `
-        <span class="badge not-sent">
-            未送信
-        </span>
-    `;
-
-}
-
-
-/* =====================================================
-   Kintone
-===================================================== */
-
-function getKintoneStatus(customer) {
-
-    if (customer.kintone === "registered") {
-
-        return `
-            <span class="registered-text">
-                ✓ キントーン登録完了
-            </span>
-        `;
-
-    }
-
-
-    return `
-        <div>
-
-            <span class="badge unregistered">
-                未登録
-            </span>
-
-            <div style="margin-top:7px;">
-
-                <button
-                    class="register-button"
-                    onclick="completeKintone(${customer.id})">
-                    キントーン登録完了
-                </button>
-
-            </div>
-
-        </div>
-    `;
-
-}
-
-
-/* =====================================================
-   Selection
-===================================================== */
-
-function updateSelection() {
-
-    const checked =
-        document.querySelectorAll(
-            ".customer-check:checked"
-        );
-
-    const count =
-        checked.length;
-
-
-    document.getElementById("selectedCount")
-        .textContent = count;
-
-
-    document.getElementById("selectionBar")
-        .style.display =
-            count > 0
-            ? "flex"
-            : "none";
-
-
-    document.getElementById("sendButton")
-        .disabled = count === 0;
-
-
-    const selectable =
-        document.querySelectorAll(
-            ".customer-check"
-        );
-
-
-    const selectAll =
-        document.getElementById("selectAll");
-
-
-    if (selectable.length === 0) {
-
-        selectAll.checked = false;
-
-    } else {
-
-        selectAll.checked =
-            checked.length === selectable.length;
-
-    }
-
-}
-
-
-function toggleAll(checkbox) {
-
-    document
-        .querySelectorAll(".customer-check")
-        .forEach(item => {
-
-            item.checked =
-                checkbox.checked;
-
-        });
-
-    updateSelection();
-
-}
-
-
-function clearSelection() {
-
-    document
-        .querySelectorAll(".customer-check")
-        .forEach(item => {
-
-            item.checked = false;
-
-        });
-
-
-    document.getElementById("selectAll")
-        .checked = false;
-
-    updateSelection();
-
-}
-
-
-/* =====================================================
-   Bulk Send
-===================================================== */
-
-function bulkSend() {
-
-    const ids =
-        Array.from(
-            document.querySelectorAll(
-                ".customer-check:checked"
-            )
-        )
-        .map(el => Number(el.value));
-
-
-    if (ids.length === 0) {
-
-        showToast("送信対象を選択してください。");
-
-        return;
-
-    }
-
-
-    const selected =
-        customers.filter(
-            customer => ids.includes(customer.id)
-        );
-
-
-    const alreadySent =
-        selected.filter(
-            customer =>
-                customer.sendCount > 0
-        );
-
-
-    let warning = "";
-
-
-    if (alreadySent.length > 0) {
-
-        warning = `
-            <div style="
-                background:#fff7ed;
-                border:1px solid #fed7aa;
-                padding:12px;
-                border-radius:7px;
-                margin-top:15px;
-                color:#9a3412;
-            ">
-                <strong>
-                    既に送信済みの宛先が
-                    ${alreadySent.length}件含まれています。
-                </strong>
-                <br>
-                再送しますか？
-            </div>
-        `;
-
-    }
-
-
-    showModal(
-        "メールを一括送信しますか？",
-        `
-        <strong>${selected.length}名</strong>
-        にメールを送信します。
-        <br><br>
-
-        <strong>件名：</strong><br>
-        ${escapeHtml(
-            document.getElementById("mailSubject").value
-        )}
-
-        ${warning}
-
-        <br><br>
-
-        送信後は各顧客の
-        「最終送信日時」と「送信回数」が更新されます。
-        `,
-        () => {
-
-            executeBulkSend(ids);
-
-        },
-        alreadySent.length > 0
-            ? "再送信する"
-            : "送信する"
-    );
-
-}
-
-
-/* =====================================================
-   Execute Send
-===================================================== */
-
-function executeBulkSend(ids) {
-
-    const subject =
-        document.getElementById("mailSubject").value;
-
-    const now =
-        formatDateTime();
-
-
-    ids.forEach(id => {
-
-        const customer =
-            customers.find(
-                c => c.id === id
-            );
-
-
-        if (!customer) return;
-
-
-        customer.sentAt = now;
-
-        customer.sendCount++;
-
-        customer.answerStatus =
-            "unanswered";
-
-    });
-
-
-    sendLogs.unshift({
-
-        date: now,
-
-        type:
-            ids.some(id => {
-                const c =
-                    customers.find(
-                        x => x.id === id
-                    );
-
-                return c &&
-                    c.sendCount > 1;
-            })
-            ? "リマインド送信"
-            : "初回一括送信",
-
-        count: ids.length,
-
-        subject: subject,
-
-        user: "管理者"
-
-    });
-
-
-    closeModal();
-
-    clearSelection();
-
-    renderCustomers();
-
-    renderLogs();
-
-    showToast(
-        `${ids.length}件のメールを送信しました。`
-    );
-
-}
-
-
-/* =====================================================
-   Customer Mail
-===================================================== */
-
-function viewCustomerMail(id) {
-
-    const customer =
-        customers.find(
-            c => c.id === id
-        );
-
-    if (!customer) return;
-
-
-    const subject =
-        document.getElementById(
-            "mailSubject"
-        ).value;
-
-
-    const body =
-        document.getElementById(
-            "mailBody"
-        ).value;
-
-
-    const replacedSubject =
-        replaceVariables(
-            subject,
-            customer
-        );
-
-
-    const replacedBody =
-        replaceVariables(
-            body,
-            customer
-        );
-
-
-    showModal(
-        "送信文を確認",
-        `
-        <div style="
-            font-size:12px;
-            color:#6b7280;
-            margin-bottom:6px;
-        ">
-            ${escapeHtml(customer.name)} 様へ送信した内容
-        </div>
-
-        <div class="mail-subject">
-            ${escapeHtml(replacedSubject)}
-        </div>
-
-        <div class="mail-preview">
-            ${escapeHtml(replacedBody)}
-        </div>
-
-        <div style="
-            margin-top:12px;
-            font-size:11px;
-            color:#6b7280;
-        ">
-            最終送信日時：
-            ${customer.sentAt || "未送信"}
-            <br>
-            送信回数：
-            ${customer.sendCount}回
-        </div>
-        `,
-        () => closeModal(),
-        "閉じる"
-    );
-
-}
-
-
-/* =====================================================
-   Replace Variables
-===================================================== */
-
-function replaceVariables(text, customer) {
-
-    return text
-        .replace(
-            /\{顧客名\}/g,
-            customer.name
-        )
-        .replace(
-            /\{アンケートURL\}/g,
-            "https://example.com/survey/abc123/" + customer.id
-        );
-
-}
-
-
-/* =====================================================
-   Preview Template
-===================================================== */
-
-function previewTemplate() {
-
-    const subject =
-        document.getElementById(
-            "mailSubject"
-        ).value;
-
-
-    const body =
-        document.getElementById(
-            "mailBody"
-        ).value;
-
-
-    const sampleCustomer =
-        customers.find(
-            c => c.type === "customer"
-        );
-
-
-    showModal(
-        "メールプレビュー",
-        `
-        <div style="
-            font-size:12px;
-            color:#6b7280;
-            margin-bottom:7px;
-        ">
-            サンプル顧客：
-            ${escapeHtml(sampleCustomer.name)}
-        </div>
-
-        <div class="mail-subject">
-            ${escapeHtml(
-                replaceVariables(
-                    subject,
-                    sampleCustomer
-                )
-            )}
-        </div>
-
-        <div class="mail-preview">
-            ${escapeHtml(
-                replaceVariables(
-                    body,
-                    sampleCustomer
-                )
-            )}
-        </div>
-        `,
-        () => closeModal(),
-        "閉じる"
-    );
-
-}
-
-
-/* =====================================================
-   Insert Variable
-===================================================== */
-
-function insertVariable(variable) {
-
-    const textarea =
-        document.getElementById(
-            "mailBody"
-        );
-
-
-    const start =
-        textarea.selectionStart;
-
-    const end =
-        textarea.selectionEnd;
-
-
-    textarea.value =
-        textarea.value.substring(0, start)
-        +
-        variable
-        +
-        textarea.value.substring(end);
-
-
-    textarea.focus();
-
-
-    textarea.selectionStart =
-        textarea.selectionEnd =
-            start + variable.length;
-
-
-    showToast(
-        variable + " を本文に挿入しました。"
-    );
-
-}
-
-
-/* =====================================================
-   Kintone Complete
-===================================================== */
-
-function completeKintone(id) {
-
-    const customer =
-        customers.find(
-            c => c.id === id
-        );
-
-    if (!customer) return;
-
-
-    showModal(
-        "キントーン登録完了",
-        `
-        <strong>${escapeHtml(customer.name)}</strong>
-        様の顧客情報について、
-        キントーンへの登録が完了したことを記録します。
-        <br><br>
-        「登録完了」を押すと、この顧客のステータスが
-        「✓ キントーン登録完了」に変わります。
-        `,
-        () => {
-
-            customer.kintone =
-                "registered";
-
-
-            closeModal();
-
-            renderCustomers();
-
-            updateUnregisteredAlert();
-
-            showToast(
-                "キントーン登録完了として記録しました。"
-            );
-
-        },
-        "登録完了"
-    );
-
-}
-
-
-/* =====================================================
-   Filter
-===================================================== */
-
-function filterCustomers() {
-
-    const keyword =
-        document.getElementById(
-            "customerKeyword"
-        ).value
-        .toLowerCase()
-        .trim();
-
-
-    const email =
-        document.getElementById(
-            "emailKeyword"
-        ).value
-        .toLowerCase()
-        .trim();
-
-
-    const answerStatus =
-        document.getElementById(
-            "answerFilter"
-        ).value;
-
-
-    const filtered =
-        customers.filter(customer => {
-
-            const text =
-                (
-                    customer.company
-                    +
-                    customer.name
-                ).toLowerCase();
-
-
-            const matchesKeyword =
-                !keyword ||
-                text.includes(keyword);
-
-
-            const matchesEmail =
-                !email ||
-                customer.email
-                    .toLowerCase()
-                    .includes(email);
-
-
-            const matchesAnswer =
-                answerStatus === "all"
-                ||
-                customer.answerStatus ===
-                    answerStatus;
-
-
-            return (
-                matchesKeyword
-                &&
-                matchesEmail
-                &&
-                matchesAnswer
-            );
-
-        });
-
-
-    clearSelection();
-
-    renderCustomers(filtered);
-
-    showToast(
-        `${filtered.length}件の顧客を表示しています。`
-    );
-
-}
-
-
-function resetFilter() {
-
-    document.getElementById(
-        "customerKeyword"
-    ).value = "";
-
-    document.getElementById(
-        "emailKeyword"
-    ).value = "";
-
-    document.getElementById(
-        "answerFilter"
-    ).value = "all";
-
-
-    clearSelection();
-
-    renderCustomers();
-
-    showToast(
-        "検索条件をリセットしました。"
-    );
-
-}
-
-
-/* =====================================================
-   Logs
-===================================================== */
-
-function renderLogs() {
-
-    const tbody =
-        document.getElementById(
-            "logTableBody"
-        );
-
-
-    tbody.innerHTML = "";
-
-
-    sendLogs.forEach((log, index) => {
-
-        const tr =
-            document.createElement("tr");
-
-
-        tr.innerHTML = `
-
-            <td>
-                ${escapeHtml(log.date)}
-            </td>
-
-            <td>
-                <span class="type-badge">
-                    ${escapeHtml(log.type)}
-                </span>
-            </td>
-
-            <td>
-                <strong>
-                    ${log.count}
-                </strong>
-                件
-            </td>
-
-            <td>
-                ${escapeHtml(log.subject)}
-            </td>
-
-            <td>
-                ${escapeHtml(log.user)}
-            </td>
-
-            <td>
-                <button
-                    class="link-button"
-                    onclick="viewLog(${index})">
-                    送信文を確認
-                </button>
-            </td>
-
-        `;
-
-
-        tbody.appendChild(tr);
-
-    });
-
-}
-
-
-/* =====================================================
-   Log Detail
-===================================================== */
-
-function viewLog(index) {
-
-    const log =
-        sendLogs[index];
-
-    if (!log) return;
-
-
-    const body =
-        document.getElementById(
-            "mailBody"
-        ).value;
-
-
-    showModal(
-        "一括送信履歴・送信文",
-        `
-        <div style="margin-bottom:13px;">
-
-            <strong>送信日時：</strong>
-            ${escapeHtml(log.date)}
-
-            <br>
-
-            <strong>送信種別：</strong>
-            ${escapeHtml(log.type)}
-
-            <br>
-
-            <strong>送信件数：</strong>
-            ${log.count}件
-
-            <br>
-
-            <strong>送信実行者：</strong>
-            ${escapeHtml(log.user)}
-
-        </div>
-
-        <div
-            class="small-label">
-            件名
-        </div>
-
-        <div class="mail-subject">
-            ${escapeHtml(log.subject)}
-        </div>
-
-        <div class="small-label">
-            本文
-        </div>
-
-        <div class="mail-preview">
-            ${escapeHtml(body)}
-        </div>
-        `,
-        () => closeModal(),
-        "閉じる"
-    );
-
-}
-
-
-/* =====================================================
-   Modal
-===================================================== */
-
-function showModal(
-    title,
-    body,
-    callback,
-    confirmText = "OK"
-) {
-
-    document.getElementById(
-        "modalTitle"
-    ).textContent = title;
-
-
-    document.getElementById(
-        "modalBody"
-    ).innerHTML = body;
-
-
-    const button =
-        document.getElementById(
-            "modalConfirm"
-        );
-
-
-    button.textContent =
-        confirmText;
-
-
-    button.onclick =
-        callback;
-
-
-    document.getElementById(
-        "modalOverlay"
-    ).classList.add("show");
-
-}
-
-
-function closeModal() {
-
-    document.getElementById(
-        "modalOverlay"
-    ).classList.remove("show");
-
-}
-
-
-function overlayClick(event) {
-
-    if (
-        event.target.id ===
-        "modalOverlay"
-    ) {
-        closeModal();
-    }
-
-}
-
-
-/* =====================================================
-   Alert Count
-===================================================== */
-
-function updateUnregisteredAlert() {
-
-    const count =
-        customers.filter(
-            c => c.kintone === "unregistered"
-        ).length;
-
-
-    document.getElementById(
-        "unregisteredCount"
-    ).textContent = count;
-
-
-    const alert =
-        document.getElementById(
-            "unregisteredAlert"
-        );
-
-
-    alert.style.display =
-        count > 0
-        ? "flex"
-        : "none";
-
-}
-
-
-/* =====================================================
-   Toast
-===================================================== */
-
-let toastTimer;
+// -----------------------------
+// Toast
+// -----------------------------
 
 function showToast(message) {
 
-    const toast =
-        document.getElementById(
-            "toast"
-        );
+    const toast = document.getElementById("toast");
 
-
-    toast.textContent =
-        message;
-
-
+    toast.textContent = message;
     toast.classList.add("show");
 
+    setTimeout(() => {
+        toast.classList.remove("show");
+    }, 2500);
+}
 
-    clearTimeout(toastTimer);
+
+// -----------------------------
+// CSV Download
+// -----------------------------
+
+function downloadCSV() {
+
+    const rows = [
+        [
+            "回答ID",
+            "回答日時",
+            "顧客ID",
+            "会社名",
+            "氏名",
+            "設問1",
+            "設問2",
+            "設問3",
+            "設問4"
+        ],
+        [
+            "A0001",
+            "2026/08/24 10:32",
+            "C001",
+            "株式会社サンプル",
+            "山田 太郎",
+            "満足",
+            "ぜひおすすめしたい",
+            "クラウドサービス、業務システム、その他：新しい分析サービス",
+            "管理画面の検索機能をもう少し高速にしてほしいです。"
+        ],
+        [
+            "A0002",
+            "2026/08/23 16:18",
+            "C002",
+            "株式会社ABC",
+            "佐藤 花子",
+            "非常に満足",
+            "おすすめしたい",
+            "クラウドサービス",
+            "スマートフォンからも操作しやすくしてほしいです。"
+        ]
+    ];
+
+    // UTF-8 BOM
+    const bom = "\uFEFF";
+
+    const csv = bom + rows
+        .map(row =>
+            row.map(value =>
+                '"' + String(value).replace(/"/g, '""') + '"'
+            ).join(",")
+        )
+        .join("\r\n");
+
+    const blob = new Blob(
+        [csv],
+        { type: "text/csv;charset=utf-8;" }
+    );
+
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "アンケート回答データ.csv";
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
+
+    showToast("CSVをダウンロードしました");
+}
 
 
-    toastTimer =
-        setTimeout(() => {
+// -----------------------------
+// PDF
+// -----------------------------
 
-            toast.classList.remove(
-                "show"
-            );
+function exportPDF() {
 
-        }, 3000);
+    showToast("PDF出力用の印刷画面を開きます");
+
+    setTimeout(() => {
+        window.print();
+    }, 500);
+}
+
+
+// -----------------------------
+// Question filter
+// -----------------------------
+
+function toggleQuestion(id) {
+
+    const checkbox = document.querySelector(
+        '[data-target="' + id + '"]'
+    );
+
+    const element = document.getElementById(id);
+
+    if (!checkbox || !element) return;
+
+    if (checkbox.checked) {
+
+        element.style.display = "";
+
+    } else {
+
+        element.style.display = "none";
+
+    }
 
 }
 
 
-/* =====================================================
-   Utilities
-===================================================== */
+function selectAllQuestions() {
 
-function formatDateTime() {
+    document.querySelectorAll(".question-filter")
+        .forEach(checkbox => {
 
-    const d =
-        new Date();
+            checkbox.checked = true;
 
+            const id = checkbox.dataset.target;
 
-    const y =
-        d.getFullYear();
+            const element = document.getElementById(id);
 
+            if (element) {
+                element.style.display = "";
+            }
 
-    const m =
-        String(
-            d.getMonth() + 1
-        ).padStart(2, "0");
+        });
 
-
-    const day =
-        String(
-            d.getDate()
-        ).padStart(2, "0");
+    showToast("すべての設問を選択しました");
+}
 
 
-    const h =
-        String(
-            d.getHours()
-        ).padStart(2, "0");
+function clearAllQuestions() {
+
+    document.querySelectorAll(".question-filter")
+        .forEach(checkbox => {
+
+            checkbox.checked = false;
+
+            const id = checkbox.dataset.target;
+
+            const element = document.getElementById(id);
+
+            if (element) {
+                element.style.display = "none";
+            }
+
+        });
+
+    showToast("すべての設問を解除しました");
+}
 
 
-    const min =
-        String(
-            d.getMinutes()
-        ).padStart(2, "0");
+// -----------------------------
+// Other toggle
+// -----------------------------
+
+function toggleOther(header) {
+
+    const content = header.nextElementSibling;
+
+    content.classList.toggle("open");
+
+    const arrow =
+        header.querySelector("span:last-child");
+
+    if (content.classList.contains("open")) {
+        arrow.textContent = "▲";
+    } else {
+        arrow.textContent = "▼";
+    }
+}
 
 
-    return `${y}/${m}/${day} ${h}:${min}`;
+// -----------------------------
+// Search
+// -----------------------------
+
+function filterAnswers() {
+
+    const keyword =
+        document.getElementById("answerSearch")
+        .value
+        .toLowerCase()
+        .trim();
+
+    document
+        .querySelectorAll("#answerTable tr")
+        .forEach(row => {
+
+            const text =
+                row.dataset.search.toLowerCase();
+
+            if (text.includes(keyword)) {
+                row.style.display = "";
+            } else {
+                row.style.display = "none";
+            }
+
+        });
 
 }
 
 
-function escapeHtml(str) {
+function clearSearch() {
 
-    return String(str)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+    document.getElementById("answerSearch").value = "";
+
+    filterAnswers();
 
 }
 
 
-/* =====================================================
-   Initial Render
-===================================================== */
+// -----------------------------
+// Answer modal
+// -----------------------------
 
-renderCustomers();
+const customers = {
+    1: "株式会社サンプル　山田 太郎",
+    2: "株式会社ABC　佐藤 花子",
+    3: "株式会社XYZ　鈴木 一郎",
+    4: "株式会社DEF　高橋 美咲"
+};
 
-renderLogs();
 
-updateUnregisteredAlert();
+function openAnswer(id) {
 
+    document.getElementById("modalCustomer")
+        .textContent =
+        "全回答： " + customers[id];
+
+    document.getElementById("answerModal")
+        .classList.add("show");
+
+}
+
+
+function closeAnswerModal() {
+
+    document.getElementById("answerModal")
+        .classList.remove("show");
+
+}
+
+
+function closeModalByBackdrop(event) {
+
+    if (event.target.id === "answerModal") {
+        closeAnswerModal();
+    }
+
+}
+
+
+// ESCでモーダルを閉じる
+
+document.addEventListener("keydown", function(event) {
+
+    if (event.key === "Escape") {
+        closeAnswerModal();
+    }
+
+});
+
+
+// -----------------------------
+// Back to list
+// -----------------------------
+
+function goList() {
+
+    if (
+        confirm(
+            "アンケート一覧画面へ戻りますか？"
+        )
+    ) {
+
+        // 実際のシステムでは
+        // location.href = "/survey/index.php";
+        showToast(
+            "アンケート一覧画面へ遷移します"
+        );
+
+    }
+
+}
 </script>
 
 </body>
