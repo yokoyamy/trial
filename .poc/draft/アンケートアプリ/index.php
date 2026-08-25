@@ -1,1976 +1,3691 @@
-# アンケート管理システム 要件定義書
-（モック開発向け・統合版・最終修正版）
+<?php
+/*
+ * アンケート管理システム モック
+ * Apache 2.4 + PHP 8.5
+ * index.php 1ファイル構成
+ *
+ * DB / kintone API / SMTP / 認証 / 実メール送信は未実装。
+ * JavaScriptのサンプルデータで画面・操作・状態変化を再現する。
+ */
+?>
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>アンケート管理システム - Mock</title>
+
+<style>
+:root{
+    --primary:#2563eb;
+    --primary-dark:#1d4ed8;
+    --success:#16a34a;
+    --warning:#d97706;
+    --danger:#dc2626;
+    --gray:#64748b;
+    --border:#dbe1ea;
+    --bg:#f5f7fb;
+    --card:#fff;
+    --text:#172033;
+}
+
+*{box-sizing:border-box}
+
+body{
+    margin:0;
+    font-family:
+        -apple-system,BlinkMacSystemFont,"Segoe UI",
+        "Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif;
+    color:var(--text);
+    background:var(--bg);
+}
+
+button,input,textarea,select{
+    font:inherit;
+}
+
+button{
+    cursor:pointer;
+}
+
+.admin-header{
+    height:64px;
+    background:#172033;
+    color:#fff;
+    display:flex;
+    align-items:center;
+    padding:0 24px;
+    position:sticky;
+    top:0;
+    z-index:50;
+}
+
+.admin-logo{
+    font-weight:700;
+    margin-right:35px;
+    white-space:nowrap;
+}
+
+.admin-nav{
+    display:flex;
+    gap:4px;
+    flex:1;
+}
+
+.admin-nav button{
+    background:transparent;
+    color:#cbd5e1;
+    border:0;
+    padding:10px 14px;
+    border-radius:7px;
+}
+
+.admin-nav button:hover,
+.admin-nav button.active{
+    background:#29354a;
+    color:#fff;
+}
+
+.logout{
+    color:#cbd5e1;
+    font-size:13px;
+}
+
+.container{
+    max-width:1400px;
+    margin:0 auto;
+    padding:28px;
+}
+
+.page-title{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:22px;
+}
+
+.page-title h1{
+    margin:0;
+    font-size:26px;
+}
+
+.page-title p{
+    color:var(--gray);
+    margin:7px 0 0;
+    font-size:13px;
+}
+
+.btn{
+    border:1px solid var(--border);
+    background:#fff;
+    color:#263247;
+    padding:9px 15px;
+    border-radius:7px;
+    font-weight:600;
+}
+
+.btn:hover{
+    background:#f8fafc;
+}
+
+.btn-primary{
+    color:#fff;
+    background:var(--primary);
+    border-color:var(--primary);
+}
+
+.btn-primary:hover{
+    background:var(--primary-dark);
+}
+
+.btn-danger{
+    color:#fff;
+    background:var(--danger);
+    border-color:var(--danger);
+}
+
+.btn-success{
+    color:#fff;
+    background:var(--success);
+    border-color:var(--success);
+}
+
+.btn-small{
+    padding:6px 10px;
+    font-size:12px;
+}
+
+.card{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:10px;
+    box-shadow:0 2px 7px rgba(15,23,42,.03);
+}
+
+.toolbar{
+    padding:16px;
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    align-items:center;
+    margin-bottom:15px;
+}
+
+.search{
+    min-width:280px;
+    padding:9px 12px;
+    border:1px solid var(--border);
+    border-radius:7px;
+}
+
+select,
+input[type=text],
+input[type=email],
+input[type=password],
+input[type=datetime-local],
+input[type=number],
+textarea{
+    border:1px solid #cfd7e3;
+    border-radius:7px;
+    padding:9px 11px;
+    background:#fff;
+    color:var(--text);
+}
+
+textarea{
+    resize:vertical;
+    min-height:90px;
+    width:100%;
+}
+
+.table-wrap{
+    overflow-x:auto;
+}
+
+table{
+    width:100%;
+    border-collapse:collapse;
+    min-width:1050px;
+}
+
+th,td{
+    padding:13px 14px;
+    border-bottom:1px solid #e8edf3;
+    text-align:left;
+    vertical-align:middle;
+}
+
+th{
+    background:#f8fafc;
+    color:#475569;
+    font-size:12px;
+    white-space:nowrap;
+}
+
+td{
+    font-size:13px;
+}
+
+.status{
+    display:inline-flex;
+    padding:4px 9px;
+    border-radius:999px;
+    font-size:11px;
+    font-weight:700;
+}
+
+.status-draft{
+    background:#eef2f7;
+    color:#64748b;
+}
+
+.status-public{
+    background:#dcfce7;
+    color:#15803d;
+}
+
+.status-stop{
+    background:#fef3c7;
+    color:#a16207;
+}
+
+.status-end{
+    background:#fee2e2;
+    color:#b91c1c;
+}
+
+.action-group{
+    display:flex;
+    gap:5px;
+    flex-wrap:wrap;
+}
+
+.form-card{
+    padding:22px;
+    margin-bottom:20px;
+}
+
+.edit-actions{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:15px;
+    margin-bottom:20px;
+}
+
+.edit-actions-left,
+.edit-actions-right{
+    display:flex;
+    gap:8px;
+    align-items:center;
+}
+
+.state-control{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:8px 11px;
+    border:1px solid var(--border);
+    background:#fff;
+    border-radius:7px;
+}
+
+.section-title{
+    font-size:18px;
+    margin:0 0 17px;
+    padding-bottom:11px;
+    border-bottom:1px solid #e7ebf0;
+}
+
+.form-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:16px;
+}
+
+.form-group{
+    display:flex;
+    flex-direction:column;
+    gap:7px;
+}
+
+.form-group.full{
+    grid-column:1 / -1;
+}
+
+.form-label{
+    font-size:13px;
+    font-weight:700;
+}
+
+.radio-row{
+    display:flex;
+    gap:22px;
+    padding:9px 0;
+}
+
+.group{
+    border:1px solid #d9e0e9;
+    border-radius:10px;
+    background:#fafcff;
+    margin-bottom:16px;
+    overflow:hidden;
+}
+
+.group-header{
+    padding:13px 15px;
+    background:#f1f5f9;
+    display:flex;
+    align-items:center;
+    gap:10px;
+}
+
+.drag-handle{
+    cursor:grab;
+    color:#94a3b8;
+    font-size:18px;
+}
+
+.group-title{
+    flex:1;
+    font-weight:700;
+    border:0!important;
+    background:transparent!important;
+    font-size:16px;
+}
+
+.question-list{
+    padding:10px;
+}
+
+.question{
+    background:#fff;
+    border:1px solid #e0e6ee;
+    border-radius:8px;
+    padding:14px;
+    margin-bottom:9px;
+}
+
+.question:last-child{
+    margin-bottom:0;
+}
+
+.question-top{
+    display:flex;
+    align-items:center;
+    gap:10px;
+}
+
+.question-number{
+    min-width:65px;
+    font-weight:800;
+    color:var(--primary);
+}
+
+.question-text{
+    flex:1;
+}
+
+.question-controls{
+    display:flex;
+    gap:5px;
+}
+
+.question-options{
+    margin:13px 0 0 75px;
+}
+
+.option-row{
+    display:flex;
+    gap:6px;
+    margin:6px 0;
+}
+
+.option-row input{
+    flex:1;
+}
+
+.add-option{
+    margin-top:5px;
+}
+
+.question-bottom{
+    margin:12px 0 0 75px;
+    padding-top:10px;
+    border-top:1px solid #eef2f6;
+    display:flex;
+    gap:20px;
+    align-items:center;
+    flex-wrap:wrap;
+}
+
+.condition-box{
+    margin:10px 0 0 75px;
+    padding:10px;
+    background:#f8fafc;
+    border-radius:6px;
+    display:none;
+}
+
+.add-question{
+    width:100%;
+    border:1px dashed #aeb9c8;
+    background:#fff;
+    padding:10px;
+    border-radius:7px;
+    color:var(--primary);
+    margin-top:10px;
+}
+
+.add-group{
+    width:100%;
+    padding:13px;
+    border:1px dashed #94a3b8;
+    background:#fff;
+    color:var(--primary);
+    border-radius:8px;
+    font-weight:700;
+}
+
+.preview-frame{
+    max-width:760px;
+    margin:0 auto;
+    background:#fff;
+    border:1px solid var(--border);
+    border-radius:12px;
+    padding:30px;
+}
+
+.preview-mobile{
+    max-width:390px;
+}
+
+.preview-note{
+    background:#eff6ff;
+    color:#1d4ed8;
+    padding:11px;
+    border-radius:7px;
+    margin-bottom:20px;
+    font-size:13px;
+}
+
+.answer-question{
+    margin:0 0 25px;
+}
+
+.answer-question h3{
+    font-size:16px;
+    margin-bottom:10px;
+}
+
+.required{
+    color:#dc2626;
+    font-size:12px;
+    margin-left:6px;
+}
+
+.choice{
+    display:flex;
+    gap:9px;
+    padding:11px;
+    margin:6px 0;
+    border:1px solid #e0e6ee;
+    border-radius:7px;
+    align-items:center;
+}
+
+.choice:hover{
+    background:#f8fafc;
+}
+
+.answer-actions{
+    display:flex;
+    justify-content:space-between;
+    margin-top:30px;
+}
+
+.summary-grid{
+    display:grid;
+    grid-template-columns:repeat(5,1fr);
+    gap:12px;
+    margin-bottom:20px;
+}
+
+.summary-card{
+    background:#fff;
+    border:1px solid var(--border);
+    border-radius:9px;
+    padding:17px;
+}
+
+.summary-card .label{
+    font-size:12px;
+    color:var(--gray);
+}
+
+.summary-card .value{
+    font-size:25px;
+    font-weight:800;
+    margin-top:5px;
+}
+
+.bar{
+    height:10px;
+    border-radius:10px;
+    background:#e5e7eb;
+    overflow:hidden;
+}
+
+.bar span{
+    display:block;
+    height:100%;
+    background:var(--primary);
+}
+
+.setting-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:18px;
+}
+
+.mapping-list{
+    display:grid;
+    grid-template-columns:repeat(2,1fr);
+    gap:8px;
+    margin-top:10px;
+}
+
+.mapping-item{
+    border:1px solid var(--border);
+    padding:10px;
+    border-radius:7px;
+}
+
+.connection{
+    padding:12px;
+    border-radius:7px;
+    margin-bottom:18px;
+    background:#f8fafc;
+}
+
+.connection.ok{
+    background:#ecfdf5;
+    color:#166534;
+}
+
+.connection.error{
+    background:#fef2f2;
+    color:#991b1b;
+}
+
+.customer-row{
+    display:flex;
+    gap:8px;
+    align-items:center;
+}
+
+.modal-backdrop{
+    position:fixed;
+    inset:0;
+    background:rgba(15,23,42,.48);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    z-index:100;
+    padding:20px;
+}
+
+.modal-backdrop.show{
+    display:flex;
+}
+
+.modal{
+    background:#fff;
+    width:min(500px,100%);
+    border-radius:11px;
+    box-shadow:0 20px 60px rgba(0,0,0,.25);
+    overflow:hidden;
+}
+
+.modal-header{
+    padding:17px 20px;
+    border-bottom:1px solid #e5e7eb;
+    font-weight:800;
+}
+
+.modal-body{
+    padding:20px;
+    line-height:1.7;
+}
+
+.modal-footer{
+    padding:13px 20px;
+    display:flex;
+    justify-content:flex-end;
+    gap:8px;
+    border-top:1px solid #e5e7eb;
+}
+
+.toast{
+    position:fixed;
+    right:20px;
+    bottom:20px;
+    background:#172033;
+    color:#fff;
+    padding:12px 17px;
+    border-radius:8px;
+    display:none;
+    z-index:200;
+    box-shadow:0 8px 30px rgba(0,0,0,.2);
+}
+
+.toast.show{
+    display:block;
+}
+
+.hidden{
+    display:none!important;
+}
+
+.empty{
+    text-align:center;
+    padding:55px 20px;
+    color:#64748b;
+}
+
+@media(max-width:900px){
+    .admin-nav button{
+        font-size:11px;
+        padding:8px;
+    }
+
+    .container{
+        padding:18px;
+    }
+
+    .summary-grid{
+        grid-template-columns:repeat(2,1fr);
+    }
+
+    .form-grid,
+    .setting-grid{
+        grid-template-columns:1fr;
+    }
+}
+
+@media(max-width:650px){
+    .admin-header{
+        padding:0 12px;
+    }
+
+    .admin-logo{
+        margin-right:8px;
+        font-size:13px;
+    }
+
+    .admin-nav{
+        overflow-x:auto;
+    }
+
+    .logout{
+        display:none;
+    }
+
+    .page-title{
+        align-items:flex-start;
+        gap:10px;
+    }
+
+    .page-title h1{
+        font-size:21px;
+    }
+
+    .edit-actions{
+        flex-direction:column;
+        align-items:stretch;
+    }
+
+    .edit-actions-left,
+    .edit-actions-right{
+        justify-content:space-between;
+    }
+
+    .question-top{
+        flex-wrap:wrap;
+    }
+
+    .question-options,
+    .question-bottom,
+    .condition-box{
+        margin-left:0;
+    }
+
+    .summary-grid{
+        grid-template-columns:1fr 1fr;
+    }
+
+    .preview-frame{
+        padding:18px;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<!-- =========================================================
+     管理者ヘッダー
+========================================================= -->
+<header class="admin-header" id="adminHeader">
+    <div class="admin-logo">アンケート管理</div>
+
+    <nav class="admin-nav">
+        <button data-page="list" onclick="showPage('list')">アンケート一覧</button>
+        <button data-page="kintone" onclick="showPage('kintone')">kintone連携設定</button>
+        <button data-page="mail" onclick="showPage('mail')">メールサーバ設定</button>
+    </nav>
+
+    <div class="logout">ログアウト</div>
+</header>
+
+
+<!-- =========================================================
+     メイン
+========================================================= -->
+<main class="container">
+
+
+<!-- =========================================================
+     1. アンケート一覧
+========================================================= -->
+<section id="page-list" class="page">
+
+    <div class="page-title">
+        <div>
+            <h1>アンケート一覧</h1>
+            <p>登録されているアンケートを管理します。</p>
+        </div>
+
+        <button class="btn btn-primary" onclick="newSurvey()">
+            ＋ 新規アンケート作成
+        </button>
+    </div>
+
+    <div class="card toolbar">
+
+        <input
+            id="searchInput"
+            class="search"
+            type="text"
+            placeholder="タイトルを検索"
+            onkeydown="if(event.key==='Enter') renderSurveyList()"
+        >
+
+        <select id="statusFilter" onchange="renderSurveyList()">
+            <option value="">すべて</option>
+            <option value="公開中">公開中</option>
+            <option value="下書き">下書き</option>
+            <option value="停止">停止</option>
+            <option value="終了">終了</option>
+        </select>
+
+        <select id="sortSelect" onchange="renderSurveyList()">
+            <option value="updatedDesc">更新日：新しい順</option>
+            <option value="updatedAsc">更新日：古い順</option>
+            <option value="answersDesc">回答数：多い順</option>
+            <option value="answersAsc">回答数：少ない順</option>
+            <option value="startDesc">期間開始日：新しい順</option>
+            <option value="startAsc">期間開始日：古い順</option>
+        </select>
+
+    </div>
+
+    <div class="card table-wrap">
+        <table>
+            <thead>
+            <tr>
+                <th>作成日 / 更新日</th>
+                <th>タイトル</th>
+                <th>アンケート期間</th>
+                <th>ステータス</th>
+                <th>回答数</th>
+                <th>操作</th>
+            </tr>
+            </thead>
+            <tbody id="surveyTable"></tbody>
+        </table>
+    </div>
+
+</section>
+
+
+<!-- =========================================================
+     2. 作成・編集
+========================================================= -->
+<section id="page-editor" class="page hidden">
+
+    <div class="page-title">
+        <div>
+            <h1 id="editorTitle">アンケート作成・編集</h1>
+        </div>
+    </div>
+
+    <!-- 要件上、基本情報より上に配置 -->
+    <div class="edit-actions">
+
+        <div class="edit-actions-left">
+            <button class="btn" onclick="cancelEdit()">キャンセル</button>
+
+            <button class="btn btn-primary" onclick="saveSurvey()">
+                保存して一覧へ
+            </button>
+        </div>
+
+        <div class="edit-actions-right">
+            <div class="state-control">
+                <strong>状態：</strong>
+                <select id="stateSelect" onchange="requestStateChange(this.value)">
+                </select>
+            </div>
+
+            <button class="btn" onclick="openPreview()">
+                プレビュー
+            </button>
+        </div>
+
+    </div>
+
+
+    <div class="card form-card">
+
+        <h2 class="section-title">基本情報</h2>
+
+        <div class="form-grid">
+
+            <div class="form-group full">
+                <label class="form-label">アンケートタイトル</label>
+                <input id="surveyTitle" type="text">
+            </div>
+
+            <div class="form-group full">
+                <label class="form-label">アンケート説明</label>
+                <textarea id="surveyDescription"></textarea>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">開始日時</label>
+                <input id="surveyStart" type="datetime-local">
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">終了日時</label>
+                <input id="surveyEnd" type="datetime-local">
+            </div>
+
+            <div class="form-group full">
+                <label class="form-label">質問番号の採番方式</label>
+
+                <div class="radio-row">
+                    <label>
+                        <input
+                            type="radio"
+                            name="numbering"
+                            value="global"
+                            onchange="renumber()"
+                        >
+                        アンケート全体で通番
+                    </label>
+
+                    <label>
+                        <input
+                            type="radio"
+                            name="numbering"
+                            value="group"
+                            onchange="renumber()"
+                        >
+                        グループ毎に採番
+                    </label>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <div class="card form-card">
+
+        <h2 class="section-title">質問構成</h2>
+
+        <div id="groups"></div>
+
+        <!-- グループ追加は一覧末尾のみ -->
+        <button class="add-group" onclick="addGroup()">
+            ＋ グループを追加
+        </button>
+
+    </div>
+
+</section>
+
+
+<!-- =========================================================
+     3. プレビュー
+========================================================= -->
+<section id="page-preview" class="page hidden">
+
+    <div class="page-title">
+        <div>
+            <h1>プレビュー</h1>
+            <p>これはプレビュー表示のため送信されません。</p>
+        </div>
+
+        <div>
+            <button class="btn" onclick="setPreviewMode('pc')">PC</button>
+            <button class="btn" onclick="setPreviewMode('mobile')">スマートフォン</button>
+            <button class="btn" onclick="showPage('editor')">編集へ戻る</button>
+        </div>
+    </div>
+
+    <div id="previewFrame" class="preview-frame">
+        <div class="preview-note">
+            これはプレビュー表示のため送信されません。
+        </div>
+
+        <h2 id="previewTitle"></h2>
+        <p id="previewDescription"></p>
+
+        <div id="previewQuestions"></div>
+
+        <div class="answer-actions">
+            <button class="btn">戻る</button>
+            <button class="btn btn-primary"
+                    onclick="toast('プレビューのため送信されません')">
+                次へ
+            </button>
+        </div>
+    </div>
+
+</section>
+
+
+<!-- =========================================================
+     4. 顧客選択・メール送信
+========================================================= -->
+<section id="page-send" class="page hidden">
+
+    <div class="page-title">
+        <div>
+            <h1>顧客選択・メール送信</h1>
+            <p id="sendSurveyName"></p>
+        </div>
+
+        <button class="btn" onclick="showPage('list')">一覧へ</button>
+    </div>
+
+    <div class="card toolbar">
+
+        <input class="search"
+               id="customerSearch"
+               type="text"
+               placeholder="顧客名・組織名・メールアドレス"
+               oninput="renderCustomers()">
+
+        <select id="customerStatus" onchange="renderCustomers()">
+            <option value="">すべて</option>
+            <option value="未送信">未送信</option>
+            <option value="送信済み / 未回答">送信済み / 未回答</option>
+            <option value="回答済み">回答済み</option>
+        </select>
+
+        <button class="btn" onclick="selectAllCustomers(true)">すべて選択</button>
+        <button class="btn" onclick="selectAllCustomers(false)">すべて解除</button>
+
+    </div>
+
+    <div class="card table-wrap">
+        <table>
+            <thead>
+            <tr>
+                <th></th>
+                <th>組織名</th>
+                <th>氏名</th>
+                <th>メールアドレス</th>
+                <th>電話番号</th>
+                <th>最終送信日時</th>
+                <th>送信回数</th>
+                <th>回答ステータス</th>
+                <th>kintone</th>
+            </tr>
+            </thead>
+            <tbody id="customerTable"></tbody>
+        </table>
+    </div>
+
+    <div class="card form-card" style="margin-top:15px">
+
+        <h2 class="section-title">メールテンプレート</h2>
+
+        <div class="form-group">
+            <label class="form-label">メール件名</label>
+            <input id="mailSubject" type="text"
+                   value="アンケートご回答のお願い">
+        </div>
+
+        <br>
+
+        <div class="form-group">
+            <label class="form-label">メール本文</label>
+            <textarea id="mailBody" style="min-height:150px"> {顧客名} 様
+
+アンケートへのご協力をお願いいたします。
 
-============================================================
-1. システム概要
-============================================================
-
-1.1 目的
-
-本システムは、Web上でアンケートの作成、編集、公開、顧客への
-個別送信、回答状況の管理、回答データの集計・出力を一元管理し、
-アンケート運用業務を効率化することを目的とする。
-
-また、アンケート回答者がPC・タブレット・スマートフォン等から
-アンケートへ回答できる環境を提供する。
-
-本要件定義では、特に管理者向け画面と回答者向け画面の役割を
-明確に分離し、回答者向け画面から管理者画面へ遷移する導線を
-設けないことを明確にする。
-
-
-1.2 対象ユーザー
-
-・システム管理者
-・アンケート運用担当者
-・アンケート回答者
-
-
-1.3 全体設計方針
-
-・直感的でシンプルな導線設計とする。
-・全アンケートの起点となる「アンケート一覧画面」を中心に構成する。
-・管理者向け画面と回答者向け画面を明確に分離する。
-・回答者向け画面には管理者向けナビゲーションを表示しない。
-・回答者向け画面には「管理者画面へ戻る」等の管理者向け導線を
-  設けない。
-・アンケート一覧画面では状態変更を直接行わない。
-・アンケートの状態変更はアンケート作成・編集画面で行う。
-・アンケート作成・編集画面では、基本情報入力欄より上に
-  保存・キャンセル・状態操作を配置する。
-・状態変更は単一選択のプルダウン形式とする。
-・「下書き保存」は独立した操作として設けない。
-・保存操作は「保存して一覧へ」に統合する。
-・「保存して一覧へ」と状態変更を同一操作として扱わない。
-・管理者はPC利用を主とする。
-・管理画面はタブレット・スマートフォンにも対応する。
-・回答者画面は特にスマートフォンでの操作性を重視する。
-・モックでは実際の操作、状態変化、画面遷移を確認できるようにする。
-・自由記述の回答形式は1種類とし、1行入力・複数行入力を別々の
-  回答形式として扱わない。
-
-
-============================================================
-2. システム構成・画面区分
-============================================================
-
-2.1 管理者向け画面
-
-以下を管理者向け画面とする。
-
-・アンケート一覧
-・アンケート作成・編集
-・回答集計・分析
-・顧客選択・メール送信
-・送信履歴
-・kintone連携設定
-・メールサーバ設定
-
-
-2.2 回答者向け画面
-
-以下を回答者向け画面とする。
-
-・アンケート回答画面
-・回答確認画面
-・回答完了画面
-
-
-2.3 管理者画面と回答者画面の分離
-
-管理者向け画面と回答者向け画面は役割を完全に分離する。
-
-回答者向け画面には以下を設けない。
-
-・管理者向けヘッダー
-・アンケート一覧へのリンク
-・管理者画面へのリンク
-・管理者画面へ戻るボタン
-・kintone設定へのリンク
-・メールサーバ設定へのリンク
-・集計画面へのリンク
-・顧客送信画面へのリンク
-
-回答者は、アンケートURLから回答フローのみを利用する。
-
-
-============================================================
-3. 管理者画面共通ヘッダー
-============================================================
-
-管理者向け画面では画面上部に固定ナビゲーションを配置する。
-
-・アンケート一覧
-・kintone連携設定
-・メールサーバ設定
-・ログアウト
-
-回答者向け画面では、この管理者向けヘッダーを表示しない。
-
-
-============================================================
-4. 主要画面遷移
-============================================================
-
-[管理者：アンケート一覧]
-   │
-   ├── [＋ 新規アンケート作成]
-   │       ↓
-   │   [アンケート作成・編集]
-   │       ├── 保存して一覧へ
-   │       ├── 状態プルダウン
-   │       └── プレビュー
-   │
-   ├── [確認・編集]
-   │       ↓
-   │   [アンケート作成・編集]
-   │
-   ├── [集計]
-   │       ↓
-   │   [回答集計・分析]
-   │
-   ├── [送信]
-   │       ↓
-   │   [顧客選択・メール送信]
-   │
-   ├── [複製]
-   │       ↓
-   │   下書きアンケートとして一覧へ追加
-   │
-   └── [削除]
-           ↓
-       確認ダイアログ
-           ↓
-       削除
-
-
-[回答者]
-   ↓
-[アンケート回答画面]
-   ↓
-[回答確認画面]
-   ↓
-[回答完了画面]
-
-※回答者向けフローから管理者画面への遷移は存在しない。
-
-
-============================================================
-5. アンケート状態
-============================================================
-
-5.1 一覧で表示する状態
-
-・公開中
-・下書き
-・停止
-・終了
-
-
-5.2 作成・編集画面で扱う状態
-
-状態変更操作は以下とする。
-
-・下書き
-・公開
-・停止
-・再開
-
-「終了」は期間終了等によりシステム上で表示される状態とし、
-通常の状態変更操作の対象には含めない。
-
-
-5.3 状態変更場所
-
-状態変更はアンケート一覧画面では行わない。
-
-状態変更はアンケート作成・編集画面上部に配置する
-状態プルダウンから行う。
-
-
-5.4 状態変更の単一選択
-
-状態は必ず単一選択とする。
-
-UIはプルダウン形式とする。
-
-ラジオボタンやチェックボックスによる複数選択UIは使用しない。
-
-現在の状態に応じて、実行可能な状態のみ選択可能とする。
-
-基本的な状態遷移は以下とする。
-
-下書き
-↓
-公開
-
-公開中
-↓
-停止
-
-停止
-↓
-再開
-↓
-公開中
-
-終了
-↓
-変更不可
-
-
-============================================================
-6. アンケート一覧画面
-============================================================
-
-6.1 役割
-
-登録されているアンケートを一覧で確認し、各アンケートの
-管理操作画面へ移動するための起点とする。
-
-一覧画面では状態変更を直接行わない。
-
-
-6.2 表示項目
-
-・作成日 / 更新日
-・タイトル
-・アンケート期間
-・ステータス
-・回答数
-・操作
-
-
-6.3 ステータス
-
-・公開中
-・下書き
-・停止
-・終了
-
-
-6.4 検索
-
-タイトルによる部分一致検索を行える。
-
-Enterキーで検索を実行できる。
-
-
-6.5 フィルター
-
-ステータス：
-
-・すべて
-・公開中
-・下書き
-・停止
-・終了
-
-
-6.6 ソート
-
-更新日：
-
-・新しい順
-・古い順
-
-回答数：
-
-・多い順
-・少ない順
-
-アンケート期間開始日：
-
-・新しい順
-・古い順
-
-初期値は「更新日：新しい順」とする。
-
-
-6.7 一覧画面の操作
-
-・確認・編集
-・集計
-・送信
-・複製
-・削除
-
-
-6.8 一覧画面に配置しない操作
-
-以下の状態変更操作は一覧画面には配置しない。
-
-・公開
-・停止
-・再開
-・下書きへの変更
-
-
-6.9 複製
-
-複製時には確認ダイアログを表示する。
-
-複製対象：
-
-・タイトル
-・説明
-・期間
-・グループ
-・質問
-・選択肢
-・必須設定
-・条件分岐
-・質問番号設定
-
-複製しないもの：
-
-・公開状態
-・回答データ
-・送信履歴
-
-複製したアンケートは「下書き」とする。
-
-複製後は作成・編集画面へ自動遷移せず、
-一覧画面に複製されたアンケートを追加する。
-
-
-6.10 削除
-
-削除時には確認ダイアログを表示する。
-
-確認後、対象アンケートを一覧から削除する。
-
-モックでは状態に応じた削除可否も表現できるものとする。
-
-
-============================================================
-7. アンケート作成・編集画面
-============================================================
-
-7.1 画面上部の配置
-
-アンケート作成・編集画面では、基本情報入力欄より上に
-操作エリアを配置する。
-
-配置順は以下とする。
-
-
-------------------------------------------------------------
-アンケート作成・編集
-
-[キャンセル]    [保存して一覧へ]    状態：[現在の状態 ▼]
-
-------------------------------------------------------------
-
-基本情報
-
-アンケートタイトル
-[                              ]
-
-アンケート説明
-[                              ]
-
-開始日時
-[                              ]
-
-終了日時
-[                              ]
-
-質問番号の採番方式
-○ アンケート全体で通番
-○ グループ毎に採番
-
-------------------------------------------------------------
-
-
-7.2 保存して一覧へ
-
-「保存して一覧へ」を保存操作として使用する。
-
-入力内容を保存し、現在の編集内容を一覧へ反映したうえで
-アンケート一覧画面へ戻る。
-
-新規作成時に保存したアンケートの初期状態は「下書き」とする。
-
-既存アンケートを編集している場合は、現在の状態を維持して保存する。
-
-状態を変更したい場合は、保存操作とは別に状態プルダウンから
-状態変更を行う。
-
-保存完了後はアンケート一覧画面へ遷移する。
-
-
-7.3 保存と状態変更の違い
-
-「保存して一覧へ」と「状態プルダウン」は目的が異なる。
-
-【保存して一覧へ】
-
-入力内容を保存し、一覧画面へ戻るための操作。
-
-【状態プルダウン】
-
-アンケートの公開状態を変更するための操作。
-
-したがって、両者を同一UIや同一操作として扱わない。
-
-「保存して一覧へ」は状態プルダウンとは独立したボタンとして
-配置する。
-
-
-7.4 状態プルダウン
-
-基本情報入力欄より上に配置する。
-
-例：
-
-状態：[下書き ▼]
-
-単一選択のプルダウンとする。
-
-現在の状態に応じて選択可能な状態を制御する。
-
-
-7.5 状態変更確認
-
-状態プルダウンから状態を変更した場合、
-選択した時点では変更を確定しない。
-
-必ず確認ダイアログを表示する。
-
-
-【公開】
-
-「このアンケートを公開しますか？」
-
-[キャンセル] [実行]
-
-
-【停止】
-
-「このアンケートを停止しますか？」
-
-[キャンセル] [実行]
-
-
-【再開】
-
-「このアンケートを再開しますか？」
-
-[キャンセル] [実行]
-
-
-キャンセル：
-
-・状態を変更しない
-・変更前の状態へ戻す
-
-実行：
-
-・状態を変更
-・画面上の状態表示を即時更新
-
-
-7.6 状態変更後の表示
-
-下書き → 公開
-
-状態：[公開中]
-
-
-公開中 → 停止
-
-状態：[停止]
-
-
-停止 → 再開
-
-状態：[公開中]
-
-
-7.7 終了状態
-
-終了状態の場合、
-
-状態：[終了]
-
-と表示する。
-
-状態変更操作は無効とする。
-
-
-7.8 キャンセル
-
-「キャンセル」を押下した場合、
-編集内容を破棄する確認ダイアログを表示する。
-
-確認後、変更を破棄して前の画面へ戻る。
-
-保存済みデータには影響を与えない。
-
-
-============================================================
-8. 基本情報
-============================================================
-
-基本情報として以下を設定する。
-
-・アンケートタイトル
-・アンケート説明
-・開始日時
-・終了日時
-・質問番号の採番方式
-
-
-============================================================
-9. 質問番号の採番方式
-============================================================
-
-採番方式は以下の2種類とする。
-
-・アンケート全体で通番
-・グループ毎に採番
-
-
-9.1 アンケート全体で通番
-
-アンケート全体の表示順に応じて連番を付与する。
-
-例：
-
-Q1
-Q2
-Q3
-Q4
-Q5
-
-
-9.2 グループ毎に採番
-
-グループ番号とグループ内質問番号を組み合わせる。
-
-例：
-
-グループ1
-  Q1-1
-  Q1-2
-  Q1-3
-
-グループ2
-  Q2-1
-  Q2-2
-
-グループ3
-  Q3-1
-  Q3-2
-
-
-9.3 初期値
-
-初期値は、
-
-「アンケート全体で通番」
-
-とする。
-
-
-9.4 自動更新
-
-質問番号はユーザーが直接編集しない。
-
-以下の操作時に自動再計算する。
-
-・質問追加
-・質問削除
-・質問並び替え
-・質問のグループ間移動
-・グループ追加
-・グループ削除
-・グループ並び替え
-・採番方式変更
-
-
-9.5 グループ毎採番時のグループ並び替え
-
-グループ番号も自動的に再計算する。
-
-例：
-
-グループ1
-グループ2
-グループ3
-
-を並び替えて、
-
-グループ3
-グループ1
-グループ2
-
-となった場合、画面上のグループ番号を再計算し、
-
-グループ1
-グループ2
-グループ3
-
-として扱う。
-
-それに伴い質問番号も再計算する。
-
-
-============================================================
-10. グループ管理
-============================================================
-
-10.1 グループ構成
-
-各グループには以下を配置する。
-
-・グループタイトル
-・グループ操作
-・質問一覧
-・「＋ 質問を追加」
-
-
-10.2 グループ追加
-
-グループ一覧の末尾に、
-
-「＋ グループを追加」
-
-を配置する。
-
-押下するとグループ一覧の末尾へ新しいグループを追加する。
-
-追加後はその場で編集できる。
-
-
-10.3 グループ削除
-
-グループごとに削除操作を配置する。
-
-削除時には確認ダイアログを表示する。
-
-質問が存在する場合は、その旨を確認できる表示とする。
-
-
-10.4 グループ並び替え
-
-ドラッグ＆ドロップで並び替える。
-
-並び替え後は即時反映する。
-
-グループ毎採番の場合は質問番号も即時更新する。
-
-
-============================================================
-11. 質問管理
-============================================================
-
-11.1 質問操作
-
-各質問について以下を設定する。
-
-・質問文
-・回答形式
-・必須 / 任意
-・選択肢
-・条件分岐
-
-
-11.2 質問追加
-
-各グループの質問一覧の末尾に、
-
-「＋ 質問を追加」
-
-を配置する。
-
-質問の途中には追加ボタンを配置しない。
-
-
-11.3 質問削除
-
-質問ごとに削除操作を配置する。
-
-削除時には確認ダイアログを表示する。
-
-
-11.4 質問並び替え
-
-ドラッグ＆ドロップで同一グループ内の質問を並び替えられる。
-
-
-11.5 グループ間移動
-
-質問を別グループへドラッグ＆ドロップして移動できる。
-
-移動後、
-
-・所属グループ
-・表示順
-・質問番号
-
-を即時更新する。
-
-
-============================================================
-12. 回答形式
-============================================================
-
-12.1 単一選択
-
-・ラジオボタン
-・選択肢追加
-・選択肢削除
-・条件分岐
-
-
-12.2 複数選択
-
-・チェックボックス
-・選択肢追加
-・選択肢削除
-
-
-12.3 自由記述
-
-・自由記述入力欄
-
-自由記述は1種類の回答形式として扱う。
-
-「1行テキスト」と「複数行テキスト」は別々の回答形式として
-設けない。
-
-回答者画面では、自由記述用の入力欄を表示する。
-
-モックでは画面幅や質問内容に応じて適切な入力欄サイズで表示するが、
-これは表示上の違いであり、回答形式として別の種類にはしない。
-
-
-============================================================
-13. 必須回答
-============================================================
-
-各質問について必須 / 任意を設定できる。
-
-必須質問が未回答の場合、次へ進む際にエラー表示する。
-
-
-============================================================
-14. 条件分岐
-============================================================
-
-単一選択質問について、選択肢ごとに次に表示する質問を
-設定できる。
-
-例：
-
-Q1
-「サービスを利用したことがありますか？」
-
-はい → Q2
-いいえ → Q5
-
-採番方式が変更された場合、画面上の質問番号および
-分岐先表示も自動更新する。
-
-モックではプレビュー上で条件分岐による質問表示の変化を
-確認できるものとする。
-
-
-============================================================
-15. プレビュー
-============================================================
-
-作成・編集画面からプレビューを表示できる。
-
-プレビューでは以下を反映する。
-
-・入力内容
-・質問順序
-・質問番号
-・選択肢
-・必須設定
-・条件分岐
-
-PC表示とスマートフォン表示を切り替えられる。
-
-プレビュー送信時には実際の送信を行わない。
-
-表示例：
-
-「これはプレビュー表示のため送信されません」
-
-
-============================================================
-16. 保存・キャンセル
-============================================================
-
-16.1 保存して一覧へ
-
-「保存して一覧へ」を唯一の編集内容保存操作とする。
-
-入力内容を保存し、アンケート一覧画面へ戻る。
-
-新規作成時は下書きとして保存する。
-
-既存アンケートの編集時は現在の状態を維持して保存する。
-
-
-16.2 キャンセル
-
-変更を破棄する確認ダイアログを表示する。
-
-確認後、変更を破棄して前の画面へ戻る。
-
-
-16.3 保存操作の重複禁止
-
-以下のような複数の保存ボタンは設けない。
-
-・下書き保存
-・保存
-・保存して一覧へ
-・一時保存
-
-保存操作は「保存して一覧へ」に統一する。
-
-
-============================================================
-17. 回答者向けアンケート画面
-============================================================
-
-17.1 基本方針
-
-回答者向け画面は、管理者向け画面とは完全に分離する。
-
-回答者向け画面には管理者向けナビゲーションを表示しない。
-
-
-17.2 表示内容
-
-・アンケートタイトル
-・アンケート説明
-・アンケート期間
-・グループタイトル
-・質問番号
-・質問文
-・回答入力欄
-・必須表示
-・次へ
-・戻る
-・回答確認
-
-
-17.3 回答者画面に表示しないもの
-
-以下は回答者向け画面には表示しない。
-
-・アンケート一覧
-・管理者画面へ戻るボタン
-・管理者メニュー
-・kintone連携設定
-・メールサーバ設定
-・集計画面
-・顧客送信画面
-・管理者用ログアウト
-
-また、
-
-・キャンセル
-・保存して一覧へ
-・状態変更操作
-
-等の管理者向け編集操作も表示しない。
-
-
-17.4 個別回答URL
-
-顧客ごとに個別URLを発行できる。
-
-個別URLから回答した場合、対象顧客と回答情報を紐付ける。
-
-
-17.5 公開URL
-
-一般公開URLから回答できる。
-
-既存顧客と一致する場合は顧客情報と紐付ける。
-
-一致しない場合は未登録回答者として管理する。
-
-
-17.6 回答入力
-
-以下の形式に対応する。
-
-・単一選択
-・複数選択
-・自由記述
-
-
-17.7 必須チェック
-
-必須項目が未回答の場合、次へ進めない。
-
-画面上に未回答項目を通知する。
-
-
-17.8 条件分岐
-
-回答内容に応じて次に表示する質問を変更する。
-
-表示される質問番号は設定された採番方式に従う。
-
-
-============================================================
-18. 回答確認・送信
-============================================================
-
-回答送信前に入力内容を確認できる。
-
-表示内容：
-
-・質問番号
-・質問文
-・回答内容
-・修正
-
-「回答を送信する」を押下すると確認ダイアログを表示する。
-
-送信後は回答完了画面へ遷移する。
-
-
-============================================================
-19. 回答完了画面
-============================================================
-
-回答完了画面には、
-
-「回答ありがとうございました」
-
-等の完了メッセージを表示する。
-
-回答完了画面にも管理者画面への導線を設けない。
-
-「管理者画面へ戻る」等のボタンは配置しない。
-
-
-============================================================
-20. 回答済み表示
-============================================================
-
-個別回答URLへ再度アクセスした場合、
-すでに回答済みであることを表示する。
-
-アンケートごとに再回答を許可するかどうかを
-設定できるものとする。
-
-
-============================================================
-21. 回答者情報
-============================================================
-
-回答者情報として以下を管理できる。
-
-・組織名
-・氏名
-・メールアドレス
-・部署名
-・電話番号
-・住所
-
-回答者のメールアドレス等を利用して既存顧客との紐付けを行う。
-
-
-============================================================
-22. 顧客選択・メール送信
-============================================================
-
-22.1 顧客一覧
-
-表示項目：
-
-・選択チェックボックス
-・組織名
-・氏名
-・メールアドレス
-・電話番号
-・住所
-・最終送信日時
-・送信回数
-・回答ステータス
-・送信文を確認
-・kintone登録状態
-
-
-22.2 顧客検索
-
-以下で検索・絞り込みを行える。
-
-・顧客名
-・組織名
-・メールアドレス
-・ステータス
-
-
-22.3 メールテンプレート
-
-・メール件名
-・メール本文
-
-動的変数：
-
-{顧客名}
 {アンケートURL}
 
+よろしくお願いいたします。</textarea>
+        </div>
+
+        <br>
+
+        <button class="btn btn-primary" onclick="confirmSend()">
+            選択した顧客へ一括送信
+        </button>
 
-22.4 一括送信
+        <button class="btn" onclick="showPage('history')">
+            送信履歴
+        </button>
 
-選択した顧客へ一括送信する。
+    </div>
 
-送信前に確認ダイアログを表示する。
+</section>
 
 
-22.5 再送
+<!-- =========================================================
+     5. 送信履歴
+========================================================= -->
+<section id="page-history" class="page hidden">
 
-送信済み顧客が含まれる場合、
+    <div class="page-title">
+        <div>
+            <h1>送信履歴</h1>
+        </div>
+    </div>
 
-「既に送信済みの宛先が含まれています。再送しますか？」
+    <div class="card table-wrap">
+        <table>
+            <thead>
+            <tr>
+                <th>送信日時</th>
+                <th>送信種別</th>
+                <th>送信件数</th>
+                <th>送信件名</th>
+                <th>送信実行者</th>
+                <th>操作</th>
+            </tr>
+            </thead>
+            <tbody id="historyTable"></tbody>
+        </table>
+    </div>
 
-と表示する。
+</section>
 
 
-22.6 リマインド
+<!-- =========================================================
+     6. 集計
+========================================================= -->
+<section id="page-analysis" class="page hidden">
 
-未回答者を抽出して再送信できる。
+    <div class="page-title">
+        <div>
+            <h1>回答集計・分析</h1>
+            <p id="analysisSurveyName"></p>
+        </div>
 
+        <div>
+            <button class="btn" onclick="exportMock('CSV')">CSVダウンロード</button>
+            <button class="btn" onclick="exportMock('PDF')">PDF出力</button>
+        </div>
+    </div>
 
-============================================================
-23. 送信履歴
-============================================================
+    <div class="summary-grid">
 
-以下を確認できる。
+        <div class="summary-card">
+            <div class="label">送信対象者数</div>
+            <div class="value">128</div>
+        </div>
 
-・送信日時
-・送信種別
-・送信件数
-・送信件名
-・送信実行者
-・対象顧客
+        <div class="summary-card">
+            <div class="label">回答数</div>
+            <div class="value">84</div>
+        </div>
 
-送信済みメールについて、
+        <div class="summary-card">
+            <div class="label">未登録顧客からの回答数</div>
+            <div class="value">7</div>
+        </div>
 
-・件名
-・本文
-・顧客名差し込み後の内容
-・個別アンケートURL
+        <div class="summary-card">
+            <div class="label">未回答数</div>
+            <div class="value">44</div>
+        </div>
 
-を確認できる。
+        <div class="summary-card">
+            <div class="label">回答率</div>
+            <div class="value">65.6%</div>
+        </div>
 
+    </div>
 
-============================================================
-24. 回答状況
-============================================================
+    <div class="card form-card">
 
-顧客ごとに以下を表示する。
+        <h2 class="section-title">設問フィルター</h2>
+
+        <button class="btn btn-small" onclick="checkQuestions(true)">
+            すべて選択
+        </button>
 
-・未送信
-・送信済み / 未回答
-・回答済み
-・最終送信日時
-・送信回数
+        <button class="btn btn-small" onclick="checkQuestions(false)">
+            すべて解除
+        </button>
 
+        <div id="questionFilters" style="margin-top:12px"></div>
 
-============================================================
-25. kintone未登録回答者
-============================================================
+    </div>
 
-kintoneに登録されていない回答者には、
+    <div class="card form-card">
 
-「未登録」
+        <h2 class="section-title">設問別集計</h2>
 
-バッジを表示する。
+        <div style="margin-bottom:25px">
+            <strong>Q1　サービスを利用したことがありますか？</strong>
 
-登録完了後は、
+            <div style="margin-top:13px">
+                <div>はい　58件（69.0%）</div>
+                <div class="bar"><span style="width:69%"></span></div>
+            </div>
 
-「✓ kintone登録完了」
+            <div style="margin-top:10px">
+                <div>いいえ　26件（31.0%）</div>
+                <div class="bar"><span style="width:31%"></span></div>
+            </div>
+        </div>
 
-へ変更できる。
+        <div>
+            <strong>Q2　ご意見・ご要望</strong>
 
+            <div style="margin-top:12px">
+                <div class="card" style="padding:12px;margin-bottom:7px">
+                    「操作が分かりやすく、便利でした。」
+                </div>
 
-============================================================
-26. メールサーバ設定
-============================================================
+                <div class="card" style="padding:12px;margin-bottom:7px">
+                    「スマートフォンでも回答しやすかったです。」
+                </div>
 
-設定項目：
+                <div class="card" style="padding:12px">
+                    「今後も利用したいと思います。」
+                </div>
+            </div>
+        </div>
 
-・SMTPサーバ
-・SMTPポート
-・暗号化方式
-  - SSL
-  - TLS
-  - なし
-・SMTP認証
-・SMTPユーザー名
-・SMTPパスワード
-・送信元メールアドレス
-・送信元名
-・返信先メールアドレス
+    </div>
 
-接続状態：
+</section>
 
-・接続確認済み
-・接続できません
-・未設定
 
-テストメールを送信できる。
+<!-- =========================================================
+     7. kintone設定
+========================================================= -->
+<section id="page-kintone" class="page hidden">
 
-モックでは実際のメール送信を行わず、
-成功・失敗状態を画面上で再現する。
+    <div class="page-title">
+        <div>
+            <h1>kintone連携設定</h1>
+            <p>顧客情報との連携設定を行います。</p>
+        </div>
+    </div>
 
+    <div id="kintoneConnection" class="connection">
+        未設定
+    </div>
 
-============================================================
-27. 回答集計・分析
-============================================================
+    <div class="card form-card">
 
-27.1 基本情報
+        <div class="setting-grid">
 
-集計対象アンケートのタイトルを表示する。
+            <div class="form-group">
+                <label class="form-label">サブドメイン</label>
+                <input id="kinSubdomain" type="text"
+                       value="example.cybozu.com">
+            </div>
 
-集計画面内で対象アンケートを変更しない。
+            <div class="form-group">
+                <label class="form-label">顧客管理アプリID</label>
+                <input id="kinAppId" type="number" value="123">
+            </div>
 
+            <div class="form-group">
+                <label class="form-label">ログイン名</label>
+                <input id="kinLogin" type="text" value="admin">
+            </div>
 
-27.2 出力
+            <div class="form-group">
+                <label class="form-label">パスワード</label>
+                <input id="kinPassword" type="password" value="password">
+            </div>
 
-・CSVダウンロード
-・PDF出力
+            <div class="form-group full">
+                <label>
+                    <input id="kinSSL" type="checkbox" checked>
+                    SSL証明書を検証する
+                </label>
+            </div>
 
+        </div>
 
-27.3 サマリー
+        <hr style="border:0;border-top:1px solid #e5e7eb;margin:25px 0">
 
-以下をカード形式で表示する。
+        <button class="btn btn-primary" onclick="getKintoneFields()">
+            項目一覧を再取得
+        </button>
 
-・送信対象者数
-・回答数
-・未登録顧客からの回答数
-・未回答数
-・回答率
+        <button class="btn" onclick="syncCustomers()">
+            顧客情報を同期
+        </button>
 
+        <div id="kinFields" style="margin-top:20px"></div>
 
-27.4 設問フィルター
+    </div>
 
-・すべて選択
-・すべて解除
-・設問ごとのチェックボックス
+</section>
 
 
-27.5 設問別集計
+<!-- =========================================================
+     8. メールサーバ設定
+========================================================= -->
+<section id="page-mail" class="page hidden">
 
-選択式：
+    <div class="page-title">
+        <div>
+            <h1>メールサーバ設定</h1>
+        </div>
+    </div>
 
-・横棒グラフ
-・回答件数
-・回答割合
+    <div id="mailConnection" class="connection">
+        未設定
+    </div>
 
-自由記述：
+    <div class="card form-card">
 
-・回答内容一覧
-・回答者情報
+        <div class="setting-grid">
 
+            <div class="form-group">
+                <label class="form-label">SMTPサーバ</label>
+                <input id="smtpHost" type="text" value="smtp.example.com">
+            </div>
 
-27.6 その他
+            <div class="form-group">
+                <label class="form-label">SMTPポート</label>
+                <input id="smtpPort" type="number" value="587">
+            </div>
 
-「その他」がある場合、
+            <div class="form-group">
+                <label class="form-label">暗号化方式</label>
+                <select>
+                    <option>SSL</option>
+                    <option selected>TLS</option>
+                    <option>なし</option>
+                </select>
+            </div>
 
-・選択件数
-・自由記述件数
+            <div class="form-group">
+                <label class="form-label">SMTP認証</label>
+                <select>
+                    <option selected>あり</option>
+                    <option>なし</option>
+                </select>
+            </div>
 
-を表示する。
+            <div class="form-group">
+                <label class="form-label">SMTPユーザー名</label>
+                <input type="text" value="mailer@example.com">
+            </div>
 
+            <div class="form-group">
+                <label class="form-label">SMTPパスワード</label>
+                <input type="password" value="password">
+            </div>
 
-27.7 個別回答
+            <div class="form-group">
+                <label class="form-label">送信元メールアドレス</label>
+                <input type="email" value="info@example.com">
+            </div>
 
-・組織名
-・氏名
-・回答日時
-・回答概要
-・全回答を表示
+            <div class="form-group">
+                <label class="form-label">送信元名</label>
+                <input type="text" value="アンケート事務局">
+            </div>
 
+            <div class="form-group">
+                <label class="form-label">返信先メールアドレス</label>
+                <input type="email" value="support@example.com">
+            </div>
 
-27.8 回答0件
+        </div>
 
-回答データがない場合、
+        <br>
 
-「現在、回答データはありません」
+        <button class="btn btn-primary" onclick="testMail(true)">
+            接続テスト
+        </button>
 
-と表示する。
+        <button class="btn" onclick="testMail(false)">
+            テストメールを送信
+        </button>
 
+    </div>
 
-============================================================
-28. CSV / PDF出力
-============================================================
+</section>
 
-28.1 CSV
 
-出力項目：
+<!-- =========================================================
+     9. 回答者アンケート
+     ※管理者ヘッダーはshowPage()側で非表示にする
+========================================================= -->
+<section id="page-answer" class="page hidden">
 
-・回答ID
-・回答日時
-・顧客ID
-・組織名
-・氏名
-・設問1
-・設問2
-・設問3
-・以降の設問
+    <div class="preview-frame">
 
-設問項目には質問番号を対応させる。
+        <h1 id="answerTitle">アンケート</h1>
 
-モックでは実ファイル生成を必須とせず、
-出力操作が実行されたことを確認できればよい。
+        <p id="answerDescription">
+            アンケートへのご協力をお願いいたします。
+        </p>
 
+        <hr style="border:0;border-top:1px solid #e5e7eb;margin:20px 0">
 
-28.2 PDF
+        <div id="answerQuestions"></div>
 
-以下を出力対象とする。
+        <div class="answer-actions">
+            <button class="btn" onclick="toast('最初のページです')">
+                戻る
+            </button>
 
-・アンケートタイトル
-・集計サマリー
-・選択中の設問
-・質問番号
-・グラフ
-・回答結果
+            <button class="btn btn-primary" onclick="validateAnswer()">
+                次へ
+            </button>
+        </div>
 
-モックでは実PDF生成を必須とせず、
-出力操作が実行されたことを確認できればよい。
+    </div>
 
+</section>
 
-============================================================
-29. kintone連携設定
-============================================================
 
-29.1 接続設定
+<!-- =========================================================
+     10. 回答確認
+========================================================= -->
+<section id="page-confirm-answer" class="page hidden">
 
-以下を設定できる。
+    <div class="preview-frame">
 
-・サブドメイン
-・顧客管理アプリID
-・ログイン名
-・パスワード
-・SSL検証設定
+        <h1>回答確認</h1>
 
+        <p>入力内容をご確認ください。</p>
 
-29.2 kintoneログイン情報に関する重要仕様
+        <div id="answerConfirmBody"></div>
 
-kintone接続設定に使用するログイン情報は、
+        <div class="answer-actions">
+            <button class="btn" onclick="showPage('answer')">
+                修正する
+            </button>
 
-・ログイン名
-・パスワード
+            <button class="btn btn-primary" onclick="confirmAnswerSend()">
+                回答を送信する
+            </button>
+        </div>
 
-のみとする。
+    </div>
 
-「メールアドレス」の入力欄は設けない。
+</section>
 
-モック画面にもメールアドレス形式のログイン情報入力欄を
-表示しない。
 
+<!-- =========================================================
+     11. 回答完了
+     ※管理者ヘッダーなし
+========================================================= -->
+<section id="page-complete" class="page hidden">
 
-画面例：
+    <div class="preview-frame" style="text-align:center;padding:70px 25px">
 
-サブドメイン
-[ example.cybozu.com ]
+        <div style="font-size:55px;color:#16a34a">✓</div>
 
-顧客管理アプリID
-[ 123 ]
+        <h1>回答ありがとうございました</h1>
 
-ログイン名
-[ admin ]
+        <p>
+            アンケートの回答を受け付けました。
+        </p>
 
-パスワード
-[ ******** ]
+        <!-- 管理者画面へのリンクは意図的に存在しない -->
 
-SSL検証
-☑ SSL証明書を検証する
+    </div>
 
+</section>
 
-29.3 項目一覧取得
+</main>
 
-「項目一覧を再取得」を押下すると、
-kintoneアプリの項目一覧を表示する。
 
-日本語フィールドラベルを表示する。
+<!-- =========================================================
+     モーダル
+========================================================= -->
+<div id="modalBackdrop" class="modal-backdrop">
 
+    <div class="modal">
 
-29.4 フィールドマッピング
+        <div id="modalTitle" class="modal-header">
+            確認
+        </div>
+
+        <div id="modalBody" class="modal-body">
+        </div>
+
+        <div class="modal-footer">
+
+            <button class="btn" onclick="closeModal()">
+                キャンセル
+            </button>
+
+            <button id="modalExecute" class="btn btn-primary">
+                実行
+            </button>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<div id="toast" class="toast"></div>
+
+
+<script>
+/* ============================================================
+   サンプルデータ
+============================================================ */
+
+let surveys = [
+    {
+        id:1,
+        title:"サービス満足度アンケート",
+        description:"サービスについてのご意見をお聞かせください。",
+        start:"2026-08-01T09:00",
+        end:"2026-08-31T23:59",
+        status:"公開中",
+        created:"2026-07-15",
+        updated:"2026-08-20",
+        answers:84,
+        numbering:"global",
+        groups:[
+            {
+                id:101,
+                title:"サービスについて",
+                questions:[
+                    {
+                        id:1001,
+                        text:"サービスを利用したことがありますか？",
+                        type:"single",
+                        required:true,
+                        options:["はい","いいえ"],
+                        condition:""
+                    },
+                    {
+                        id:1002,
+                        text:"特に良かった点を教えてください。",
+                        type:"free",
+                        required:false,
+                        options:[],
+                        condition:""
+                    }
+                ]
+            },
+            {
+                id:102,
+                title:"ご意見・ご要望",
+                questions:[
+                    {
+                        id:1003,
+                        text:"今後のご意見・ご要望をお聞かせください。",
+                        type:"free",
+                        required:false,
+                        options:[],
+                        condition:""
+                    }
+                ]
+            }
+        ]
+    },
+    {
+        id:2,
+        title:"新サービス事前調査",
+        description:"新サービスに関するアンケートです。",
+        start:"2026-09-01T09:00",
+        end:"2026-09-30T23:59",
+        status:"下書き",
+        created:"2026-08-18",
+        updated:"2026-08-22",
+        answers:0,
+        numbering:"global",
+        groups:[
+            {
+                id:201,
+                title:"基本アンケート",
+                questions:[
+                    {
+                        id:2001,
+                        text:"興味がありますか？",
+                        type:"single",
+                        required:true,
+                        options:["非常にある","ある","あまりない","ない"],
+                        condition:""
+                    }
+                ]
+            }
+        ]
+    },
+    {
+        id:3,
+        title:"旧サービス利用者アンケート",
+        description:"旧サービス終了に伴うアンケートです。",
+        start:"2026-05-01T09:00",
+        end:"2026-06-30T23:59",
+        status:"終了",
+        created:"2026-04-10",
+        updated:"2026-07-01",
+        answers:128,
+        numbering:"group",
+        groups:[
+            {
+                id:301,
+                title:"利用状況",
+                questions:[
+                    {
+                        id:3001,
+                        text:"利用頻度を教えてください。",
+                        type:"single",
+                        required:true,
+                        options:["毎日","週数回","月数回","ほぼ利用しない"],
+                        condition:""
+                    }
+                ]
+            }
+        ]
+    }
+];
+
+let customers = [
+    {
+        id:1,
+        org:"株式会社サンプル",
+        name:"山田 太郎",
+        email:"yamada@example.com",
+        phone:"03-1111-2222",
+        address:"東京都港区",
+        sent:"2026-08-10",
+        count:1,
+        status:"回答済み",
+        kintone:true
+    },
+    {
+        id:2,
+        org:"テスト株式会社",
+        name:"佐藤 花子",
+        email:"sato@example.com",
+        phone:"03-3333-4444",
+        address:"東京都新宿区",
+        sent:"2026-08-12",
+        count:1,
+        status:"送信済み / 未回答",
+        kintone:true
+    },
+    {
+        id:3,
+        org:"株式会社ABC",
+        name:"鈴木 一郎",
+        email:"suzuki@example.com",
+        phone:"03-5555-6666",
+        address:"東京都千代田区",
+        sent:"",
+        count:0,
+        status:"未送信",
+        kintone:false
+    },
+    {
+        id:4,
+        org:"未登録回答者",
+        name:"田中 次郎",
+        email:"tanaka@example.net",
+        phone:"090-7777-8888",
+        address:"東京都渋谷区",
+        sent:"",
+        count:0,
+        status:"未送信",
+        kintone:false
+    }
+];
+
+let histories = [];
+
+let editorSurvey = null;
+let editorOriginal = null;
+let previewMode = "pc";
+let answerSurvey = null;
+let answerValues = {};
+
+
+/* ============================================================
+   初期化
+============================================================ */
+
+document.addEventListener("DOMContentLoaded",function(){
+    renderSurveyList();
+    showPage("list");
+});
+
+
+/* ============================================================
+   共通
+============================================================ */
+
+function clone(obj){
+    return JSON.parse(JSON.stringify(obj));
+}
+
+function escapeHtml(value){
+    return String(value ?? "")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+}
+
+function toast(message){
+    const el=document.getElementById("toast");
+    el.textContent=message;
+    el.classList.add("show");
+
+    setTimeout(()=>{
+        el.classList.remove("show");
+    },2200);
+}
+
+function openModal(title,body,callback){
+    document.getElementById("modalTitle").textContent=title;
+    document.getElementById("modalBody").innerHTML=body;
+    document.getElementById("modalBackdrop").classList.add("show");
+
+    document.getElementById("modalExecute").onclick=function(){
+        closeModal();
+        callback();
+    };
+}
+
+function closeModal(){
+    document.getElementById("modalBackdrop").classList.remove("show");
+}
+
+
+/* ============================================================
+   画面遷移
+============================================================ */
+
+const answerPages=[
+    "answer",
+    "confirm-answer",
+    "complete"
+];
+
+function showPage(page){
+
+    document.querySelectorAll(".page").forEach(el=>{
+        el.classList.add("hidden");
+    });
+
+    const target=document.getElementById("page-"+page);
+
+    if(target){
+        target.classList.remove("hidden");
+    }
+
+    const isAnswerPage=answerPages.includes(page);
+
+    /*
+     * 回答者画面では管理者ヘッダーを完全に非表示。
+     */
+    document.getElementById("adminHeader").style.display=
+        isAnswerPage ? "none" : "flex";
+
+    window.scrollTo({top:0,behavior:"smooth"});
+
+    if(!isAnswerPage){
+        document.querySelectorAll(".admin-nav button").forEach(btn=>{
+            btn.classList.toggle(
+                "active",
+                btn.dataset.page===page
+            );
+        });
+    }
+
+    if(page==="list"){
+        renderSurveyList();
+    }
+
+    if(page==="history"){
+        renderHistory();
+    }
+
+    if(page==="kintone"){
+        // 設定画面
+    }
+
+    if(page==="mail"){
+        // 設定画面
+    }
+}
+
+
+/* ============================================================
+   ステータス
+============================================================ */
+
+function statusClass(status){
+
+    if(status==="公開中") return "status-public";
+    if(status==="下書き") return "status-draft";
+    if(status==="停止") return "status-stop";
+    if(status==="終了") return "status-end";
+
+    return "status-draft";
+}
+
+function statusBadge(status){
+    return `<span class="status ${statusClass(status)}">${escapeHtml(status)}</span>`;
+}
+
+
+/* ============================================================
+   アンケート一覧
+============================================================ */
+
+function renderSurveyList(){
+
+    const keyword=document
+        .getElementById("searchInput")
+        .value
+        .trim()
+        .toLowerCase();
+
+    const filter=document.getElementById("statusFilter").value;
+    const sort=document.getElementById("sortSelect").value;
+
+    let list=surveys.filter(s=>{
+
+        const matchKeyword=
+            !keyword ||
+            s.title.toLowerCase().includes(keyword);
+
+        const matchStatus=
+            !filter || s.status===filter;
+
+        return matchKeyword && matchStatus;
+    });
+
+    list.sort((a,b)=>{
+
+        if(sort==="updatedDesc")
+            return b.updated.localeCompare(a.updated);
+
+        if(sort==="updatedAsc")
+            return a.updated.localeCompare(b.updated);
+
+        if(sort==="answersDesc")
+            return b.answers-a.answers;
+
+        if(sort==="answersAsc")
+            return a.answers-b.answers;
+
+        if(sort==="startDesc")
+            return b.start.localeCompare(a.start);
+
+        if(sort==="startAsc")
+            return a.start.localeCompare(b.start);
+
+        return 0;
+    });
+
+    const tbody=document.getElementById("surveyTable");
+
+    if(!list.length){
+        tbody.innerHTML=`
+            <tr>
+                <td colspan="6" class="empty">
+                    該当するアンケートはありません
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML=list.map(s=>{
+
+        /*
+         * 一覧には公開・停止・再開などの状態変更操作を
+         * 意図的に配置しない。
+         */
+
+        return `
+        <tr>
+
+            <td>
+                ${escapeHtml(s.created)}<br>
+                <span style="color:#64748b">
+                    更新 ${escapeHtml(s.updated)}
+                </span>
+            </td>
+
+            <td>
+                <strong>${escapeHtml(s.title)}</strong>
+            </td>
+
+            <td>
+                ${escapeHtml(s.start.replace("T"," "))}
+                ～<br>
+                ${escapeHtml(s.end.replace("T"," "))}
+            </td>
+
+            <td>
+                ${statusBadge(s.status)}
+            </td>
+
+            <td>
+                ${s.answers}
+            </td>
+
+            <td>
+                <div class="action-group">
+
+                    <button class="btn btn-small"
+                            onclick="editSurvey(${s.id})">
+                        確認・編集
+                    </button>
+
+                    <button class="btn btn-small"
+                            onclick="openAnalysis(${s.id})">
+                        集計
+                    </button>
+
+                    <button class="btn btn-small"
+                            onclick="openSend(${s.id})">
+                        送信
+                    </button>
+
+                    <button class="btn btn-small"
+                            onclick="duplicateSurvey(${s.id})">
+                        複製
+                    </button>
+
+                    <button class="btn btn-small"
+                            onclick="deleteSurvey(${s.id})">
+                        削除
+                    </button>
+
+                </div>
+            </td>
+
+        </tr>
+        `;
+    }).join("");
+}
+
+
+/* ============================================================
+   新規作成
+============================================================ */
+
+function newSurvey(){
+
+    editorSurvey={
+        id:null,
+        title:"",
+        description:"",
+        start:"",
+        end:"",
+        status:"下書き",
+        created:new Date().toISOString().slice(0,10),
+        updated:new Date().toISOString().slice(0,10),
+        answers:0,
+        numbering:"global",
+        groups:[
+            {
+                id:Date.now(),
+                title:"新しいグループ",
+                questions:[]
+            }
+        ]
+    };
+
+    editorOriginal=clone(editorSurvey);
+
+    document.getElementById("editorTitle").textContent=
+        "アンケート作成";
+
+    loadEditor();
+
+    showPage("editor");
+}
+
+
+/* ============================================================
+   編集
+============================================================ */
+
+function editSurvey(id){
+
+    const survey=surveys.find(s=>s.id===id);
+
+    if(!survey) return;
+
+    editorSurvey=clone(survey);
+    editorOriginal=clone(survey);
+
+    document.getElementById("editorTitle").textContent=
+        "アンケート作成・編集";
+
+    loadEditor();
+
+    showPage("editor");
+}
+
+function loadEditor(){
+
+    document.getElementById("surveyTitle").value=
+        editorSurvey.title;
+
+    document.getElementById("surveyDescription").value=
+        editorSurvey.description;
+
+    document.getElementById("surveyStart").value=
+        editorSurvey.start;
+
+    document.getElementById("surveyEnd").value=
+        editorSurvey.end;
+
+    document.querySelectorAll(
+        'input[name="numbering"]'
+    ).forEach(r=>{
+        r.checked=r.value===editorSurvey.numbering;
+    });
+
+    loadStateSelect();
+
+    renderGroups();
+
+    renumber();
+}
+
+
+/* ============================================================
+   状態プルダウン
+============================================================ */
+
+function loadStateSelect(){
+
+    const select=document.getElementById("stateSelect");
+
+    let options=[];
+
+    if(editorSurvey.status==="下書き"){
+        options=["下書き","公開"];
+    }
+    else if(editorSurvey.status==="公開中"){
+        options=["公開中","停止"];
+    }
+    else if(editorSurvey.status==="停止"){
+        options=["停止","再開"];
+    }
+    else if(editorSurvey.status==="終了"){
+        options=["終了"];
+    }
+
+    select.innerHTML=options.map(v=>{
+
+        const label=
+            v==="公開" ? "公開" :
+            v==="再開" ? "再開" :
+            v;
+
+        return `<option value="${escapeHtml(v)}">${label}</option>`;
+    }).join("");
+
+    select.value=editorSurvey.status;
+    select.disabled=editorSurvey.status==="終了";
+}
+
+function requestStateChange(newState){
+
+    const oldState=editorSurvey.status;
+
+    if(newState===oldState){
+        return;
+    }
+
+    let message="";
+
+    if(newState==="公開"){
+        message="このアンケートを公開しますか？";
+    }
+
+    if(newState==="停止"){
+        message="このアンケートを停止しますか？";
+    }
+
+    if(newState==="再開"){
+        message="このアンケートを再開しますか？";
+    }
+
+    openModal(
+        "状態変更の確認",
+        message,
+        ()=>{
+            if(newState==="公開"){
+                editorSurvey.status="公開中";
+            }
+            else if(newState==="再開"){
+                editorSurvey.status="公開中";
+            }
+            else{
+                editorSurvey.status=newState;
+            }
+
+            loadStateSelect();
+            toast("状態を変更しました");
+        }
+    );
+}
+
+
+/* ============================================================
+   保存
+============================================================ */
+
+function saveSurvey(){
+
+    editorSurvey.title=
+        document.getElementById("surveyTitle").value.trim();
+
+    editorSurvey.description=
+        document.getElementById("surveyDescription").value.trim();
+
+    editorSurvey.start=
+        document.getElementById("surveyStart").value;
+
+    editorSurvey.end=
+        document.getElementById("surveyEnd").value;
+
+    editorSurvey.numbering=
+        document.querySelector(
+            'input[name="numbering"]:checked'
+        ).value;
+
+    if(!editorSurvey.title){
+        toast("アンケートタイトルを入力してください");
+        return;
+    }
+
+    renumber();
+
+    editorSurvey.updated=
+        new Date().toISOString().slice(0,10);
+
+    /*
+     * 新規保存は必ず下書き。
+     * 既存編集は現在の状態を維持。
+     */
+    if(editorSurvey.id===null){
+        editorSurvey.status="下書き";
+        editorSurvey.id=
+            Math.max(0,...surveys.map(s=>s.id))+1;
+
+        surveys.unshift(clone(editorSurvey));
+    }
+    else{
+
+        const index=
+            surveys.findIndex(s=>s.id===editorSurvey.id);
+
+        if(index>=0){
+            surveys[index]=clone(editorSurvey);
+        }
+    }
+
+    toast("保存しました");
+
+    showPage("list");
+}
+
+
+/* ============================================================
+   キャンセル
+============================================================ */
+
+function cancelEdit(){
+
+    openModal(
+        "編集内容を破棄しますか？",
+        "保存していない変更内容は破棄されます。",
+        ()=>{
+            editorSurvey=clone(editorOriginal);
+            showPage("list");
+        }
+    );
+}
+
+
+/* ============================================================
+   グループ
+============================================================ */
+
+function renderGroups(){
+
+    const container=document.getElementById("groups");
+
+    container.innerHTML=editorSurvey.groups.map((g,gi)=>{
+
+        return `
+        <div class="group"
+             draggable="true"
+             data-group-id="${g.id}"
+             ondragstart="dragGroupStart(event,${g.id})"
+             ondragover="event.preventDefault()"
+             ondrop="dropGroup(event,${g.id})">
+
+            <div class="group-header">
+
+                <span class="drag-handle">☷</span>
+
+                <input
+                    class="group-title"
+                    value="${escapeHtml(g.title)}"
+                    onchange="updateGroupTitle(${g.id},this.value)"
+                >
+
+                <button class="btn btn-small"
+                        onclick="deleteGroup(${g.id})">
+                    グループ削除
+                </button>
+
+            </div>
+
+            <div class="question-list">
+
+                ${
+                    g.questions.length
+                    ? g.questions.map(q=>renderQuestion(g,q)).join("")
+                    : `
+                        <div class="empty"
+                             style="padding:20px">
+                            質問はありません
+                        </div>
+                    `
+                }
+
+                <!-- 質問追加はグループ末尾だけ -->
+                <button class="add-question"
+                        onclick="addQuestion(${g.id})">
+                    ＋ 質問を追加
+                </button>
+
+            </div>
+
+        </div>
+        `;
+    }).join("");
+}
+
+function addGroup(){
+
+    editorSurvey.groups.push({
+        id:Date.now()+Math.random(),
+        title:"新しいグループ",
+        questions:[]
+    });
+
+    renumber();
+    renderGroups();
+}
+
+function updateGroupTitle(id,title){
+
+    const g=editorSurvey.groups.find(x=>x.id===id);
+
+    if(g){
+        g.title=title;
+    }
+}
+
+function deleteGroup(id){
+
+    const group=
+        editorSurvey.groups.find(g=>g.id===id);
+
+    if(!group) return;
+
+    const hasQuestions=group.questions.length>0;
+
+    openModal(
+        "グループ削除",
+        hasQuestions
+            ? `このグループには質問が ${group.questions.length} 件あります。削除しますか？`
+            : "このグループを削除しますか？",
+        ()=>{
+            editorSurvey.groups=
+                editorSurvey.groups.filter(g=>g.id!==id);
+
+            renumber();
+            renderGroups();
+        }
+    );
+}
+
+
+/* ============================================================
+   グループドラッグ＆ドロップ
+============================================================ */
+
+let draggingGroupId=null;
+
+function dragGroupStart(event,id){
+    draggingGroupId=id;
+}
+
+function dropGroup(event,targetId){
+
+    if(draggingGroupId===targetId) return;
+
+    const from=
+        editorSurvey.groups.findIndex(
+            g=>g.id===draggingGroupId
+        );
+
+    const to=
+        editorSurvey.groups.findIndex(
+            g=>g.id===targetId
+        );
+
+    if(from<0 || to<0) return;
+
+    const [item]=editorSurvey.groups.splice(from,1);
+
+    editorSurvey.groups.splice(to,0,item);
+
+    draggingGroupId=null;
+
+    renumber();
+    renderGroups();
+}
+
+
+/* ============================================================
+   質問
+============================================================ */
+
+function renderQuestion(group,q){
+
+    const typeOptions=`
+        <option value="single" ${q.type==="single"?"selected":""}>
+            単一選択
+        </option>
+
+        <option value="multiple" ${q.type==="multiple"?"selected":""}>
+            複数選択
+        </option>
+
+        <option value="free" ${q.type==="free"?"selected":""}>
+            自由記述
+        </option>
+    `;
+
+    let optionsHtml="";
+
+    /*
+     * 自由記述は1種類のみ。
+     * 1行テキスト / 複数行テキストは存在しない。
+     */
+    if(q.type==="single" || q.type==="multiple"){
+
+        optionsHtml=`
+            <div class="question-options">
+
+                ${q.options.map((o,i)=>`
+                    <div class="option-row">
+                        <input
+                            type="text"
+                            value="${escapeHtml(o)}"
+                            onchange="updateOption(
+                                ${q.id},
+                                ${i},
+                                this.value
+                            )"
+                        >
+
+                        <button class="btn btn-small"
+                                onclick="deleteOption(
+                                    ${q.id},
+                                    ${i}
+                                )">
+                            削除
+                        </button>
+                    </div>
+                `).join("")}
+
+                <button class="btn btn-small add-option"
+                        onclick="addOption(${q.id})">
+                    ＋ 選択肢を追加
+                </button>
+
+            </div>
+        `;
+    }
+
+    return `
+    <div class="question"
+         draggable="true"
+         data-question-id="${q.id}"
+         data-group-id="${group.id}"
+         ondragstart="dragQuestionStart(event,${group.id},${q.id})"
+         ondragover="event.preventDefault()"
+         ondrop="dropQuestion(event,${group.id},${q.id})">
+
+        <div class="question-top">
+
+            <span class="drag-handle">☷</span>
+
+            <span class="question-number"
+                  id="number-${q.id}">
+                Q?
+            </span>
+
+            <input
+                class="question-text"
+                type="text"
+                value="${escapeHtml(q.text)}"
+                placeholder="質問文"
+                onchange="updateQuestionText(
+                    ${q.id},
+                    this.value
+                )"
+            >
+
+            <select
+                onchange="changeQuestionType(
+                    ${q.id},
+                    this.value
+                )">
+                ${typeOptions}
+            </select>
+
+            <button class="btn btn-small"
+                    onclick="deleteQuestion(
+                        ${q.id}
+                    )">
+                削除
+            </button>
+
+        </div>
+
+        ${optionsHtml}
+
+        <div class="question-bottom">
+
+            <label>
+                <input
+                    type="checkbox"
+                    ${q.required?"checked":""}
+                    onchange="toggleRequired(
+                        ${q.id},
+                        this.checked
+                    )"
+                >
+                必須
+            </label>
+
+            ${
+                q.type==="single"
+                ? `
+                <label>
+                    条件分岐：
+                    <select onchange="updateCondition(
+                        ${q.id},
+                        this.value
+                    )">
+                        <option value="">なし</option>
+                        ${editorSurvey.groups.flatMap(
+                            g=>g.questions
+                        )
+                        .filter(x=>x.id!==q.id)
+                        .map(x=>`
+                            <option
+                                value="${x.id}"
+                                ${String(q.condition)===String(x.id)
+                                    ?"selected":""}>
+                                ${getQuestionNumber(x.id)}
+                            </option>
+                        `).join("")}
+                    </select>
+                </label>
+                `
+                : ""
+            }
+
+        </div>
+
+    </div>
+    `;
+}
+
+
+/* ============================================================
+   質問操作
+============================================================ */
+
+function findQuestion(id){
+
+    for(const g of editorSurvey.groups){
+
+        const q=g.questions.find(q=>q.id===id);
+
+        if(q){
+            return {group:g,question:q};
+        }
+    }
+
+    return null;
+}
+
+function addQuestion(groupId){
+
+    const group=
+        editorSurvey.groups.find(g=>g.id===groupId);
+
+    if(!group) return;
+
+    group.questions.push({
+        id:Date.now()+Math.random(),
+        text:"",
+        type:"single",
+        required:false,
+        options:["選択肢1","選択肢2"],
+        condition:""
+    });
+
+    renumber();
+    renderGroups();
+}
+
+function deleteQuestion(id){
+
+    openModal(
+        "質問削除",
+        "この質問を削除しますか？",
+        ()=>{
+            for(const g of editorSurvey.groups){
+
+                g.questions=
+                    g.questions.filter(q=>q.id!==id);
+            }
+
+            renumber();
+            renderGroups();
+        }
+    );
+}
+
+function updateQuestionText(id,text){
+
+    const found=findQuestion(id);
+
+    if(found){
+        found.question.text=text;
+    }
+}
+
+function changeQuestionType(id,type){
+
+    const found=findQuestion(id);
+
+    if(!found) return;
+
+    found.question.type=type;
+
+    /*
+     * 回答形式は3種類だけ。
+     * freeに変更した場合、選択肢は持たせない。
+     */
+    if(type==="free"){
+        found.question.options=[];
+        found.question.condition="";
+    }
+
+    if(type==="single" || type==="multiple"){
+
+        if(!found.question.options.length){
+            found.question.options=[
+                "選択肢1",
+                "選択肢2"
+            ];
+        }
+    }
+
+    renderGroups();
+    renumber();
+}
+
+function toggleRequired(id,value){
+
+    const found=findQuestion(id);
+
+    if(found){
+        found.question.required=value;
+    }
+}
+
+function addOption(questionId){
+
+    const found=findQuestion(questionId);
+
+    if(!found) return;
+
+    found.question.options.push(
+        "新しい選択肢"
+    );
+
+    renderGroups();
+}
+
+function updateOption(questionId,index,value){
+
+    const found=findQuestion(questionId);
+
+    if(found){
+        found.question.options[index]=value;
+    }
+}
+
+function deleteOption(questionId,index){
+
+    const found=findQuestion(questionId);
+
+    if(!found) return;
+
+    if(found.question.options.length<=1){
+        toast("選択肢は1つ以上必要です");
+        return;
+    }
+
+    found.question.options.splice(index,1);
+
+    renderGroups();
+}
+
+function updateCondition(id,value){
+
+    const found=findQuestion(id);
+
+    if(found){
+        found.question.condition=value;
+    }
+}
+
+
+/* ============================================================
+   質問ドラッグ＆ドロップ
+============================================================ */
+
+let draggingQuestion=null;
+
+function dragQuestionStart(event,groupId,questionId){
+
+    draggingQuestion={
+        groupId,
+        questionId
+    };
+}
+
+function dropQuestion(event,targetGroupId,targetQuestionId){
+
+    if(!draggingQuestion) return;
+
+    const sourceGroup=
+        editorSurvey.groups.find(
+            g=>g.id===draggingQuestion.groupId
+        );
+
+    const targetGroup=
+        editorSurvey.groups.find(
+            g=>g.id===targetGroupId
+        );
+
+    if(!sourceGroup || !targetGroup){
+        return;
+    }
+
+    const sourceIndex=
+        sourceGroup.questions.findIndex(
+            q=>q.id===draggingQuestion.questionId
+        );
+
+    if(sourceIndex<0) return;
+
+    const [question]=
+        sourceGroup.questions.splice(sourceIndex,1);
+
+    let targetIndex=
+        targetGroup.questions.findIndex(
+            q=>q.id===targetQuestionId
+        );
+
+    if(targetIndex<0){
+        targetIndex=targetGroup.questions.length;
+    }
+
+    /*
+     * 同じグループ内で下方向へ移動する場合の補正。
+     */
+    if(sourceGroup===targetGroup &&
+       sourceIndex<targetIndex){
+        targetIndex--;
+    }
+
+    targetGroup.questions.splice(
+        targetIndex,
+        0,
+        question
+    );
+
+    draggingQuestion=null;
+
+    renumber();
+    renderGroups();
+}
+
+
+/* ============================================================
+   自動採番
+============================================================ */
+
+function renumber(){
+
+    if(!editorSurvey) return;
+
+    let globalNo=1;
+
+    editorSurvey.groups.forEach((group,gi)=>{
+
+        group.questions.forEach((q,qi)=>{
+
+            if(editorSurvey.numbering==="global"){
+
+                q.displayNumber=
+                    "Q"+globalNo;
+
+                globalNo++;
+            }
+            else{
+
+                q.displayNumber=
+                    "Q"+(gi+1)+"-"+(qi+1);
+            }
+        });
+    });
+
+    document
+        .querySelectorAll(".question-number")
+        .forEach(el=>{
+
+            const id=parseFloat(
+                el.id.replace("number-","")
+            );
+
+            const found=findQuestion(id);
+
+            if(found){
+                el.textContent=
+                    found.question.displayNumber;
+            }
+        });
+}
+
+function getQuestionNumber(id){
+
+    const found=findQuestion(id);
+
+    return found
+        ? found.question.displayNumber
+        : "Q?";
+}
+
+
+/* ============================================================
+   プレビュー
+============================================================ */
+
+function openPreview(){
+
+    editorSurvey.title=
+        document.getElementById("surveyTitle").value;
+
+    editorSurvey.description=
+        document.getElementById("surveyDescription").value;
+
+    editorSurvey.numbering=
+        document.querySelector(
+            'input[name="numbering"]:checked'
+        ).value;
+
+    renumber();
+
+    document.getElementById("previewTitle").textContent=
+        editorSurvey.title || "アンケート";
+
+    document.getElementById("previewDescription").textContent=
+        editorSurvey.description;
+
+    const box=
+        document.getElementById("previewQuestions");
+
+    box.innerHTML=
+        editorSurvey.groups.map(g=>{
+
+            return `
+                <div style="margin-top:30px">
+                    <h3>${escapeHtml(g.title)}</h3>
+
+                    ${g.questions.map(q=>{
+
+                        let input="";
+
+                        if(q.type==="single"){
+                            input=q.options.map(o=>`
+                                <label class="choice">
+                                    <input type="radio"
+                                           name="preview-${q.id}">
+                                    ${escapeHtml(o)}
+                                </label>
+                            `).join("");
+                        }
+
+                        else if(q.type==="multiple"){
+                            input=q.options.map(o=>`
+                                <label class="choice">
+                                    <input type="checkbox">
+                                    ${escapeHtml(o)}
+                                </label>
+                            `).join("");
+                        }
+
+                        else{
+                            input=`
+                                <textarea
+                                    placeholder="回答を入力してください"
+                                    style="min-height:110px">
+                                </textarea>
+                            `;
+                        }
+
+                        return `
+                            <div class="answer-question">
+                                <h3>
+                                    ${escapeHtml(q.displayNumber)}
+                                    ${escapeHtml(q.text)}
+                                    ${q.required
+                                        ?'<span class="required">必須</span>'
+                                        :''}
+                                </h3>
+
+                                ${input}
+                            </div>
+                        `;
+
+                    }).join("")}
+
+                </div>
+            `;
+
+        }).join("");
+
+    setPreviewMode("pc");
+
+    showPage("preview");
+}
+
+function setPreviewMode(mode){
 
-以下を設定できる。
+    previewMode=mode;
 
-・組織名
-・氏名
-・メールアドレス
-・部署名
-・電話番号
-・住所
+    const frame=
+        document.getElementById("previewFrame");
 
+    frame.classList.toggle(
+        "preview-mobile",
+        mode==="mobile"
+    );
+}
+
+
+/* ============================================================
+   複製
+============================================================ */
+
+function duplicateSurvey(id){
+
+    const source=
+        surveys.find(s=>s.id===id);
+
+    if(!source) return;
+
+    openModal(
+        "アンケート複製",
+        `「${escapeHtml(source.title)}」を複製しますか？<br><br>
+         複製後は下書きとして一覧に追加されます。`,
+        ()=>{
 
-29.5 住所マッピング
+            const copy=clone(source);
 
-住所は複数フィールドを指定できる。
+            copy.id=
+                Math.max(0,...surveys.map(s=>s.id))+1;
 
-プルダウンではなくチェックボックス形式とする。
+            copy.title=
+                source.title+"（複製）";
 
-例：
+            copy.status="下書き";
+            copy.answers=0;
+            copy.created=
+                new Date().toISOString().slice(0,10);
 
-住所マッピング
+            copy.updated=copy.created;
 
-☐ 都道府県
-☐ 市区町村
-☐ 番地
-☐ 建物名
-☐ 郵便番号
+            /*
+             * 回答データ・送信履歴は複製しない。
+             */
+            surveys.unshift(copy);
 
-複数選択したフィールドを組み合わせて住所として扱う。
+            toast("アンケートを複製しました");
 
+            renderSurveyList();
+        }
+    );
+}
 
-29.6 同期
 
-モックでは以下を手動操作として表現する。
+/* ============================================================
+   削除
+============================================================ */
 
-・項目一覧を再取得
-・顧客情報を同期
+function deleteSurvey(id){
 
+    const survey=
+        surveys.find(s=>s.id===id);
 
-29.7 回答受信時
+    if(!survey) return;
 
-回答者のメールアドレス等を利用して、
-既存顧客との紐付けを確認する。
+    openModal(
+        "アンケート削除",
+        `「${escapeHtml(survey.title)}」を削除しますか？`,
+        ()=>{
 
-既存顧客：
+            surveys=
+                surveys.filter(s=>s.id!==id);
 
-回答と顧客情報を紐付ける。
+            toast("削除しました");
 
-未登録：
+            renderSurveyList();
+        }
+    );
+}
 
-未登録回答者として管理する。
 
+/* ============================================================
+   集計
+============================================================ */
 
-============================================================
-30. レスポンシブ対応
-============================================================
+function openAnalysis(id){
 
-30.1 管理画面
+    const survey=
+        surveys.find(s=>s.id===id);
 
-PC利用を主とする。
+    if(!survey) return;
 
-スマートフォン・タブレットでは、
+    document.getElementById("analysisSurveyName").textContent=
+        "対象アンケート：" + survey.title;
 
-・一覧テーブルの横スクロール
-・ボタンのタップ操作
-・カード表示
+    const allQuestions=
+        survey.groups.flatMap(g=>g.questions);
 
-等で操作できる。
+    document.getElementById("questionFilters").innerHTML=
+        allQuestions.map(q=>`
+            <label style="display:block;margin:8px 0">
+                <input type="checkbox"
+                       class="question-filter"
+                       checked>
+                ${escapeHtml(q.displayNumber || "Q?")}
+                ${escapeHtml(q.text)}
+            </label>
+        `).join("");
 
+    showPage("analysis");
+}
 
-30.2 回答者画面
+function checkQuestions(value){
 
-スマートフォン利用を特に重視する。
+    document
+        .querySelectorAll(".question-filter")
+        .forEach(x=>x.checked=value);
+}
 
-・画面幅に合わせたレイアウト
-・大きめの入力欄
-・タップしやすい選択肢
-・次へ / 戻るの明確化
-・回答確認画面の最適化
+function exportMock(type){
 
+    toast(type+"出力操作を実行しました（モック）");
+}
 
-============================================================
-31. 確認ダイアログ
-============================================================
 
-以下では確認ダイアログを表示する。
+/* ============================================================
+   顧客送信
+============================================================ */
 
-・アンケート削除
-・アンケート複製
-・アンケート公開
-・アンケート停止
-・アンケート再開
-・メール一括送信
-・送信済み顧客への再送
-・作成内容の破棄
-・回答送信
-・グループ削除
-・質問削除
+let currentSendSurveyId=null;
 
-確認ダイアログでは、
+function openSend(id){
 
-・キャンセル
-・実行
+    const survey=
+        surveys.find(s=>s.id===id);
 
-を明確に表示する。
+    if(!survey) return;
 
+    currentSendSurveyId=id;
 
-============================================================
-32. モックで確認する主要操作
-============================================================
+    document.getElementById("sendSurveyName").textContent=
+        "対象アンケート：" + survey.title;
 
-32.1 アンケート一覧
+    renderCustomers();
 
-・検索
-・Enter検索
-・ステータス絞り込み
-・ソート
-・確認・編集
-・集計
-・送信
-・複製
-・削除
+    showPage("send");
+}
 
+function renderCustomers(){
 
-32.2 アンケート作成・編集
+    const keyword=
+        document.getElementById("customerSearch")
+        .value
+        .trim()
+        .toLowerCase();
 
-・タイトル入力
-・説明入力
-・期間入力
-・採番方式変更
-・保存して一覧へ
-・状態プルダウン
-・公開
-・停止
-・再開
-・状態表示更新
-・質問追加
-・質問削除
-・質問編集
-・質問形式変更
-・選択肢追加
-・選択肢削除
-・必須設定
-・質問並び替え
-・質問グループ移動
-・質問番号自動更新
-・グループ追加
-・グループ削除
-・グループ編集
-・グループ並び替え
-・条件分岐
-・プレビュー
-・PC / スマートフォン表示切替
-・キャンセル
+    const status=
+        document.getElementById("customerStatus").value;
 
+    const list=customers.filter(c=>{
 
-32.3 回答者
+        const matchKeyword=
+            !keyword ||
+            c.name.toLowerCase().includes(keyword) ||
+            c.org.toLowerCase().includes(keyword) ||
+            c.email.toLowerCase().includes(keyword);
 
-・アンケート表示
-・グループ表示
-・質問表示
-・質問番号表示
-・単一選択
-・複数選択
-・自由記述
-・必須チェック
-・次へ
-・戻る
-・条件分岐
-・回答確認
-・回答修正
-・回答送信
-・回答完了
+        const matchStatus=
+            !status || c.status===status;
 
-※回答者画面から管理者画面へ戻る操作は存在しない。
+        return matchKeyword && matchStatus;
+    });
 
+    document.getElementById("customerTable").innerHTML=
+        list.map(c=>`
+            <tr>
 
-============================================================
-33. モック開発前提
-============================================================
+                <td>
+                    <input type="checkbox"
+                           class="customer-check"
+                           value="${c.id}">
+                </td>
 
-本段階では実際の、
+                <td>${escapeHtml(c.org)}</td>
+                <td>${escapeHtml(c.name)}</td>
+                <td>${escapeHtml(c.email)}</td>
+                <td>${escapeHtml(c.phone)}</td>
+                <td>${escapeHtml(c.sent || "-")}</td>
+                <td>${c.count}</td>
+                <td>${escapeHtml(c.status)}</td>
 
-・データベース
-・kintone API
-・メールサーバ
-・メール送信処理
-・認証処理
+                <td>
+                    ${
+                        c.kintone
+                        ? '<span class="status status-public">✓ 登録完了</span>'
+                        : '<span class="status status-draft">未登録</span>'
+                    }
+                </td>
 
-を実装しない。
+            </tr>
+        `).join("");
+}
 
-画面遷移、入力、選択、状態変化等を確認できる
-インタラクティブなモックを作成する。
+function selectAllCustomers(value){
 
+    document
+        .querySelectorAll(".customer-check")
+        .forEach(c=>c.checked=value);
+}
 
-33.1 サンプルデータ
+function confirmSend(){
 
-JavaScript等でサンプルデータを保持する。
+    const ids=
+        [...document.querySelectorAll(
+            ".customer-check:checked"
+        )].map(x=>Number(x.value));
 
-ユーザーによる操作結果を画面へ反映する。
+    if(!ids.length){
+        toast("送信対象を選択してください");
+        return;
+    }
 
+    const alreadySent=
+        customers.some(
+            c=>ids.includes(c.id) &&
+               c.count>0
+        );
 
-33.2 状態変化
+    if(alreadySent){
 
-以下をモック上で再現する。
+        openModal(
+            "再送確認",
+            "既に送信済みの宛先が含まれています。再送しますか？",
+            ()=>executeSend(ids)
+        );
 
-・下書き
-・公開中
-・停止
-・終了
-・kintone接続済み
-・項目取得済み
-・顧客同期済み
-・メールサーバ接続済み
-・メール送信成功
-・メール送信失敗
-・kintone登録済み
-・kintone未登録
+    }else{
 
+        openModal(
+            "一括送信確認",
+            `${ids.length}件の顧客へメールを送信しますか？`,
+            ()=>executeSend(ids)
+        );
+    }
+}
 
-33.3 質問番号
+function executeSend(ids){
 
-現在のデータ構造をもとに質問番号を毎回再計算する。
+    const now=
+        new Date().toLocaleString("ja-JP");
 
-採番方式：
+    ids.forEach(id=>{
 
-アンケート全体で通番：
+        const c=customers.find(x=>x.id===id);
 
-Q1
-Q2
-Q3
-Q4
+        if(!c) return;
 
-グループ毎に採番：
+        c.sent=now;
+        c.count++;
+        c.status="送信済み / 未回答";
+    });
 
-グループ1
-Q1-1
-Q1-2
+    histories.unshift({
+        date:now,
+        type:"通常送信",
+        count:ids.length,
+        subject:
+            document.getElementById("mailSubject").value,
+        user:"管理者"
+    });
 
-グループ2
-Q2-1
-Q2-2
+    toast("メール送信成功（モック）");
 
+    renderCustomers();
+}
 
-============================================================
-34. 1ファイル実装条件
-============================================================
 
-実装対象ファイル：
+/* ============================================================
+   送信履歴
+============================================================ */
 
-index.php
+function renderHistory(){
 
-HTML、CSS、JavaScriptはindex.php内に記述する。
+    const tbody=
+        document.getElementById("historyTable");
 
-Apache 2.4 + PHP 8.5 の環境で、
-index.php 1ファイルだけを配置してブラウザから
-モックを確認できる構成とする。
+    if(!histories.length){
 
-※本項における「実装」は本番システムの実装ではなく、
-  画面・操作を確認するためのモック実装を意味する。
+        tbody.innerHTML=`
+            <tr>
+                <td colspan="6" class="empty">
+                    送信履歴はありません
+                </td>
+            </tr>
+        `;
 
+        return;
+    }
 
-34.1 実装する操作
+    tbody.innerHTML=
+        histories.map((h,i)=>`
+            <tr>
 
-・画面遷移
-・入力
-・選択
-・検索
-・ソート
-・追加
-・削除
-・複製
-・状態変更
-・モーダル
-・確認ダイアログ
-・ドラッグ＆ドロップ
-・質問移動
-・グループ移動
-・自動採番
-・プレビュー
-・回答入力
-・回答確認
-・回答送信
-・集計表示
-・CSV出力操作
-・PDF出力操作
-・kintone設定変更
-・メールサーバ設定変更
+                <td>${escapeHtml(h.date)}</td>
+                <td>${escapeHtml(h.type)}</td>
+                <td>${h.count}</td>
+                <td>${escapeHtml(h.subject)}</td>
+                <td>${escapeHtml(h.user)}</td>
 
+                <td>
+                    <button class="btn btn-small"
+                            onclick="showHistoryDetail(${i})">
+                        内容確認
+                    </button>
+                </td>
 
-34.2 実装対象画面
+            </tr>
+        `).join("");
+}
 
-1. アンケート一覧
-2. アンケート作成・編集
-3. プレビュー
-4. 顧客選択・メール送信
-5. 送信履歴
-6. 回答集計・分析
-7. kintone連携設定
-8. メールサーバ設定
-9. 回答者向けアンケート回答
-10. 回答確認
-11. 回答完了
+function showHistoryDetail(index){
 
+    const h=histories[index];
 
-============================================================
-35. 最終UI仕様
-============================================================
+    if(!h) return;
 
-35.1 管理者：アンケート作成・編集
+    openModal(
+        "送信内容",
+        `
+            <strong>件名</strong><br>
+            ${escapeHtml(h.subject)}
+            <br><br>
 
-画面最上部：
+            <strong>本文</strong><br>
+            ${escapeHtml(
+                document.getElementById("mailBody").value
+            ).replaceAll("\n","<br>")}
+            <br><br>
 
-------------------------------------------------------------
-アンケート作成・編集
+            <strong>個別アンケートURL</strong><br>
+            https://example.test/survey/abc123
+        `,
+        ()=>{}
+    );
+}
 
-[キャンセル]    [保存して一覧へ]    状態：[現在の状態 ▼]
-------------------------------------------------------------
 
-その下：
+/* ============================================================
+   kintone
+============================================================ */
 
-------------------------------------------------------------
-基本情報
+function getKintoneFields(){
 
-アンケートタイトル
-[                              ]
+    const fields=[
+        "会社名",
+        "氏名",
+        "メールアドレス",
+        "部署名",
+        "電話番号",
+        "都道府県",
+        "市区町村",
+        "番地",
+        "建物名",
+        "郵便番号"
+    ];
 
-アンケート説明
-[                              ]
+    document.getElementById("kinFields").innerHTML=`
 
-開始日時
-[                              ]
+        <h3>項目一覧</h3>
 
-終了日時
-[                              ]
+        <div class="mapping-list">
 
-質問番号の採番方式
+            ${fields.map(f=>`
+                <div class="mapping-item">
+                    ${escapeHtml(f)}
+                </div>
+            `).join("")}
 
-○ アンケート全体で通番
-○ グループ毎に採番
-------------------------------------------------------------
+        </div>
 
+        <hr style="border:0;border-top:1px solid #e5e7eb;margin:25px 0">
 
-35.2 保存操作
+        <h3>フィールドマッピング</h3>
 
-保存操作は「保存して一覧へ」のみとする。
+        <div class="setting-grid">
 
-「下書き保存」ボタンは設けない。
+            <div>
+                <strong>組織名</strong>
+                <select style="width:100%;margin-top:6px">
+                    <option>会社名</option>
+                </select>
+            </div>
 
-「保存して一覧へ」を押下すると、
+            <div>
+                <strong>氏名</strong>
+                <select style="width:100%;margin-top:6px">
+                    <option>氏名</option>
+                </select>
+            </div>
 
-・入力内容を保存
-・新規作成の場合は下書きとして保存
-・既存アンケートの場合は現在の状態を維持
-・アンケート一覧へ遷移
+            <div>
+                <strong>メールアドレス</strong>
+                <select style="width:100%;margin-top:6px">
+                    <option>メールアドレス</option>
+                </select>
+            </div>
 
-する。
+            <div>
+                <strong>部署名</strong>
+                <select style="width:100%;margin-top:6px">
+                    <option>部署名</option>
+                </select>
+            </div>
 
+            <div>
+                <strong>電話番号</strong>
+                <select style="width:100%;margin-top:6px">
+                    <option>電話番号</option>
+                </select>
+            </div>
 
-35.3 状態操作
+        </div>
 
-状態プルダウンは、
+        <br>
 
-・基本情報より上
-・保存ボタンとは独立
-・単一選択
-・一覧画面には配置しない
-・状態変更時に確認ダイアログを表示
-・変更後は即時反映
+        <h3>住所マッピング</h3>
 
-とする。
+        <div class="mapping-list">
 
+            <label class="mapping-item">
+                <input type="checkbox" checked>
+                都道府県
+            </label>
 
-35.4 キャンセル
+            <label class="mapping-item">
+                <input type="checkbox" checked>
+                市区町村
+            </label>
 
-「キャンセル」は状態操作や保存操作とは独立した操作とする。
+            <label class="mapping-item">
+                <input type="checkbox">
+                番地
+            </label>
 
-押下時には編集内容を破棄する確認ダイアログを表示する。
+            <label class="mapping-item">
+                <input type="checkbox">
+                建物名
+            </label>
 
-確認後、前の画面へ戻る。
+            <label class="mapping-item">
+                <input type="checkbox">
+                郵便番号
+            </label>
 
+        </div>
+    `;
 
-35.5 回答者画面
+    const connection=
+        document.getElementById("kintoneConnection");
 
-回答者画面は管理者画面から独立した画面とする。
+    connection.className="connection ok";
+    connection.textContent=
+        "✓ kintone接続済み・項目取得済み";
 
-画面上部に管理者用メニューを表示しない。
+    toast("項目一覧を取得しました（モック）");
+}
 
-また、
+function syncCustomers(){
 
-「管理者画面へ戻る」
-「一覧へ戻る」
-「管理画面へ」
+    const connection=
+        document.getElementById("kintoneConnection");
 
-等の管理者向けボタンは配置しない。
+    connection.className="connection ok";
+    connection.textContent=
+        "✓ 顧客情報同期済み";
 
-回答完了後も管理者画面へ遷移する導線を設けない。
+    toast("顧客情報を同期しました（モック）");
+}
 
 
-35.6 kintone
+/* ============================================================
+   メール設定
+============================================================ */
 
-接続設定：
+function testMail(success){
 
-・サブドメイン
-・顧客管理アプリID
-・ログイン名
-・パスワード
-・SSL検証設定
+    const box=
+        document.getElementById("mailConnection");
 
-メールアドレス入力欄は設けない。
+    if(success){
 
-住所マッピングは複数選択可能なチェックボックスとする。
+        box.className="connection ok";
+        box.textContent=
+            "✓ 接続確認済み";
 
+        toast("SMTP接続成功（モック）");
 
-35.7 自由記述
+    }else{
 
-自由記述は回答形式として1種類のみとする。
+        box.className="connection ok";
+        box.textContent=
+            "✓ テストメール送信成功（モック）";
 
-以下のような別々の回答形式は設けない。
+        toast("テストメール送信成功（モック）");
+    }
+}
 
-・1行テキスト
-・複数行テキスト
 
-モック上でも回答形式の選択肢として
-「1行テキスト」「複数行テキスト」を個別に表示しない。
+/* ============================================================
+   回答者フロー
+============================================================ */
 
-質問形式の選択肢は、
+function openAnswerSurvey(id){
 
-・単一選択
-・複数選択
-・自由記述
+    const survey=
+        surveys.find(s=>s.id===id);
 
-の3種類を基本とする。
+    if(!survey) return;
 
+    answerSurvey=clone(survey);
+    answerValues={};
 
-============================================================
-36. 画面・役割の最終整理
-============================================================
+    document.getElementById("answerTitle").textContent=
+        answerSurvey.title;
 
-【管理者】
+    document.getElementById("answerDescription").textContent=
+        answerSurvey.description;
 
-アンケート一覧
-↓
-アンケート作成・編集
-↓
-プレビュー
+    renderAnswerQuestions();
 
-または、
+    showPage("answer");
+}
 
-アンケート一覧
-↓
-集計
+function renderAnswerQuestions(){
 
-または、
+    const container=
+        document.getElementById("answerQuestions");
 
-アンケート一覧
-↓
-送信
-↓
-送信履歴
+    let html="";
 
+    answerSurvey.groups.forEach(group=>{
 
-【回答者】
+        html+=`
+            <h2 style="font-size:19px;margin-top:25px">
+                ${escapeHtml(group.title)}
+            </h2>
+        `;
 
-個別URL / 公開URL
-↓
-アンケート回答
-↓
-回答確認
-↓
-回答完了
+        group.questions.forEach(q=>{
 
+            /*
+             * 条件分岐
+             * モックでは指定された質問の回答内容を確認して表示制御。
+             */
+            let visible=true;
 
-管理者と回答者の画面フローは分離する。
+            if(q.condition){
 
-回答者フローから管理者フローへ遷移しない。
+                visible=
+                    Object.values(answerValues)
+                        .includes(q.condition);
+            }
 
+            if(!visible) return;
 
-============================================================
-37. 本要件における重要な禁止事項
-============================================================
+            let input="";
 
-以下をモック上で実装しない。
+            if(q.type==="single"){
 
-・回答者画面から管理者画面へ戻るボタン
-・回答者画面への管理者ナビゲーション表示
-・一覧画面上の公開ボタン
-・一覧画面上の停止ボタン
-・一覧画面上の再開ボタン
-・一覧画面上の下書き変更ボタン
-・状態の複数選択UI
-・kintoneログイン用メールアドレス入力欄
-・質問途中への「質問を追加」ボタン
-・グループ途中への「グループを追加」ボタン
-・質問番号の手動編集UI
-・「下書き保存」ボタン
-・複数の保存ボタン
-・「1行テキスト」「複数行テキスト」を別々の回答形式として
-  選択させるUI
+                input=q.options.map((o,i)=>`
+                    <label class="choice">
 
+                        <input
+                            type="radio"
+                            name="answer-${q.id}"
+                            value="${i}"
+                            onchange="setAnswer(
+                                ${q.id},
+                                '${i}'
+                            )"
+                        >
 
-============================================================
-38. 本要件における重要な必須事項
-============================================================
+                        ${escapeHtml(o)}
 
-以下は必ずモックで確認できるものとする。
+                    </label>
+                `).join("");
+            }
 
+            else if(q.type==="multiple"){
 
-【アンケート作成・編集】
+                input=q.options.map((o,i)=>`
+                    <label class="choice">
 
-・基本情報入力欄
-・基本情報より上のキャンセル
-・基本情報より上の保存して一覧へ
-・基本情報より上の状態プルダウン
-・状態の単一選択
-・公開
-・停止
-・再開
-・確認ダイアログ
-・状態即時反映
-・グループ追加
-・グループ削除
-・グループ編集
-・グループ並び替え
-・質問追加
-・質問削除
-・質問編集
-・質問形式変更
-・単一選択
-・複数選択
-・自由記述
-・選択肢追加 / 削除
-・必須設定
-・質問並び替え
-・質問のグループ間移動
-・質問番号自動更新
-・採番方式切替
-・条件分岐
-・プレビュー
+                        <input
+                            type="checkbox"
+                            value="${i}"
+                            onchange="setMultipleAnswer(
+                                ${q.id},
+                                this
+                            )"
+                        >
 
+                        ${escapeHtml(o)}
 
-【回答者】
+                    </label>
+                `).join("");
+            }
 
-・アンケート回答
-・必須チェック
-・条件分岐
-・回答確認
-・回答修正
-・回答送信
-・回答完了
+            else{
 
-※回答者画面から管理者画面へ戻るボタンは設けない。
+                /*
+                 * 自由記述は1種類。
+                 * textareaを使っているが、
+                 * 回答形式自体は「自由記述」。
+                 */
+                input=`
+                    <textarea
+                        placeholder="回答を入力してください"
+                        oninput="setAnswer(
+                            ${q.id},
+                            this.value
+                        )"
+                    ></textarea>
+                `;
+            }
 
+            html+=`
+                <div
+                    class="answer-question"
+                    data-answer-question="${q.id}"
+                >
 
-【kintone】
+                    <h3>
+                        ${escapeHtml(q.displayNumber)}
+                        ${escapeHtml(q.text)}
 
-・サブドメイン
-・顧客管理アプリID
-・ログイン名
-・パスワード
-・SSL検証
-・項目取得
-・フィールドマッピング
-・住所複数選択
-・顧客同期
+                        ${
+                            q.required
+                            ? '<span class="required">必須</span>'
+                            : ''
+                        }
+                    </h3>
 
+                    ${input}
 
-============================================================
-39. 最終確認
-============================================================
+                </div>
+            `;
+        });
+    });
 
-本要件定義を基準としてindex.phpを作成する。
+    container.innerHTML=html;
+}
 
-index.phpは、
+function setAnswer(id,value){
 
-・HTML
-・CSS
-・JavaScript
+    answerValues[id]=value;
 
-を1ファイルにまとめた動作確認用モックとする。
+    renderAnswerQuestions();
+}
 
-Apache 2.4 + PHP 8.5 の環境で動作確認できるものとする。
+function setMultipleAnswer(id,element){
 
-本番用のDB、API、認証、メール送信等は実装しない。
+    if(!Array.isArray(answerValues[id])){
+        answerValues[id]=[];
+    }
 
-目的は、実際の画面操作を行いながら、
+    const value=element.value;
 
-・画面構成
-・画面遷移
-・状態変更
-・入力内容
-・質問構成
-・グループ構成
-・質問番号
-・条件分岐
-・プレビュー
-・回答フロー
-・集計
-・顧客送信
-・kintone設定
-・メール設定
+    if(element.checked){
 
-を確認できることとする。
+        if(!answerValues[id].includes(value)){
+            answerValues[id].push(value);
+        }
 
+    }else{
 
-特に、
+        answerValues[id]=
+            answerValues[id].filter(x=>x!==value);
+    }
+}
 
-「管理者画面」
-と
-「回答者画面」
 
-を明確に分離し、回答者画面から管理者画面へ戻る導線を
-一切設けないことを最終仕様とする。
+/* ============================================================
+   必須チェック
+============================================================ */
 
+function validateAnswer(){
 
-また、アンケート作成・編集画面では、
+    const missing=[];
 
-[キャンセル]    [保存して一覧へ]    状態：[現在の状態 ▼]
+    answerSurvey.groups.forEach(group=>{
 
-を基本情報入力欄より上に配置し、
+        group.questions.forEach(q=>{
 
-・保存して一覧へ
-  ＝入力内容を保存して一覧画面へ戻る操作
+            if(!q.required) return;
 
-・状態プルダウン
-  ＝アンケートの公開状態を変更する操作
+            const value=answerValues[q.id];
 
-・キャンセル
-  ＝編集内容を破棄して前の画面へ戻る操作
+            const empty=
+                value===undefined ||
+                value===null ||
+                value==="" ||
+                (Array.isArray(value) && value.length===0);
 
-として明確に役割を分離する。
+            if(empty){
+                missing.push(q.displayNumber);
+            }
+        });
+    });
 
+    if(missing.length){
 
-「下書き保存」は設けない。
+        toast(
+            "未回答の必須項目があります：" +
+            missing.join("、")
+        );
 
-保存操作は「保存して一覧へ」に統一する。
+        return;
+    }
 
-新規アンケートを保存する場合は下書きとして保存する。
+    renderAnswerConfirmation();
 
-既存アンケートを編集する場合は、現在の状態を維持して保存する。
+    showPage("confirm-answer");
+}
 
 
-状態プルダウンは単一選択のプルダウンとし、
-状態変更時には確認ダイアログを表示する。
+/* ============================================================
+   回答確認
+============================================================ */
 
+function renderAnswerConfirmation(){
 
-また、回答形式については、
+    const box=
+        document.getElementById("answerConfirmBody");
 
-・単一選択
-・複数選択
-・自由記述
+    box.innerHTML=
+        answerSurvey.groups.map(g=>{
 
-の3種類を基本とし、
+            return `
+                <div style="margin-bottom:25px">
 
-「1行テキスト」
-「複数行テキスト」
+                    <h3>${escapeHtml(g.title)}</h3>
 
-を別々の回答形式として扱わない。
+                    ${g.questions.map(q=>{
 
+                        const value=
+                            answerValues[q.id];
 
-自由記述は1種類の回答形式として定義し、
-実装時に「1行」「複数行」を別の選択肢として
-追加してはならない。
+                        let answer="未回答";
 
+                        if(Array.isArray(value)){
 
-本要件を基準として、index.phpの1ファイルによる
-インタラクティブなモックを作成する。
+                            answer=
+                                value.map(i=>
+                                    q.options[Number(i)]
+                                ).join("、");
+                        }
+                        else if(
+                            value!==undefined &&
+                            value!==""
+                        ){
 
+                            if(
+                                q.type==="single" &&
+                                q.options[Number(value)]
+                            ){
+                                answer=
+                                    q.options[Number(value)];
+                            }
+                            else{
+                                answer=value;
+                            }
+                        }
 
-============================================================
-以上
-============================================================
+                        return `
+                            <div class="card"
+                                 style="padding:13px;margin-top:8px">
+
+                                <strong>
+                                    ${escapeHtml(q.displayNumber)}
+                                    ${escapeHtml(q.text)}
+                                </strong>
+
+                                <div style="margin-top:7px">
+                                    ${escapeHtml(answer)}
+                                </div>
+
+                            </div>
+                        `;
+
+                    }).join("")}
+
+                </div>
+            `;
+
+        }).join("");
+}
+
+function confirmAnswerSend(){
+
+    openModal(
+        "回答送信",
+        "回答を送信します。よろしいですか？",
+        ()=>{
+
+            /*
+             * 実際の送信は行わない。
+             */
+            showPage("complete");
+        }
+    );
+}
+
+
+/* ============================================================
+   デモ用：回答者URLからの入口
+============================================================ */
+
+/*
+ * 実際の個別URL処理ではなく、モック確認用。
+ * 管理者一覧から直接回答者画面を開けるボタンを
+ * 作ると「回答者画面から管理者へ戻る導線」と誤認しやすいため、
+ * 通常UIには表示しない。
+ *
+ * ブラウザコンソールから
+ * openAnswerSurvey(1)
+ * と実行すれば回答者画面を確認できる。
+ */
+
+
+/* ============================================================
+   初期サンプルの質問番号を確定
+============================================================ */
+
+surveys.forEach(s=>{
+
+    let no=1;
+
+    s.groups.forEach((g,gi)=>{
+
+        g.questions.forEach((q,qi)=>{
+
+            q.displayNumber=
+                s.numbering==="group"
+                ? "Q"+(gi+1)+"-"+(qi+1)
+                : "Q"+(no++);
+
+        });
+
+    });
+
+});
+</script>
+
+</body>
+</html>
