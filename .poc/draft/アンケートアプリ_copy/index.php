@@ -2,20 +2,78 @@
 declare(strict_types=1);
 
 
+/**
+ * ---------------------------------------------------------
+ * エラー設定
+ * ---------------------------------------------------------
+ */
+
+error_reporting(E_ALL);
+
+ini_set('display_errors', '0');
+ini_set('display_startup_errors', '0');
+ini_set('log_errors', '1');
+
+
+/**
+ * ---------------------------------------------------------
+ * プレビュー環境 / CORS / Preflight
+ * ---------------------------------------------------------
+ *
+ * 開発アプリのプレビューでは iframe が sandbox 等の影響で
+ * Origin: null になる場合がある。
+ *
+ * この場合でも同じアプリのAPIへPOSTできるようにする。
+ */
+
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+
+if ($origin === 'null') {
+    header('Access-Control-Allow-Origin: null');
+    header('Access-Control-Allow-Credentials: true');
+    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+    header(
+        'Access-Control-Allow-Headers: ' .
+        'Content-Type, Accept, X-CSRF-Token'
+    );
+}
+
+/**
+ * OPTIONS はCSRF検証より前に処理する。
+ */
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
+
 
 /**
  * ---------------------------------------------------------
  * セッション
  * ---------------------------------------------------------
+ *
+ * プレビュー iframe からのPOSTでは Origin が null となるため、
+ * PHPセッションCookieをSameSite=Noneにする。
+ *
+ * Secure=true のため HTTPS 通信でのみ送信される。
  */
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'secure' => true,
+        'httponly' => true,
+        'samesite' => 'None',
+    ]);
+
     session_start();
 }
 
+
 /**
  * ---------------------------------------------------------
- * Content-Type
+ * Content-Type / セキュリティヘッダー
  * ---------------------------------------------------------
  */
 
@@ -52,6 +110,7 @@ function jsonResponse(array $payload, int $statusCode = 200): never
     exit;
 }
 
+
 /**
  * 成功レスポンス。
  *
@@ -71,6 +130,7 @@ function successResponse(
         $statusCode
     );
 }
+
 
 /**
  * エラーレスポンス。
@@ -101,6 +161,7 @@ function errorResponse(
     );
 }
 
+
 /**
  * ---------------------------------------------------------
  * 例外ハンドラ
@@ -125,6 +186,7 @@ set_exception_handler(
         );
     }
 );
+
 
 /**
  * ---------------------------------------------------------
@@ -171,6 +233,7 @@ register_shutdown_function(
     }
 );
 
+
 /**
  * ---------------------------------------------------------
  * CSRF
@@ -193,6 +256,7 @@ function getCsrfToken(): string
 
     return $_SESSION['csrf_token'];
 }
+
 
 /**
  * CSRFトークンを検証する。
@@ -228,6 +292,7 @@ function verifyCsrfToken(): void
     }
 }
 
+
 /**
  * ---------------------------------------------------------
  * HTTPメソッド
@@ -238,6 +303,7 @@ function requestMethod(): string
 {
     return strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
 }
+
 
 /**
  * POST専用処理。
@@ -253,6 +319,7 @@ function requirePost(): void
     }
 }
 
+
 /**
  * GET専用処理。
  */
@@ -266,6 +333,7 @@ function requireGet(): void
         );
     }
 }
+
 
 /**
  * ---------------------------------------------------------
@@ -308,6 +376,7 @@ function getJsonBody(): array
     return $decoded;
 }
 
+
 /**
  * POSTパラメータとJSON bodyを統合する。
  *
@@ -336,6 +405,7 @@ function getPostInput(): array
     return $input;
 }
 
+
 /**
  * ---------------------------------------------------------
  * action
@@ -353,6 +423,7 @@ function getAction(array $input = []): string
     return trim($action);
 }
 
+
 /**
  * 現段階で許可するaction。
  *
@@ -368,6 +439,7 @@ function allowedActions(): array
         'health_check' => true,
     ];
 }
+
 
 /**
  * actionが許可されているか確認する。
@@ -392,6 +464,7 @@ function requireValidAction(string $action): void
         );
     }
 }
+
 
 /**
  * ---------------------------------------------------------
@@ -428,12 +501,14 @@ function handleApiRequest(): never
     }
 
     switch ($action) {
+
         /**
          * -------------------------------------------------
          * CSRFトークン取得
          * -------------------------------------------------
          */
         case 'get_csrf_token':
+
             successResponse(
                 [
                     'csrfToken' => getCsrfToken(),
@@ -447,6 +522,7 @@ function handleApiRequest(): never
          * -------------------------------------------------
          */
         case 'health_check':
+
             successResponse(
                 [
                     'status' => 'ok',
@@ -465,6 +541,7 @@ function handleApiRequest(): never
         501
     );
 }
+
 
 /**
  * ---------------------------------------------------------
@@ -506,10 +583,12 @@ function renderHtmlPage(): never
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
+
     <meta
         name="viewport"
         content="width=device-width, initial-scale=1.0"
     >
+
     <meta
         name="csrf-token"
         content="<?= $safeCsrfToken ?>"
@@ -591,6 +670,7 @@ function renderHtmlPage(): never
 <body>
 
 <div class="container">
+
     <main class="card">
 
         <h1>アンケート管理システム</h1>
@@ -626,150 +706,250 @@ function renderHtmlPage(): never
         ></pre>
 
     </main>
+
 </div>
+
 
 <script>
 'use strict';
 
+
 /**
- * 現在のindex.phpをAPI通信先として使用する。
+ * ---------------------------------------------------------
+ * APIエンドポイント
+ * ---------------------------------------------------------
  *
- * 物理ディレクトリや別PHPファイルを
- * ハードコードしない。
+ * 現在表示しているアプリのindex.phpをAPI入口にする。
+ *
+ * /アンケートアプリ_copy/
+ *      ↓
+ * /アンケートアプリ_copy/index.php
  */
 function getApplicationEntryPoint() {
-    const url = new URL(window.location.href);
+
+    const url =
+        new URL(window.location.href);
 
     if (url.pathname.endsWith('/')) {
         url.pathname += 'index.php';
     }
 
-    return url.pathname
-        + url.search.split('&action=')[0];
+    /*
+     * actionはURLではなくJSON bodyで送信する。
+     */
+    url.searchParams.delete('action');
+
+    return url.pathname + url.search;
 }
-/**
- * CSRFトークン。
- *
- * パスワード等の秘密情報とは異なり、
- * CSRF対策に必要なブラウザ側情報として扱う。
- */
-let csrfToken =
-    document.querySelector('meta[name="csrf-token"]')
-        ?.getAttribute('content') || '';
+
 
 /**
- * 共通API通信。
+ * ---------------------------------------------------------
+ * CSRFトークン
+ * ---------------------------------------------------------
  */
-async function callApi(action, data = {}) {
+
+let csrfToken =
+    document
+        .querySelector(
+            'meta[name="csrf-token"]'
+        )
+        ?.getAttribute('content')
+        || '';
+
+
+/**
+ * ---------------------------------------------------------
+ * API通信
+ * ---------------------------------------------------------
+ */
+
+async function callApi(
+    action,
+    data = {}
+) {
+
     const button =
-        document.getElementById('healthCheckButton');
+        document.getElementById(
+            'healthCheckButton'
+        );
 
     if (button) {
         button.disabled = true;
     }
 
     try {
+
         const body = {
             action,
             ...data
         };
 
-        const response = await fetch(
-            getApplicationEntryPoint(),
-            {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'X-CSRF-Token': csrfToken
-                },
-                body: JSON.stringify(body)
-            }
-        );
+
+        const response =
+            await fetch(
+                getApplicationEntryPoint(),
+                {
+                    method: 'POST',
+
+                    /*
+                     * 重要：
+                     *
+                     * 開発アプリのプレビューは
+                     * Origin: null になる場合がある。
+                     *
+                     * same-origin ではなく include にして
+                     * PHPセッションCookieを送信する。
+                     */
+                    credentials: 'include',
+
+                    headers: {
+                        'Content-Type':
+                            'application/json',
+
+                        'Accept':
+                            'application/json',
+
+                        'X-CSRF-Token':
+                            csrfToken
+                    },
+
+                    body:
+                        JSON.stringify(body)
+                }
+            );
+
 
         const contentType =
-            response.headers.get('Content-Type') || '';
+            response.headers.get(
+                'Content-Type'
+            ) || '';
 
-        const text = await response.text();
+
+        const text =
+            await response.text();
+
 
         if (!response.ok) {
+
             throw new Error(
-                'HTTP ' + response.status + '\n' + text
+                'HTTP '
+                + response.status
+                + '\n'
+                + text
             );
         }
+
 
         if (
             !contentType
                 .toLowerCase()
-                .includes('application/json')
+                .includes(
+                    'application/json'
+                )
         ) {
+
             throw new Error(
                 'APIがJSONではないレスポンスを返しました。'
             );
         }
 
+
         let json;
 
+
         try {
-            json = JSON.parse(text);
+
+            json =
+                JSON.parse(text);
+
         } catch (error) {
+
             throw new Error(
                 'APIレスポンスのJSON解析に失敗しました。'
             );
         }
 
-        if (!json || typeof json !== 'object') {
+
+        if (
+            !json
+            || typeof json !== 'object'
+        ) {
+
             throw new Error(
                 'APIレスポンス形式が不正です。'
             );
         }
 
+
         return json;
 
     } finally {
+
         if (button) {
             button.disabled = false;
         }
     }
 }
 
+
 /**
- * API動作確認。
+ * ---------------------------------------------------------
+ * API動作確認
+ * ---------------------------------------------------------
  */
+
 document
-    .getElementById('healthCheckButton')
-    ?.addEventListener('click', async function () {
+    .getElementById(
+        'healthCheckButton'
+    )
+    ?.addEventListener(
+        'click',
+        async function () {
 
-        const result =
-            document.getElementById('apiResult');
-
-        if (!result) {
-            return;
-        }
-
-        result.hidden = false;
-        result.textContent = '通信中...';
-
-        try {
-            const response =
-                await callApi('health_check');
-
-            result.textContent =
-                JSON.stringify(
-                    response,
-                    null,
-                    2
+            const result =
+                document.getElementById(
+                    'apiResult'
                 );
 
-        } catch (error) {
+
+            if (!result) {
+                return;
+            }
+
+
+            result.hidden = false;
 
             result.textContent =
-                error instanceof Error
-                    ? error.message
-                    : String(error);
+                '通信中...';
+
+
+            try {
+
+                const response =
+                    await callApi(
+                        'health_check'
+                    );
+
+
+                result.textContent =
+                    JSON.stringify(
+                        response,
+                        null,
+                        2
+                    );
+
+
+            } catch (error) {
+
+                result.textContent =
+                    error instanceof Error
+                        ? error.message
+                        : String(error);
+            }
         }
-    });
+    );
+
 </script>
 
 </body>
@@ -779,6 +959,7 @@ document
     exit;
 }
 
+
 /**
  * ---------------------------------------------------------
  * メイン
@@ -786,6 +967,7 @@ document
  */
 
 $method = requestMethod();
+
 
 /*
  * actionが存在する場合はAPIとして扱う。
@@ -801,9 +983,11 @@ $hasAction =
         && $method === 'POST'
     );
 
+
 if ($hasAction) {
     handleApiRequest();
 }
+
 
 /*
  * actionがない場合は画面表示。
