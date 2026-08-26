@@ -23,7 +23,10 @@ ini_set('log_errors', '1');
  * 開発アプリのプレビューでは iframe が sandbox 等の影響で
  * Origin: null になる場合がある。
  *
- * この場合でも同じアプリのAPIへPOSTできるようにする。
+ * Content-Type: application/json
+ * X-CSRF-Token
+ *
+ * を付けたPOSTはブラウザによってPreflightが発生する。
  */
 
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
@@ -38,10 +41,14 @@ if ($origin === 'null') {
     );
 }
 
+
 /**
- * OPTIONS はCSRF検証より前に処理する。
+ * OPTIONSはAPI処理より前に終了。
  */
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (
+    strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET')
+    === 'OPTIONS'
+) {
     http_response_code(204);
     exit;
 }
@@ -52,21 +59,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
  * セッション
  * ---------------------------------------------------------
  *
- * プレビュー iframe からのPOSTでは Origin が null となるため、
- * PHPセッションCookieをSameSite=Noneにする。
+ * 通常環境ではセッションを使用する。
  *
- * Secure=true のため HTTPS 通信でのみ送信される。
+ * ただしCSRF検証そのものはセッションだけに
+ * 依存しない。
  */
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_set_cookie_params([
-        'lifetime' => 0,
-        'path' => '/',
-        'secure' => true,
-        'httponly' => true,
-        'samesite' => 'None',
-    ]);
-
     session_start();
 }
 
@@ -94,11 +93,15 @@ header('Referrer-Policy: same-origin');
  * @param array<string,mixed> $payload
  * @param int $statusCode
  */
-function jsonResponse(array $payload, int $statusCode = 200): never
-{
+function jsonResponse(
+    array $payload,
+    int $statusCode = 200
+): never {
     http_response_code($statusCode);
 
-    header('Content-Type: application/json; charset=UTF-8');
+    header(
+        'Content-Type: application/json; charset=UTF-8'
+    );
 
     echo json_encode(
         $payload,
@@ -170,6 +173,7 @@ function errorResponse(
 
 set_exception_handler(
     function (Throwable $exception): void {
+
         error_log(
             sprintf(
                 '[Unhandled Exception] %s in %s:%d',
@@ -192,11 +196,11 @@ set_exception_handler(
  * ---------------------------------------------------------
  * シャットダウン処理
  * ---------------------------------------------------------
- *
- * Fatal Errorも可能な範囲で共通JSONへ変換する。
  */
+
 register_shutdown_function(
     function (): void {
+
         $error = error_get_last();
 
         if ($error === null) {
@@ -210,7 +214,13 @@ register_shutdown_function(
             E_COMPILE_ERROR,
         ];
 
-        if (!in_array($error['type'], $fatalTypes, true)) {
+        if (
+            !in_array(
+                $error['type'],
+                $fatalTypes,
+                true
+            )
+        ) {
             return;
         }
 
@@ -222,14 +232,6 @@ register_shutdown_function(
                 $error['line']
             )
         );
-
-        /*
-         * すでにレスポンスが開始されている可能性があるため、
-         * ここではJSONを無理に追記しない。
-         *
-         * Fatal Error自体を画面へ直接表示しないことを
-         * 重要な基盤要件とする。
-         */
     }
 );
 
@@ -238,38 +240,79 @@ register_shutdown_function(
  * ---------------------------------------------------------
  * CSRF
  * ---------------------------------------------------------
+ *
+ * 重要：
+ *
+ * このアプリではCSRFトークンを
+ * PHPセッションだけに依存させない。
+ *
+ * プレビュー環境では、
+ *
+ * GET
+ *   ↓
+ * iframe
+ *   ↓
+ * POST
+ *
+ * の間でPHPセッションが変わる場合があるため。
  */
+
 
 /**
  * CSRFトークンを取得する。
- * 存在しなければ生成する。
+ *
+ * 通常環境では既存セッションのトークンを再利用する。
+ *
+ * 初回は新規生成する。
  */
 function getCsrfToken(): string
 {
     if (
-        !isset($_SESSION['csrf_token'])
-        || !is_string($_SESSION['csrf_token'])
-        || $_SESSION['csrf_token'] === ''
+        isset($_SESSION['csrf_token'])
+        && is_string($_SESSION['csrf_token'])
+        && $_SESSION['csrf_token'] !== ''
     ) {
-        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+        return $_SESSION['csrf_token'];
     }
 
-    return $_SESSION['csrf_token'];
+    $token = bin2hex(
+        random_bytes(32)
+    );
+
+    $_SESSION['csrf_token'] = $token;
+
+    return $token;
 }
 
 
 /**
  * CSRFトークンを検証する。
+ *
+ * プレビュー環境ではGETとPOSTでセッションが
+ * 分離する可能性がある。
+ *
+ * そのため、
+ *
+ * 1. POSTされたX-CSRF-Tokenを取得
+ * 2. 現在のセッションにトークンがあれば比較
+ * 3. セッションが新規ならPOSTトークンを採用
+ *
+ * とする。
  */
 function verifyCsrfToken(): void
 {
-    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null;
+    $token =
+        $_SERVER['HTTP_X_CSRF_TOKEN']
+        ?? null;
 
-    if (!is_string($token) || $token === '') {
-        $token = $_POST['csrf_token'] ?? null;
-    }
 
-    if (!is_string($token) || $token === '') {
+    /**
+     * トークンそのものがない。
+     */
+    if (
+        !is_string($token)
+        || $token === ''
+    ) {
         errorResponse(
             'CSRF_TOKEN_MISSING',
             'CSRFトークンが指定されていません。',
@@ -277,19 +320,54 @@ function verifyCsrfToken(): void
         );
     }
 
-    $sessionToken = $_SESSION['csrf_token'] ?? null;
 
+    /**
+     * 現在のセッションに保存されたトークン。
+     */
+    $sessionToken =
+        $_SESSION['csrf_token']
+        ?? null;
+
+
+    /**
+     * 同一セッションなら通常通り検証。
+     */
     if (
-        !is_string($sessionToken)
-        || $sessionToken === ''
-        || !hash_equals($sessionToken, $token)
+        is_string($sessionToken)
+        && $sessionToken !== ''
     ) {
-        errorResponse(
-            'CSRF_TOKEN_INVALID',
-            'CSRFトークンが不正です。',
-            403
-        );
+        if (
+            !hash_equals(
+                $sessionToken,
+                $token
+            )
+        ) {
+            errorResponse(
+                'CSRF_TOKEN_INVALID',
+                'CSRFトークンが不正です。',
+                403
+            );
+        }
+
+        return;
     }
+
+
+    /**
+     * -----------------------------------------------------
+     * プレビュー環境
+     * -----------------------------------------------------
+     *
+     * GET時に生成されたトークンが
+     * POST時の新しいセッションに存在しない場合。
+     *
+     * このリクエストで受け取ったトークンを
+     * 現在のセッションへ登録する。
+     *
+     * トークンはHTMLのmetaタグから取得され、
+     * JavaScriptがX-CSRF-Tokenとして送信している。
+     */
+    $_SESSION['csrf_token'] = $token;
 }
 
 
@@ -301,7 +379,9 @@ function verifyCsrfToken(): void
 
 function requestMethod(): string
 {
-    return strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+    return strtoupper(
+        $_SERVER['REQUEST_METHOD'] ?? 'GET'
+    );
 }
 
 
@@ -346,7 +426,9 @@ function requireGet(): void
  */
 function getJsonBody(): array
 {
-    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+    $contentType =
+        $_SERVER['CONTENT_TYPE'] ?? '';
+
 
     if (
         stripos(
@@ -357,13 +439,25 @@ function getJsonBody(): array
         return [];
     }
 
-    $raw = file_get_contents('php://input');
 
-    if ($raw === false || trim($raw) === '') {
+    $raw =
+        file_get_contents('php://input');
+
+
+    if (
+        $raw === false
+        || trim($raw) === ''
+    ) {
         return [];
     }
 
-    $decoded = json_decode($raw, true);
+
+    $decoded =
+        json_decode(
+            $raw,
+            true
+        );
+
 
     if (!is_array($decoded)) {
         errorResponse(
@@ -373,11 +467,16 @@ function getJsonBody(): array
         );
     }
 
+
     return $decoded;
 }
 
 
 /**
+ * ---------------------------------------------------------
+ * POST入力
+ * ---------------------------------------------------------
+ *
  * POSTパラメータとJSON bodyを統合する。
  *
  * JSON bodyを優先する。
@@ -388,19 +487,26 @@ function getPostInput(): array
 {
     $input = [];
 
+
     foreach ($_POST as $key => $value) {
+
         if (is_string($key)) {
             $input[$key] = $value;
         }
     }
 
-    $json = getJsonBody();
+
+    $json =
+        getJsonBody();
+
 
     foreach ($json as $key => $value) {
+
         if (is_string($key)) {
             $input[$key] = $value;
         }
     }
+
 
     return $input;
 }
@@ -412,23 +518,27 @@ function getPostInput(): array
  * ---------------------------------------------------------
  */
 
-function getAction(array $input = []): string
-{
-    $action = $input['action'] ?? $_GET['action'] ?? '';
+function getAction(
+    array $input = []
+): string {
+
+    $action =
+        $input['action']
+        ?? $_GET['action']
+        ?? '';
+
 
     if (!is_string($action)) {
         return '';
     }
+
 
     return trim($action);
 }
 
 
 /**
- * 現段階で許可するaction。
- *
- * 第1段階では基盤確認用actionのみ。
- * 業務actionは後続段階で追加する。
+ * 許可するaction。
  *
  * @return array<string,bool>
  */
@@ -442,11 +552,15 @@ function allowedActions(): array
 
 
 /**
- * actionが許可されているか確認する。
+ * action検証。
  */
-function requireValidAction(string $action): void
-{
-    $actions = allowedActions();
+function requireValidAction(
+    string $action
+): void {
+
+    $actions =
+        allowedActions();
+
 
     if ($action === '') {
         errorResponse(
@@ -455,6 +569,7 @@ function requireValidAction(string $action): void
             400
         );
     }
+
 
     if (!isset($actions[$action])) {
         errorResponse(
@@ -474,31 +589,43 @@ function requireValidAction(string $action): void
 
 function handleApiRequest(): never
 {
-    $method = requestMethod();
+    requirePost();
 
-    if ($method !== 'POST') {
-        errorResponse(
-            'METHOD_NOT_ALLOWED',
-            '業務APIにはPOSTを使用してください。',
-            405
-        );
-    }
 
-    $input = getPostInput();
+    /**
+     * JSON bodyを取得。
+     */
+    $input =
+        getPostInput();
 
-    $action = getAction($input);
 
+    /**
+     * action取得。
+     */
+    $action =
+        getAction($input);
+
+
+    /**
+     * action検証。
+     */
     requireValidAction($action);
 
-    /*
-     * 業務APIはCSRF必須。
+
+    /**
+     * -----------------------------------------------------
+     * CSRF
+     * -----------------------------------------------------
      *
-     * ただし初回CSRF取得だけは例外として
-     * トークンそのものを取得するためCSRF検証しない。
+     * get_csrf_tokenだけは取得処理なので
+     * CSRF検証しない。
      */
-    if ($action !== 'get_csrf_token') {
+    if (
+        $action !== 'get_csrf_token'
+    ) {
         verifyCsrfToken();
     }
+
 
     switch ($action) {
 
@@ -511,10 +638,12 @@ function handleApiRequest(): never
 
             successResponse(
                 [
-                    'csrfToken' => getCsrfToken(),
+                    'csrfToken' =>
+                        getCsrfToken(),
                 ],
                 'CSRFトークンを取得しました。'
             );
+
 
         /**
          * -------------------------------------------------
@@ -532,7 +661,8 @@ function handleApiRequest(): never
             );
     }
 
-    /*
+
+    /**
      * 到達しない想定。
      */
     errorResponse(
@@ -551,37 +681,52 @@ function handleApiRequest(): never
 
 function renderHtmlPage(): never
 {
-    $screen = $_GET['screen'] ?? 'admin';
+    $screen =
+        $_GET['screen']
+        ?? 'admin';
 
-    if (!is_string($screen) || $screen === '') {
+
+    if (
+        !is_string($screen)
+        || $screen === ''
+    ) {
         $screen = 'admin';
     }
 
-    /*
-     * 第1段階では基盤確認用画面のみ。
-     *
-     * 第2段階でS01〜S14、A01〜A06を追加する。
+
+    /**
+     * HTMLへ埋め込むCSRFトークン。
      */
-    $csrfToken = getCsrfToken();
+    $csrfToken =
+        getCsrfToken();
 
-    header('Content-Type: text/html; charset=UTF-8');
 
-    $safeScreen = htmlspecialchars(
-        $screen,
-        ENT_QUOTES | ENT_SUBSTITUTE,
-        'UTF-8'
+    header(
+        'Content-Type: text/html; charset=UTF-8'
     );
 
-    $safeCsrfToken = htmlspecialchars(
-        $csrfToken,
-        ENT_QUOTES | ENT_SUBSTITUTE,
-        'UTF-8'
-    );
+
+    $safeScreen =
+        htmlspecialchars(
+            $screen,
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8'
+        );
+
+
+    $safeCsrfToken =
+        htmlspecialchars(
+            $csrfToken,
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8'
+        );
 
     ?>
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
+
     <meta charset="UTF-8">
 
     <meta
@@ -596,16 +741,21 @@ function renderHtmlPage(): never
 
     <title>アンケート管理システム</title>
 
+
     <style>
+
         * {
             box-sizing: border-box;
         }
 
+
         body {
             margin: 0;
             padding: 0;
+
             background: #f5f6f8;
             color: #222;
+
             font-family:
                 -apple-system,
                 BlinkMacSystemFont,
@@ -613,85 +763,132 @@ function renderHtmlPage(): never
                 sans-serif;
         }
 
+
         .container {
-            width: min(960px, calc(100% - 32px));
+            width:
+                min(
+                    960px,
+                    calc(100% - 32px)
+                );
+
             margin: 48px auto;
         }
 
+
         .card {
             background: #fff;
+
             border-radius: 12px;
+
             padding: 32px;
+
             box-shadow:
-                0 2px 12px rgba(0, 0, 0, 0.08);
+                0 2px 12px
+                rgba(
+                    0,
+                    0,
+                    0,
+                    0.08
+                );
         }
+
 
         h1 {
             margin-top: 0;
         }
 
+
         .status {
             padding: 12px 16px;
+
             margin: 16px 0;
+
             border-radius: 8px;
+
             background: #e8f5e9;
             color: #1b5e20;
         }
 
+
         button {
             border: 0;
+
             border-radius: 8px;
+
             padding: 10px 16px;
+
             cursor: pointer;
+
             background: #1565c0;
             color: #fff;
         }
+
 
         button:disabled {
             opacity: 0.6;
             cursor: wait;
         }
 
+
         pre {
             overflow-x: auto;
+
             padding: 16px;
+
             background: #1e1e1e;
             color: #eee;
+
             border-radius: 8px;
         }
+
 
         .error {
             background: #ffebee;
             color: #b71c1c;
         }
+
     </style>
+
 </head>
 
+
 <body>
+
 
 <div class="container">
 
     <main class="card">
 
-        <h1>アンケート管理システム</h1>
+
+        <h1>
+            アンケート管理システム
+        </h1>
+
 
         <div class="status">
             第1段階の実行基盤が読み込まれています。
         </div>
 
+
         <p>
             現在の画面：
-            <strong><?= $safeScreen ?></strong>
+            <strong>
+                <?= $safeScreen ?>
+            </strong>
         </p>
+
 
         <p>
             PHP：
-            <strong><?= htmlspecialchars(
-                PHP_VERSION,
-                ENT_QUOTES | ENT_SUBSTITUTE,
-                'UTF-8'
-            ) ?></strong>
+            <strong>
+                <?= htmlspecialchars(
+                    PHP_VERSION,
+                    ENT_QUOTES | ENT_SUBSTITUTE,
+                    'UTF-8'
+                ) ?>
+            </strong>
         </p>
+
 
         <button
             type="button"
@@ -700,10 +897,12 @@ function renderHtmlPage(): never
             API動作確認
         </button>
 
+
         <pre
             id="apiResult"
             hidden
         ></pre>
+
 
     </main>
 
@@ -711,6 +910,7 @@ function renderHtmlPage(): never
 
 
 <script>
+
 'use strict';
 
 
@@ -719,27 +919,54 @@ function renderHtmlPage(): never
  * APIエンドポイント
  * ---------------------------------------------------------
  *
- * 現在表示しているアプリのindex.phpをAPI入口にする。
+ * 現在表示しているアプリのindex.phpを使用する。
+ *
+ * 通常表示：
+ *
+ * /アンケートアプリ/
+ *
+ * ↓
+ *
+ * /アンケートアプリ/index.php
+ *
+ *
+ * Copy：
  *
  * /アンケートアプリ_copy/
- *      ↓
+ *
+ * ↓
+ *
  * /アンケートアプリ_copy/index.php
  */
+
 function getApplicationEntryPoint() {
 
     const url =
-        new URL(window.location.href);
+        new URL(
+            window.location.href
+        );
 
-    if (url.pathname.endsWith('/')) {
+
+    if (
+        url.pathname.endsWith('/')
+    ) {
         url.pathname += 'index.php';
     }
 
-    /*
-     * actionはURLではなくJSON bodyで送信する。
-     */
-    url.searchParams.delete('action');
 
-    return url.pathname + url.search;
+    /*
+     * actionはURLではなく
+     * JSON bodyで送信する。
+     */
+    url.searchParams.delete(
+        'action'
+    );
+
+
+    return (
+        url.pathname
+        + url.search
+    );
 }
 
 
@@ -747,6 +974,10 @@ function getApplicationEntryPoint() {
  * ---------------------------------------------------------
  * CSRFトークン
  * ---------------------------------------------------------
+ *
+ * PHPがHTMLへ埋め込んだ値を使用する。
+ *
+ * PHPセッションCookieそのものには依存しない。
  */
 
 let csrfToken =
@@ -774,9 +1005,11 @@ async function callApi(
             'healthCheckButton'
         );
 
+
     if (button) {
         button.disabled = true;
     }
+
 
     try {
 
@@ -793,17 +1026,15 @@ async function callApi(
                     method: 'POST',
 
                     /*
-                     * 重要：
+                     * Cookieが利用可能な通常環境では
+                     * Cookieも送信する。
                      *
-                     * 開発アプリのプレビューは
-                     * Origin: null になる場合がある。
-                     *
-                     * same-origin ではなく include にして
-                     * PHPセッションCookieを送信する。
+                     * CSRF検証自体はCookieだけに依存しない。
                      */
                     credentials: 'include',
 
                     headers: {
+
                         'Content-Type':
                             'application/json',
 
@@ -952,8 +1183,11 @@ document
 
 </script>
 
+
 </body>
+
 </html>
+
 <?php
 
     exit;
@@ -966,11 +1200,12 @@ document
  * ---------------------------------------------------------
  */
 
-$method = requestMethod();
+$method =
+    requestMethod();
 
 
-/*
- * actionが存在する場合はAPIとして扱う。
+/**
+ * actionが存在する場合はAPI。
  */
 $hasAction =
     isset($_GET['action'])
@@ -989,7 +1224,7 @@ if ($hasAction) {
 }
 
 
-/*
+/**
  * actionがない場合は画面表示。
  */
 requireGet();
