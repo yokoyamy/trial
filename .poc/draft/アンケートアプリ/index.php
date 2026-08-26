@@ -663,10 +663,15 @@ function renderHtmlPage(): never
  * ハードコードしない。
  */
 function getApplicationEntryPoint() {
-    return window.location.pathname
-        + window.location.search.split('&action=')[0];
-}
+    const url = new URL(window.location.href);
 
+    if (url.pathname.endsWith('/')) {
+        url.pathname += 'index.php';
+    }
+
+    return url.pathname
+        + url.search.split('&action=')[0];
+}
 /**
  * CSRFトークン。
  *
