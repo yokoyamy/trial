@@ -1,113 +1,183 @@
 <?php
 declare(strict_types=1);
 
-
 /**
- * ---------------------------------------------------------
- * エラー設定
- * ---------------------------------------------------------
+ * アンケート管理システム
+ * Single Entry: index.php
+ *
+ * PHP 8.4 / 8.5
+ *
+ * 第1段階:
+ * - GET / POST / OPTIONS
+ * - action routing
+ * - JSON response
+ * - Session
+ * - CSRF
+ * - Request ID
+ * - CORS / Origin
+ * - 共通例外処理
+ * - PHP Error対策
+ *
+ * 業務APIは後続段階で追加する。
  */
 
-error_reporting(E_ALL);
+/* =========================================================
+ * 基本設定
+ * ======================================================= */
+
+const APP_NAME = 'アンケート管理システム';
+
+const CSRF_ACTION = 'csrf';
+const HEALTH_ACTION = 'health';
+
+/*
+ * 本番環境では false。
+ * 開発時に必要なら環境変数等から切り替える。
+ */
+const DEBUG = false;
+
+/*
+ * 同一オリジンを基本とする。
+ *
+ * cross-originを許可する場合だけ明示的に追加する。
+ *
+ * 例:
+ * [
+ *     'https://example.com'
+ * ]
+ */
+const CORS_ALLOWED_ORIGINS = [];
+
+/*
+ * fetch timeout等はフロントエンド側にも
+ * 同じ設定値を提供できるようにする。
+ */
+const CLIENT_TIMEOUT_MS = 30000;
+
+
+/* =========================================================
+ * PHPエラー設定
+ * ======================================================= */
 
 ini_set('display_errors', '0');
 ini_set('display_startup_errors', '0');
-ini_set('log_errors', '1');
+
+error_reporting(E_ALL);
+
+
+/* =========================================================
+ * 共通ユーティリティ
+ * ======================================================= */
+
+/**
+ * Request ID生成
+ */
+function generateRequestId(): string
+{
+    try {
+        return bin2hex(random_bytes(16));
+    } catch (Throwable) {
+        return uniqid('req_', true);
+    }
+}
 
 
 /**
- * ---------------------------------------------------------
- * プレビュー環境 / CORS / Preflight
- * ---------------------------------------------------------
+ * Request ID取得
  *
- * 開発アプリのプレビューでは iframe が sandbox 等の影響で
- * Origin: null になる場合がある。
- *
- * Content-Type: application/json
- * X-CSRF-Token
- *
- * を付けたPOSTはブラウザによってPreflightが発生する。
+ * クライアント指定値をそのまま信用しない。
  */
+function getRequestId(): string
+{
+    $header = $_SERVER['HTTP_X_REQUEST_ID'] ?? '';
 
-$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+    if (
+        is_string($header)
+        && preg_match('/^[A-Za-z0-9._-]{1,64}$/', $header)
+    ) {
+        /*
+         * 外部から渡された値をそのままログ上の
+         * 識別子として使わず、サーバー側IDを生成する。
+         */
+    }
 
-if ($origin === 'null') {
-    header('Access-Control-Allow-Origin: null');
-    header('Access-Control-Allow-Credentials: true');
-    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-    header(
-        'Access-Control-Allow-Headers: ' .
-        'Content-Type, Accept, X-CSRF-Token'
+    return generateRequestId();
+}
+
+
+/**
+ * ログ出力
+ *
+ * 秘密情報を引数として渡さないこと。
+ */
+function appLog(
+    string $level,
+    string $message,
+    array $context = []
+): void {
+    $safeContext = [];
+
+    foreach ($context as $key => $value) {
+        /*
+         * 念のため秘密情報らしいキーは除外。
+         */
+        $lowerKey = strtolower((string)$key);
+
+        if (
+            str_contains($lowerKey, 'password')
+            || str_contains($lowerKey, 'token')
+            || str_contains($lowerKey, 'cookie')
+            || str_contains($lowerKey, 'authorization')
+            || str_contains($lowerKey, 'secret')
+        ) {
+            continue;
+        }
+
+        $safeContext[$key] = $value;
+    }
+
+    $line = sprintf(
+        '[%s] [%s] %s %s',
+        date('c'),
+        strtoupper($level),
+        $message,
+        $safeContext !== []
+            ? json_encode(
+                $safeContext,
+                JSON_UNESCAPED_UNICODE |
+                JSON_UNESCAPED_SLASHES |
+                JSON_INVALID_UTF8_SUBSTITUTE
+            )
+            : ''
     );
+
+    error_log($line);
 }
 
 
 /**
- * OPTIONSはAPI処理より前に終了。
+ * JSONレスポンス
  */
-if (
-    strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET')
-    === 'OPTIONS'
-) {
-    http_response_code(204);
-    exit;
-}
-
-
-/**
- * ---------------------------------------------------------
- * セッション
- * ---------------------------------------------------------
- *
- * 通常環境ではセッションを使用する。
- *
- * ただしCSRF検証そのものはセッションだけに
- * 依存しない。
- */
-
-if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_start();
-}
-
-
-/**
- * ---------------------------------------------------------
- * Content-Type / セキュリティヘッダー
- * ---------------------------------------------------------
- */
-
-header('X-Content-Type-Options: nosniff');
-header('X-Frame-Options: SAMEORIGIN');
-header('Referrer-Policy: same-origin');
-
-
-/**
- * ---------------------------------------------------------
- * 共通レスポンス
- * ---------------------------------------------------------
- */
-
-/**
- * JSONレスポンスを返して終了する。
- *
- * @param array<string,mixed> $payload
- * @param int $statusCode
- */
-function jsonResponse(
-    array $payload,
-    int $statusCode = 200
+function sendJson(
+    array $body,
+    int $statusCode = 200,
+    array $headers = []
 ): never {
     http_response_code($statusCode);
 
-    header(
-        'Content-Type: application/json; charset=UTF-8'
-    );
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: no-store');
+    header('X-Content-Type-Options: nosniff');
+
+    foreach ($headers as $name => $value) {
+        header($name . ': ' . $value);
+    }
 
     echo json_encode(
-        $payload,
-        JSON_UNESCAPED_UNICODE
-        | JSON_UNESCAPED_SLASHES
-        | JSON_INVALID_UTF8_SUBSTITUTE
+        $body,
+        JSON_UNESCAPED_UNICODE |
+        JSON_UNESCAPED_SLASHES |
+        JSON_INVALID_UTF8_SUBSTITUTE
     );
 
     exit;
@@ -115,16 +185,14 @@ function jsonResponse(
 
 
 /**
- * 成功レスポンス。
- *
- * @param array<string,mixed> $data
+ * 成功レスポンス
  */
 function successResponse(
     array $data = [],
     string $message = '',
     int $statusCode = 200
 ): never {
-    jsonResponse(
+    sendJson(
         [
             'success' => true,
             'data' => $data,
@@ -136,26 +204,24 @@ function successResponse(
 
 
 /**
- * エラーレスポンス。
- *
- * @param array<string,mixed> $details
+ * エラーレスポンス
  */
 function errorResponse(
     string $code,
     string $message,
     int $statusCode = 400,
-    array $details = []
+    ?string $requestId = null
 ): never {
     $error = [
         'code' => $code,
         'message' => $message,
     ];
 
-    if ($details !== []) {
-        $error['details'] = $details;
+    if ($requestId !== null && $requestId !== '') {
+        $error['requestId'] = $requestId;
     }
 
-    jsonResponse(
+    sendJson(
         [
             'success' => false,
             'error' => $error,
@@ -165,41 +231,276 @@ function errorResponse(
 }
 
 
+/* =========================================================
+ * Request ID
+ * ======================================================= */
+
+$requestId = getRequestId();
+
+header('X-Request-Id: ' . $requestId);
+
+
+/* =========================================================
+ * セキュリティヘッダー
+ * ======================================================= */
+
+header('X-Frame-Options: SAMEORIGIN');
+header('Referrer-Policy: strict-origin-when-cross-origin');
+header(
+    'Content-Security-Policy: ' .
+    "default-src 'self'; " .
+    "script-src 'self' 'unsafe-inline'; " .
+    "style-src 'self' 'unsafe-inline'; " .
+    "img-src 'self' data:; " .
+    "connect-src 'self'; " .
+    "font-src 'self' data:; " .
+    "object-src 'none'; " .
+    "base-uri 'self'; " .
+    "form-action 'self'; " .
+    "frame-ancestors 'self'"
+);
+
+
+/* =========================================================
+ * HTTPS判定
+ * ======================================================= */
+
+$isHttps =
+    (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+    || ((int)($_SERVER['SERVER_PORT'] ?? 0) === 443);
+
+
+/* =========================================================
+ * Session
+ * ======================================================= */
+
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'secure' => $isHttps,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+
+    session_start();
+}
+
+
+/* =========================================================
+ * Origin / CORS
+ * ======================================================= */
+
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+
+$isAllowedOrigin = false;
+
+if ($origin !== '') {
+    $isAllowedOrigin = in_array(
+        $origin,
+        CORS_ALLOWED_ORIGINS,
+        true
+    );
+}
+
+
 /**
- * ---------------------------------------------------------
- * 例外ハンドラ
- * ---------------------------------------------------------
+ * 同一オリジン判定
  */
+function isSameOriginRequest(): bool
+{
+    $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 
-set_exception_handler(
-    function (Throwable $exception): void {
+    if ($origin === '') {
+        return true;
+    }
 
-        error_log(
-            sprintf(
-                '[Unhandled Exception] %s in %s:%d',
-                $exception->getMessage(),
-                $exception->getFile(),
-                $exception->getLine()
-            )
+    $scheme =
+        (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            ? 'https'
+            : 'http';
+
+    $host = $_SERVER['HTTP_HOST'] ?? '';
+
+    if ($host === '') {
+        return false;
+    }
+
+    return hash_equals(
+        $scheme . '://' . $host,
+        $origin
+    );
+}
+
+
+/*
+ * CORS設定。
+ *
+ * 同一オリジンの場合はCORSヘッダーを付けない。
+ */
+if ($origin !== '') {
+    if ($isAllowedOrigin) {
+        header('Access-Control-Allow-Origin: ' . $origin);
+        header('Access-Control-Allow-Credentials: true');
+        header('Vary: Origin');
+    } elseif (!isSameOriginRequest()) {
+        /*
+         * 許可されていないcross-origin。
+         *
+         * preflightの場合は後段で処理する。
+         * 通常リクエストではブラウザからレスポンスを
+         * 読ませない構成とする。
+         */
+    }
+}
+
+
+/* =========================================================
+ * OPTIONS / CORS Preflight
+ * ======================================================= */
+
+$method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+
+if ($method === 'OPTIONS') {
+
+    /*
+     * cross-origin preflightの場合だけ処理。
+     */
+    if ($origin !== '' && !$isAllowedOrigin && !isSameOriginRequest()) {
+        http_response_code(403);
+
+        header('Content-Type: application/json; charset=UTF-8');
+
+        echo json_encode(
+            [
+                'success' => false,
+                'error' => [
+                    'code' => 'CORS_ORIGIN_DENIED',
+                    'message' => '許可されていないOriginです。',
+                    'requestId' => $requestId,
+                ],
+            ],
+            JSON_UNESCAPED_UNICODE |
+            JSON_UNESCAPED_SLASHES
         );
 
-        errorResponse(
-            'INTERNAL_SERVER_ERROR',
-            'サーバー内部でエラーが発生しました。',
-            500
+        exit;
+    }
+
+    /*
+     * preflightに業務副作用を発生させない。
+     */
+    header(
+        'Access-Control-Allow-Methods: GET, POST, OPTIONS'
+    );
+
+    $requestedHeaders =
+        $_SERVER['HTTP_ACCESS_CONTROL_REQUEST_HEADERS'] ?? '';
+
+    if ($requestedHeaders !== '') {
+        /*
+         * 実際に利用を許可するヘッダーのみを返す。
+         */
+        $allowedHeaders = [];
+
+        $requested = array_map(
+            'trim',
+            explode(',', $requestedHeaders)
+        );
+
+        foreach ($requested as $headerName) {
+            $normalized = strtolower($headerName);
+
+            if (
+                $normalized === 'content-type'
+                || $normalized === 'x-csrf-token'
+                || $normalized === 'x-request-id'
+            ) {
+                $allowedHeaders[] = $headerName;
+            }
+        }
+
+        if ($allowedHeaders !== []) {
+            header(
+                'Access-Control-Allow-Headers: ' .
+                implode(', ', $allowedHeaders)
+            );
+        }
+    }
+
+    if ($isAllowedOrigin) {
+        header('Access-Control-Allow-Credentials: true');
+    }
+
+    http_response_code(204);
+    exit;
+}
+
+
+/* =========================================================
+ * HTTPメソッド
+ * ======================================================= */
+
+if (!in_array($method, ['GET', 'POST'], true)) {
+    errorResponse(
+        'METHOD_NOT_ALLOWED',
+        '許可されていないHTTPメソッドです。',
+        405,
+        $requestId
+    );
+}
+
+
+/* =========================================================
+ * PHP Error Handler
+ * ======================================================= */
+
+set_error_handler(
+    function (
+        int $severity,
+        string $message,
+        string $file,
+        int $line
+    ) use ($requestId): bool {
+
+        /*
+         * Warning / Notice等をレスポンスへ直接出さない。
+         */
+        appLog(
+            'PHP',
+            $message,
+            [
+                'requestId' => $requestId,
+                'severity' => $severity,
+                'file' => basename($file),
+                'line' => $line,
+            ]
+        );
+
+        /*
+         * 通常のPHPエラーを例外化。
+         */
+        if (!(error_reporting() & $severity)) {
+            return false;
+        }
+
+        throw new ErrorException(
+            $message,
+            0,
+            $severity,
+            $file,
+            $line
         );
     }
 );
 
 
-/**
- * ---------------------------------------------------------
- * シャットダウン処理
- * ---------------------------------------------------------
- */
+/* =========================================================
+ * Shutdown Handler
+ * ======================================================= */
 
 register_shutdown_function(
-    function (): void {
+    function () use ($requestId): void {
 
         $error = error_get_last();
 
@@ -214,1019 +515,457 @@ register_shutdown_function(
             E_COMPILE_ERROR,
         ];
 
-        if (
-            !in_array(
-                $error['type'],
-                $fatalTypes,
-                true
-            )
-        ) {
-            return;
-        }
+        if (in_array($error['type'], $fatalTypes, true)) {
 
-        error_log(
-            sprintf(
-                '[Fatal Error] %s in %s:%d',
+            appLog(
+                'FATAL',
                 $error['message'],
-                $error['file'],
-                $error['line']
-            )
-        );
+                [
+                    'requestId' => $requestId,
+                    'file' => basename($error['file']),
+                    'line' => $error['line'],
+                    'type' => $error['type'],
+                ]
+            );
+
+            /*
+             * 既にレスポンスが開始されている可能性があるため、
+             * shutdown handlerだけでJSON化できるとは考えない。
+             *
+             * 実際のFatal Error対策は構文検査・Apache実動作確認と
+             * あわせて行う。
+             */
+        }
     }
 );
 
 
-/**
- * ---------------------------------------------------------
- * CSRF
- * ---------------------------------------------------------
- *
- * 重要：
- *
- * このアプリではCSRFトークンを
- * PHPセッションだけに依存させない。
- *
- * プレビュー環境では、
- *
- * GET
- *   ↓
- * iframe
- *   ↓
- * POST
- *
- * の間でPHPセッションが変わる場合があるため。
- */
-
+/* =========================================================
+ * 入力処理
+ * ======================================================= */
 
 /**
- * CSRFトークンを取得する。
- *
- * 通常環境では既存セッションのトークンを再利用する。
- *
- * 初回は新規生成する。
+ * POST JSON取得
  */
-function getCsrfToken(): string
+function getJsonInput(): array
 {
-    if (
-        isset($_SESSION['csrf_token'])
-        && is_string($_SESSION['csrf_token'])
-        && $_SESSION['csrf_token'] !== ''
-    ) {
-        return $_SESSION['csrf_token'];
-    }
+    $raw = file_get_contents('php://input');
 
-    $token = bin2hex(
-        random_bytes(32)
-    );
-
-    $_SESSION['csrf_token'] = $token;
-
-    return $token;
-}
-
-
-/**
- * CSRFトークンを検証する。
- *
- * プレビュー環境ではGETとPOSTでセッションが
- * 分離する可能性がある。
- *
- * そのため、
- *
- * 1. POSTされたX-CSRF-Tokenを取得
- * 2. 現在のセッションにトークンがあれば比較
- * 3. セッションが新規ならPOSTトークンを採用
- *
- * とする。
- */
-function verifyCsrfToken(): void
-{
-    $token =
-        $_SERVER['HTTP_X_CSRF_TOKEN']
-        ?? null;
-
-
-    /**
-     * トークンそのものがない。
-     */
-    if (
-        !is_string($token)
-        || $token === ''
-    ) {
-        errorResponse(
-            'CSRF_TOKEN_MISSING',
-            'CSRFトークンが指定されていません。',
-            403
-        );
-    }
-
-
-    /**
-     * 現在のセッションに保存されたトークン。
-     */
-    $sessionToken =
-        $_SESSION['csrf_token']
-        ?? null;
-
-
-    /**
-     * 同一セッションなら通常通り検証。
-     */
-    if (
-        is_string($sessionToken)
-        && $sessionToken !== ''
-    ) {
-        if (
-            !hash_equals(
-                $sessionToken,
-                $token
-            )
-        ) {
-            errorResponse(
-                'CSRF_TOKEN_INVALID',
-                'CSRFトークンが不正です。',
-                403
-            );
-        }
-
-        return;
-    }
-
-
-    /**
-     * -----------------------------------------------------
-     * プレビュー環境
-     * -----------------------------------------------------
-     *
-     * GET時に生成されたトークンが
-     * POST時の新しいセッションに存在しない場合。
-     *
-     * このリクエストで受け取ったトークンを
-     * 現在のセッションへ登録する。
-     *
-     * トークンはHTMLのmetaタグから取得され、
-     * JavaScriptがX-CSRF-Tokenとして送信している。
-     */
-    $_SESSION['csrf_token'] = $token;
-}
-
-
-/**
- * ---------------------------------------------------------
- * HTTPメソッド
- * ---------------------------------------------------------
- */
-
-function requestMethod(): string
-{
-    return strtoupper(
-        $_SERVER['REQUEST_METHOD'] ?? 'GET'
-    );
-}
-
-
-/**
- * POST専用処理。
- */
-function requirePost(): void
-{
-    if (requestMethod() !== 'POST') {
-        errorResponse(
-            'METHOD_NOT_ALLOWED',
-            'この操作にはPOSTを使用してください。',
-            405
-        );
-    }
-}
-
-
-/**
- * GET専用処理。
- */
-function requireGet(): void
-{
-    if (requestMethod() !== 'GET') {
-        errorResponse(
-            'METHOD_NOT_ALLOWED',
-            'この操作にはGETを使用してください。',
-            405
-        );
-    }
-}
-
-
-/**
- * ---------------------------------------------------------
- * JSON POST body
- * ---------------------------------------------------------
- *
- * application/json の場合に利用する。
- *
- * @return array<string,mixed>
- */
-function getJsonBody(): array
-{
-    $contentType =
-        $_SERVER['CONTENT_TYPE'] ?? '';
-
-
-    if (
-        stripos(
-            $contentType,
-            'application/json'
-        ) === false
-    ) {
+    if ($raw === false || trim($raw) === '') {
         return [];
     }
 
-
-    $raw =
-        file_get_contents('php://input');
-
-
-    if (
-        $raw === false
-        || trim($raw) === ''
-    ) {
-        return [];
-    }
-
-
-    $decoded =
-        json_decode(
+    try {
+        $data = json_decode(
             $raw,
-            true
+            true,
+            512,
+            JSON_THROW_ON_ERROR
         );
-
-
-    if (!is_array($decoded)) {
-        errorResponse(
-            'INVALID_JSON',
-            'POSTデータのJSON形式が不正です。',
-            400
+    } catch (JsonException) {
+        throw new InvalidArgumentException(
+            'JSON形式が不正です。'
         );
     }
 
+    if (!is_array($data)) {
+        throw new InvalidArgumentException(
+            'JSONオブジェクトを指定してください。'
+        );
+    }
 
-    return $decoded;
+    return $data;
 }
 
 
 /**
- * ---------------------------------------------------------
- * POST入力
- * ---------------------------------------------------------
- *
- * POSTパラメータとJSON bodyを統合する。
- *
- * JSON bodyを優先する。
- *
- * @return array<string,mixed>
+ * action取得
  */
-function getPostInput(): array
+function getAction(string $method): string
 {
-    $input = [];
+    if ($method === 'GET') {
+        $action = $_GET['action'] ?? '';
+    } else {
+        $action = $_GET['action'] ?? '';
 
-
-    foreach ($_POST as $key => $value) {
-
-        if (is_string($key)) {
-            $input[$key] = $value;
+        if ($action === '') {
+            $input = getJsonInput();
+            $action = $input['action'] ?? '';
         }
     }
-
-
-    $json =
-        getJsonBody();
-
-
-    foreach ($json as $key => $value) {
-
-        if (is_string($key)) {
-            $input[$key] = $value;
-        }
-    }
-
-
-    return $input;
-}
-
-
-/**
- * ---------------------------------------------------------
- * action
- * ---------------------------------------------------------
- */
-
-function getAction(
-    array $input = []
-): string {
-
-    $action =
-        $input['action']
-        ?? $_GET['action']
-        ?? '';
-
 
     if (!is_string($action)) {
         return '';
     }
 
-
     return trim($action);
 }
 
 
+/* =========================================================
+ * CSRF
+ * ======================================================= */
+
 /**
- * 許可するaction。
- *
- * @return array<string,bool>
+ * CSRF token取得/生成
  */
-function allowedActions(): array
+function getCsrfToken(): string
 {
-    return [
-        'get_csrf_token' => true,
-        'health_check' => true,
-    ];
+    if (
+        !isset($_SESSION['csrf_token'])
+        || !is_string($_SESSION['csrf_token'])
+        || $_SESSION['csrf_token'] === ''
+    ) {
+        $_SESSION['csrf_token'] = bin2hex(
+            random_bytes(32)
+        );
+    }
+
+    return $_SESSION['csrf_token'];
 }
 
 
 /**
- * action検証。
+ * CSRF検証
  */
-function requireValidAction(
-    string $action
+function validateCsrfToken(
+    string $requestId
 ): void {
 
-    $actions =
-        allowedActions();
+    $headerToken =
+        $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
 
+    $bodyToken = '';
 
-    if ($action === '') {
+    if ($headerToken === '') {
+        try {
+            $input = getJsonInput();
+
+            if (isset($input['csrfToken'])) {
+                $bodyToken = is_string($input['csrfToken'])
+                    ? $input['csrfToken']
+                    : '';
+            }
+        } catch (Throwable) {
+            /*
+             * JSONエラーは後段で入力エラーとして扱う。
+             */
+        }
+    }
+
+    $token =
+        $headerToken !== ''
+            ? $headerToken
+            : $bodyToken;
+
+    $sessionToken =
+        $_SESSION['csrf_token'] ?? '';
+
+    if (
+        !is_string($sessionToken)
+        || $sessionToken === ''
+    ) {
         errorResponse(
-            'ACTION_REQUIRED',
-            'actionが指定されていません。',
-            400
+            'CSRF_TOKEN_INVALID',
+            'CSRFトークンが不正です。',
+            403,
+            $requestId
         );
     }
 
-
-    if (!isset($actions[$action])) {
+    if (
+        $token === ''
+        || !is_string($token)
+        || !hash_equals($sessionToken, $token)
+    ) {
         errorResponse(
-            'INVALID_ACTION',
-            '指定されたactionは利用できません。',
-            400
+            'CSRF_TOKEN_INVALID',
+            'CSRFトークンが不正です。',
+            403,
+            $requestId
         );
     }
 }
 
 
-/**
- * ---------------------------------------------------------
- * APIルーティング
- * ---------------------------------------------------------
- */
+/* =========================================================
+ * Action定義
+ * ======================================================= */
 
-function handleApiRequest(): never
-{
-    requirePost();
+const ALLOWED_GET_ACTIONS = [
+    'health',
+    'csrf',
+];
 
-
-    /**
-     * JSON bodyを取得。
-     */
-    $input =
-        getPostInput();
-
-
-    /**
-     * action取得。
-     */
-    $action =
-        getAction($input);
-
-
-    /**
-     * action検証。
-     */
-    requireValidAction($action);
-
-
-    /**
-     * -----------------------------------------------------
-     * CSRF
-     * -----------------------------------------------------
+const ALLOWED_POST_ACTIONS = [
+    /*
+     * 後続段階で追加:
      *
-     * get_csrf_tokenだけは取得処理なので
-     * CSRF検証しない。
+     * survey_create
+     * survey_update
+     * survey_delete
+     * survey_status
+     * response_submit
+     * customer_sync
+     * mail_send
+     * etc.
      */
-    if (
-        $action !== 'get_csrf_token'
-    ) {
-        verifyCsrfToken();
+];
+
+
+/* =========================================================
+ * API処理
+ * ======================================================= */
+
+try {
+
+    $action = getAction($method);
+
+    /*
+     * actionがない場合。
+     */
+    if ($action === '') {
+
+        /*
+         * actionなしGETは画面表示として扱う。
+         */
+        if ($method === 'GET') {
+            $screen = $_GET['screen'] ?? 'admin';
+
+            if (!is_string($screen)) {
+                $screen = 'admin';
+            }
+
+            $screen = trim($screen);
+
+            /*
+             * 最小画面。
+             *
+             * 実際の管理画面は後続段階で実装。
+             */
+            header(
+                'Content-Type: text/html; charset=UTF-8'
+            );
+
+            $safeScreen = htmlspecialchars(
+                $screen,
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            );
+
+            /*
+             * 現在アクセスされているindex.phpのURLを
+             * サーバー側で生成。
+             *
+             * JavaScript側で物理パスを推測しない。
+             */
+            $scheme =
+                $isHttps ? 'https' : 'http';
+
+            $host =
+                $_SERVER['HTTP_HOST'] ?? 'localhost';
+
+            $script =
+                $_SERVER['SCRIPT_NAME'] ?? '/index.php';
+
+            $entryPoint =
+                $scheme . '://' . $host . $script;
+
+            $safeEntryPoint = htmlspecialchars(
+                $entryPoint,
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            );
+
+            $safeRequestId = htmlspecialchars(
+                $requestId,
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            );
+
+            echo '<!doctype html>';
+            echo '<html lang="ja">';
+            echo '<head>';
+            echo '<meta charset="UTF-8">';
+            echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
+            echo '<meta name="application-entry-point" content="';
+            echo $safeEntryPoint;
+            echo '">';
+            echo '<title>';
+            echo htmlspecialchars(
+                APP_NAME,
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            );
+            echo '</title>';
+            echo '</head>';
+            echo '<body>';
+
+            echo '<h1>';
+            echo htmlspecialchars(
+                APP_NAME,
+                ENT_QUOTES | ENT_SUBSTITUTE,
+                'UTF-8'
+            );
+            echo '</h1>';
+
+            echo '<p>通信基盤 第1段階</p>';
+
+            echo '<p>screen: ';
+            echo $safeScreen;
+            echo '</p>';
+
+            echo '<p>Request ID: ';
+            echo $safeRequestId;
+            echo '</p>';
+
+            echo '</body>';
+            echo '</html>';
+
+            exit;
+        }
+
+        errorResponse(
+            'ACTION_REQUIRED',
+            'actionを指定してください。',
+            400,
+            $requestId
+        );
     }
 
 
-    switch ($action) {
+    /* =====================================================
+     * GET
+     * =================================================== */
 
-        /**
-         * -------------------------------------------------
-         * CSRFトークン取得
-         * -------------------------------------------------
-         */
-        case 'get_csrf_token':
+    if ($method === 'GET') {
 
-            successResponse(
-                [
-                    'csrfToken' =>
-                        getCsrfToken(),
-                ],
-                'CSRFトークンを取得しました。'
+        if (!in_array(
+            $action,
+            ALLOWED_GET_ACTIONS,
+            true
+        )) {
+            errorResponse(
+                'ACTION_NOT_FOUND',
+                '指定されたactionは存在しません。',
+                404,
+                $requestId
             );
+        }
 
 
-        /**
-         * -------------------------------------------------
-         * ヘルスチェック
-         * -------------------------------------------------
-         */
-        case 'health_check':
+        /* ---------------------------------------------
+         * health
+         * ------------------------------------------- */
+
+        if ($action === HEALTH_ACTION) {
 
             successResponse(
                 [
                     'status' => 'ok',
+                    'application' => APP_NAME,
                     'phpVersion' => PHP_VERSION,
-                ],
-                'APIは正常に動作しています。'
+                    'requestId' => $requestId,
+                    'timestamp' => date('c'),
+                ]
             );
+        }
+
+
+        /* ---------------------------------------------
+         * csrf
+         * ------------------------------------------- */
+
+        if ($action === CSRF_ACTION) {
+
+            $token = getCsrfToken();
+
+            successResponse(
+                [
+                    'csrfToken' => $token,
+                    'requestId' => $requestId,
+                ]
+            );
+        }
     }
 
 
-    /**
-     * 到達しない想定。
-     */
-    errorResponse(
-        'ACTION_NOT_IMPLEMENTED',
-        '指定されたactionは実装されていません。',
-        501
-    );
-}
+    /* =====================================================
+     * POST
+     * =================================================== */
 
+    if ($method === 'POST') {
 
-/**
- * ---------------------------------------------------------
- * 画面表示
- * ---------------------------------------------------------
- */
-
-function renderHtmlPage(): never
-{
-    $screen =
-        $_GET['screen']
-        ?? 'admin';
-
-
-    if (
-        !is_string($screen)
-        || $screen === ''
-    ) {
-        $screen = 'admin';
-    }
-
-
-    /**
-     * HTMLへ埋め込むCSRFトークン。
-     */
-    $csrfToken =
-        getCsrfToken();
-
-
-    header(
-        'Content-Type: text/html; charset=UTF-8'
-    );
-
-
-    $safeScreen =
-        htmlspecialchars(
-            $screen,
-            ENT_QUOTES | ENT_SUBSTITUTE,
-            'UTF-8'
-        );
-
-
-    $safeCsrfToken =
-        htmlspecialchars(
-            $csrfToken,
-            ENT_QUOTES | ENT_SUBSTITUTE,
-            'UTF-8'
-        );
-
-    ?>
-<!DOCTYPE html>
-<html lang="ja">
-
-<head>
-
-    <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
-    <meta
-        name="csrf-token"
-        content="<?= $safeCsrfToken ?>"
-    >
-
-    <title>アンケート管理システム</title>
-
-
-    <style>
-
-        * {
-            box-sizing: border-box;
+        if (!in_array(
+            $action,
+            ALLOWED_POST_ACTIONS,
+            true
+        )) {
+            errorResponse(
+                'ACTION_NOT_FOUND',
+                '指定されたactionは存在しません。',
+                404,
+                $requestId
+            );
         }
 
-
-        body {
-            margin: 0;
-            padding: 0;
-
-            background: #f5f6f8;
-            color: #222;
-
-            font-family:
-                -apple-system,
-                BlinkMacSystemFont,
-                "Segoe UI",
-                sans-serif;
-        }
-
-
-        .container {
-            width:
-                min(
-                    960px,
-                    calc(100% - 32px)
-                );
-
-            margin: 48px auto;
-        }
-
-
-        .card {
-            background: #fff;
-
-            border-radius: 12px;
-
-            padding: 32px;
-
-            box-shadow:
-                0 2px 12px
-                rgba(
-                    0,
-                    0,
-                    0,
-                    0.08
-                );
-        }
-
-
-        h1 {
-            margin-top: 0;
-        }
-
-
-        .status {
-            padding: 12px 16px;
-
-            margin: 16px 0;
-
-            border-radius: 8px;
-
-            background: #e8f5e9;
-            color: #1b5e20;
-        }
-
-
-        button {
-            border: 0;
-
-            border-radius: 8px;
-
-            padding: 10px 16px;
-
-            cursor: pointer;
-
-            background: #1565c0;
-            color: #fff;
-        }
-
-
-        button:disabled {
-            opacity: 0.6;
-            cursor: wait;
-        }
-
-
-        pre {
-            overflow-x: auto;
-
-            padding: 16px;
-
-            background: #1e1e1e;
-            color: #eee;
-
-            border-radius: 8px;
-        }
-
-
-        .error {
-            background: #ffebee;
-            color: #b71c1c;
-        }
-
-    </style>
-
-</head>
-
-
-<body>
-
-
-<div class="container">
-
-    <main class="card">
-
-
-        <h1>
-            アンケート管理システム
-        </h1>
-
-
-        <div class="status">
-            第1段階の実行基盤が読み込まれています。
-        </div>
-
-
-        <p>
-            現在の画面：
-            <strong>
-                <?= $safeScreen ?>
-            </strong>
-        </p>
-
-
-        <p>
-            PHP：
-            <strong>
-                <?= htmlspecialchars(
-                    PHP_VERSION,
-                    ENT_QUOTES | ENT_SUBSTITUTE,
-                    'UTF-8'
-                ) ?>
-            </strong>
-        </p>
-
-
-        <button
-            type="button"
-            id="healthCheckButton"
-        >
-            API動作確認
-        </button>
-
-
-        <pre
-            id="apiResult"
-            hidden
-        ></pre>
-
-
-    </main>
-
-</div>
-
-
-<script>
-
-'use strict';
-
-
-/**
- * ---------------------------------------------------------
- * APIエンドポイント
- * ---------------------------------------------------------
- *
- * 現在表示しているアプリのindex.phpを使用する。
- *
- * 通常表示：
- *
- * /アンケートアプリ/
- *
- * ↓
- *
- * /アンケートアプリ/index.php
- *
- *
- * Copy：
- *
- * /アンケートアプリ_copy/
- *
- * ↓
- *
- * /アンケートアプリ_copy/index.php
- */
-
-function getApplicationEntryPoint() {
-
-    const url =
-        new URL(
-            window.location.href
-        );
-
-
-    if (
-        url.pathname.endsWith('/')
-    ) {
-        url.pathname += 'index.php';
+        /*
+         * 現段階ではPOST業務APIは未実装。
+         *
+         * 後続段階で各actionを追加する。
+         */
+        validateCsrfToken($requestId);
     }
 
 
     /*
-     * actionはURLではなく
-     * JSON bodyで送信する。
+     * 想定外。
      */
-    url.searchParams.delete(
-        'action'
+    errorResponse(
+        'INTERNAL_SERVER_ERROR',
+        'サーバー内部でエラーが発生しました。',
+        500,
+        $requestId
     );
 
+} catch (InvalidArgumentException $e) {
 
-    return (
-        url.pathname
-        + url.search
-    );
-}
-
-
-/**
- * ---------------------------------------------------------
- * CSRFトークン
- * ---------------------------------------------------------
- *
- * PHPがHTMLへ埋め込んだ値を使用する。
- *
- * PHPセッションCookieそのものには依存しない。
- */
-
-let csrfToken =
-    document
-        .querySelector(
-            'meta[name="csrf-token"]'
-        )
-        ?.getAttribute('content')
-        || '';
-
-
-/**
- * ---------------------------------------------------------
- * API通信
- * ---------------------------------------------------------
- */
-
-async function callApi(
-    action,
-    data = {}
-) {
-
-    const button =
-        document.getElementById(
-            'healthCheckButton'
-        );
-
-
-    if (button) {
-        button.disabled = true;
-    }
-
-
-    try {
-
-        const body = {
-            action,
-            ...data
-        };
-
-
-        const response =
-            await fetch(
-                getApplicationEntryPoint(),
-                {
-                    method: 'POST',
-
-                    /*
-                     * Cookieが利用可能な通常環境では
-                     * Cookieも送信する。
-                     *
-                     * CSRF検証自体はCookieだけに依存しない。
-                     */
-                    credentials: 'include',
-
-                    headers: {
-
-                        'Content-Type':
-                            'application/json',
-
-                        'Accept':
-                            'application/json',
-
-                        'X-CSRF-Token':
-                            csrfToken
-                    },
-
-                    body:
-                        JSON.stringify(body)
-                }
-            );
-
-
-        const contentType =
-            response.headers.get(
-                'Content-Type'
-            ) || '';
-
-
-        const text =
-            await response.text();
-
-
-        if (!response.ok) {
-
-            throw new Error(
-                'HTTP '
-                + response.status
-                + '\n'
-                + text
-            );
-        }
-
-
-        if (
-            !contentType
-                .toLowerCase()
-                .includes(
-                    'application/json'
-                )
-        ) {
-
-            throw new Error(
-                'APIがJSONではないレスポンスを返しました。'
-            );
-        }
-
-
-        let json;
-
-
-        try {
-
-            json =
-                JSON.parse(text);
-
-        } catch (error) {
-
-            throw new Error(
-                'APIレスポンスのJSON解析に失敗しました。'
-            );
-        }
-
-
-        if (
-            !json
-            || typeof json !== 'object'
-        ) {
-
-            throw new Error(
-                'APIレスポンス形式が不正です。'
-            );
-        }
-
-
-        return json;
-
-    } finally {
-
-        if (button) {
-            button.disabled = false;
-        }
-    }
-}
-
-
-/**
- * ---------------------------------------------------------
- * API動作確認
- * ---------------------------------------------------------
- */
-
-document
-    .getElementById(
-        'healthCheckButton'
-    )
-    ?.addEventListener(
-        'click',
-        async function () {
-
-            const result =
-                document.getElementById(
-                    'apiResult'
-                );
-
-
-            if (!result) {
-                return;
-            }
-
-
-            result.hidden = false;
-
-            result.textContent =
-                '通信中...';
-
-
-            try {
-
-                const response =
-                    await callApi(
-                        'health_check'
-                    );
-
-
-                result.textContent =
-                    JSON.stringify(
-                        response,
-                        null,
-                        2
-                    );
-
-
-            } catch (error) {
-
-                result.textContent =
-                    error instanceof Error
-                        ? error.message
-                        : String(error);
-            }
-        }
+    appLog(
+        'WARNING',
+        $e->getMessage(),
+        [
+            'requestId' => $requestId,
+            'action' => $action ?? '',
+        ]
     );
 
-</script>
-
-
-</body>
-
-</html>
-
-<?php
-
-    exit;
-}
-
-
-/**
- * ---------------------------------------------------------
- * メイン
- * ---------------------------------------------------------
- */
-
-$method =
-    requestMethod();
-
-
-/**
- * actionが存在する場合はAPI。
- */
-$hasAction =
-    isset($_GET['action'])
-    || isset($_POST['action'])
-    || (
-        str_contains(
-            $_SERVER['CONTENT_TYPE'] ?? '',
-            'application/json'
-        )
-        && $method === 'POST'
+    errorResponse(
+        'VALIDATION_ERROR',
+        $e->getMessage(),
+        422,
+        $requestId
     );
 
+} catch (Throwable $e) {
 
-if ($hasAction) {
-    handleApiRequest();
+    /*
+     * 内部例外を利用者へ直接出さない。
+     */
+    appLog(
+        'ERROR',
+        $e->getMessage(),
+        [
+            'requestId' => $requestId,
+            'exception' => get_class($e),
+            'file' => basename($e->getFile()),
+            'line' => $e->getLine(),
+        ]
+    );
+
+    errorResponse(
+        'INTERNAL_SERVER_ERROR',
+        'サーバー内部でエラーが発生しました。',
+        500,
+        $requestId
+    );
 }
-
-
-/**
- * actionがない場合は画面表示。
- */
-requireGet();
-
-renderHtmlPage();
