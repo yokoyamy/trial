@@ -1,19 +1,6 @@
 <?php
 declare(strict_types=1);
-// Preview環境からのCORSを許可
-$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 
-if ($origin === 'null') {
-    header('Access-Control-Allow-Origin: null');
-    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-    header('Access-Control-Allow-Headers: Content-Type, X-Requested-With');
-}
-
-// CORSの事前確認リクエスト
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(204);
-    exit;
-}
 
 /*
  * アンケート管理システム
@@ -1832,6 +1819,9 @@ function apiSaveKintoneSettings(): never
         'settings.json',
         $settings
     );
+    // クライアントへ返す情報からパスワードを除外
+    $responseSettings = $settings['kintone'];
+    unset($responseSettings['password']);
 
     jsonResponse([
         'success' => true,
@@ -2920,8 +2910,17 @@ function navigate(view, surveyId='', token=''){
         params.set('token', token);
     }
 
-    window.location.href =
-        '?' + params.toString();
+    /*
+     * URLを先に更新する。
+     * 画面状態は必ず更新後のURLから再構築する。
+     */
+    history.pushState(
+        {},
+        '',
+        '?' + params.toString()
+    );
+
+    syncFromUrl();
 }
 
 function replaceNavigation(
