@@ -1,35 +1,26 @@
 <?php
 declare(strict_types=1);
-error_log('=== HEADERS ===');
-error_log(print_r(getallheaders(), true));
-error_log('=== SERVER ===');
-error_log(print_r($_SERVER, true));/**
- * アンケート管理システム
- * 第1段階：単一入口・実行基盤
- *
- * PHP 8.4 / 8.5 対応
- *
- * 公開入口：
- *   index.php
- *
- * GET：
- *   画面表示・参照
- *
- * POST：
- *   業務API
- */
-
 error_reporting(E_ALL);
-
-/*
- * Warning / Notice 等がAPIレスポンスへ混入しないよう、
- * PHPのエラー表示を無効化する。
- *
- * 実際のエラーはログへ記録する。
- */
 ini_set('display_errors', '0');
 ini_set('display_startup_errors', '0');
 ini_set('log_errors', '1');
+
+/**
+ * ---------------------------------------------------------
+ * CORS / Preflight
+ * ---------------------------------------------------------
+ */
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    header('Access-Control-Allow-Origin: null');
+    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+    header('Access-Control-Allow-Headers: Content-Type, Accept, X-CSRF-Token');
+    header('Access-Control-Allow-Credentials: true');
+
+    http_response_code(204);
+    exit;
+}
+
 
 /**
  * ---------------------------------------------------------
