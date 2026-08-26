@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
-
+error_log('SESSION CSRF: ' . ($_SESSION['csrf_token'] ?? 'NONE'));
+error_log('HEADER CSRF: ' . ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? 'NONE'));
 /**
  * アンケート管理システム
  * 第1段階：単一入口・実行基盤
