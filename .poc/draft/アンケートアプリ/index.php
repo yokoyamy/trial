@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+
 /*
  * アンケート管理システム
  * Single Entry: index.php
