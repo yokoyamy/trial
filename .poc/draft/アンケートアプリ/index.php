@@ -4,13 +4,23 @@ declare(strict_types=1);
 
 /*
 |--------------------------------------------------------------------------
-| 1ファイル PHP ファイル管理・編集
+| 1ファイル PHP アプリ管理・編集システム
 |--------------------------------------------------------------------------
+|
+| この段階では「基本構造」を優先する。
 |
 | 通信方式：
 |
-|   GET  -> このPHP自身
-|   POST -> このPHP自身
+|   GET
+|   POST
+|
+| サーバー処理：
+|
+|   PHP
+|   scandir()
+|   file_get_contents()
+|   file_put_contents()
+|   mkdir()
 |
 | 使用しない：
 |
@@ -56,108 +66,147 @@ function h(mixed $value): string
 
 /*
 |--------------------------------------------------------------------------
-| 相対パス検証
+| パス正規化
+|--------------------------------------------------------------------------
+|
+| この段階では、
+|
+|   管理用index.php
+|       ├── app-a/
+|       │   └── index.php
+|       ├── app-b/
+|       │   └── index.php
+|       └── ...
+|
+| という第1階層のアプリだけを扱う。
+|
 |--------------------------------------------------------------------------
 */
 
-function normalizePath(string $path): ?string
-{
-    $path = trim($path);
+function normalizeAppName(
+    string $name
+): ?string {
 
-    $path = str_replace(
-        '\\',
-        '/',
-        $path
-    );
+    $name = trim($name);
 
-    $path = rawurldecode($path);
+    /*
+     * URLエンコード対策
+     */
+    $name = rawurldecode($name);
 
-    $path = trim(
-        $path,
-        '/'
-    );
-
-    if ($path === '') {
+    /*
+     * Windows区切り文字を拒否
+     */
+    if (str_contains($name, '\\')) {
         return null;
     }
 
-    $parts = explode('/', $path);
-
-    foreach ($parts as $part) {
-
-        if ($part === '') {
-            return null;
-        }
-
-        if ($part === '.') {
-            return null;
-        }
-
-        if ($part === '..') {
-            return null;
-        }
-
-        /*
-         * Windowsドライブ指定を拒否
-         */
-        if (
-            preg_match(
-                '/^[A-Za-z]:$/',
-                $part
-            )
-        ) {
-            return null;
-        }
+    /*
+     * パス区切りを拒否
+     */
+    if (str_contains($name, '/')) {
+        return null;
     }
 
-    return implode('/', $parts);
+    /*
+     * 空
+     */
+    if ($name === '') {
+        return null;
+    }
+
+    /*
+     * . と ..
+     */
+    if (
+        $name === '.' ||
+        $name === '..'
+    ) {
+        return null;
+    }
+
+    /*
+     * Windowsドライブ
+     */
+    if (
+        preg_match(
+            '/^[A-Za-z]:$/',
+            $name
+        )
+    ) {
+        return null;
+    }
+
+    /*
+     * 制御文字を拒否
+     */
+    if (
+        preg_match(
+            '/[\x00-\x1F\x7F]/',
+            $name
+        )
+    ) {
+        return null;
+    }
+
+    /*
+     * ディレクトリ名として許可する文字。
+     *
+     * 日本語も許可する。
+     *
+     * 例：
+     *
+     *   sample-app
+     *   test_app
+     *   アンケート
+     *   アンケート2026
+     */
+    if (
+        preg_match(
+            '/^[\p{L}\p{N}_.\- ]+$/u',
+            $name
+        ) !== 1
+    ) {
+        return null;
+    }
+
+    return $name;
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| 対象ディレクトリ
+| アプリディレクトリ
 |--------------------------------------------------------------------------
 */
 
-function targetDirectory(
+function getAppDirectory(
     string $baseDir,
-    string $relativePath
-): string {
-
-    $parts = explode(
-        '/',
-        $relativePath
-    );
-
-    $path = $baseDir;
-
-    foreach ($parts as $part) {
-
-        $path .=
-            DIRECTORY_SEPARATOR .
-            $part;
-    }
-
-    return $path;
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| 対象 index.php
-|--------------------------------------------------------------------------
-*/
-
-function targetFile(
-    string $baseDir,
-    string $relativePath
+    string $appName
 ): string {
 
     return
-        targetDirectory(
+        $baseDir .
+        DIRECTORY_SEPARATOR .
+        $appName;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| アプリ index.php
+|--------------------------------------------------------------------------
+*/
+
+function getAppFile(
+    string $baseDir,
+    string $appName
+): string {
+
+    return
+        getAppDirectory(
             $baseDir,
-            $relativePath
+            $appName
         )
         .
         DIRECTORY_SEPARATOR .
@@ -167,13 +216,32 @@ function targetFile(
 
 /*
 |--------------------------------------------------------------------------
-| アプリ一覧
+| 管理対象外ディレクトリ判定
+|--------------------------------------------------------------------------
+*/
+
+function isSystemDirectory(
+    string $name
+): bool {
+
+    return in_array(
+        $name,
+        [
+            '.',
+            '..',
+            '.history'
+        ],
+        true
+    );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| アプリ一覧取得
 |--------------------------------------------------------------------------
 |
-| このPHP自身が存在するディレクトリ直下から、
-| index.phpを持っているディレクトリだけを取得する。
-|
-| .history は除外。
+| 「index.phpを持つディレクトリ」だけをアプリとする。
 |
 |--------------------------------------------------------------------------
 */
@@ -184,53 +252,61 @@ function getApplications(
 
     $applications = [];
 
-    $items = scandir($baseDir);
+    $items =
+        scandir(
+            $baseDir
+        );
+
 
     if ($items === false) {
         return [];
     }
 
+
     foreach ($items as $item) {
 
         if (
-            $item === '.' ||
-            $item === '..' ||
-            $item === '.history'
+            isSystemDirectory(
+                $item
+            )
         ) {
             continue;
         }
 
-        $fullPath =
+
+        $directory =
             $baseDir .
             DIRECTORY_SEPARATOR .
             $item;
 
 
-        if (!is_dir($fullPath)) {
+        if (!is_dir($directory)) {
             continue;
         }
 
 
         /*
-         * ディレクトリ名として安全なものだけ
+         * index.phpが存在すること
          */
-        if (
-            preg_match(
-                '/^[A-Za-z0-9_\-\.]+$/u',
-                $item
-            ) !== 1
-        ) {
-            continue;
-        }
-
-
-        $indexFile =
-            $fullPath .
+        $file =
+            $directory .
             DIRECTORY_SEPARATOR .
             'index.php';
 
 
-        if (!is_file($indexFile)) {
+        if (!is_file($file)) {
+            continue;
+        }
+
+
+        /*
+         * アプリ名として安全なものだけ
+         */
+        if (
+            normalizeAppName(
+                $item
+            ) === null
+        ) {
             continue;
         }
 
@@ -263,58 +339,42 @@ function getApplications(
 
 /*
 |--------------------------------------------------------------------------
-| ファイル読み込み
+| アプリ読み込み
 |--------------------------------------------------------------------------
 */
 
-function readApplication(
+function loadApplication(
     string $baseDir,
-    string $path
+    string $appName
 ): array {
 
-    $normalized =
-        normalizePath($path);
+    $appName =
+        normalizeAppName(
+            $appName
+        );
 
 
-    if ($normalized === null) {
-
-        return [
-            'success' => false,
-            'message' =>
-                '不正なアプリパスです。'
-        ];
-    }
-
-
-    /*
-     * 今回は第1階層だけ許可
-     */
-    if (
-        substr_count(
-            $normalized,
-            '/'
-        ) !== 0
-    ) {
+    if ($appName === null) {
 
         return [
             'success' => false,
             'message' =>
-                'アプリパスは1階層のみ指定できます。'
+                'アプリ名が不正です。'
         ];
     }
 
 
     $directory =
-        targetDirectory(
+        getAppDirectory(
             $baseDir,
-            $normalized
+            $appName
         );
 
 
     $file =
-        targetFile(
+        getAppFile(
             $baseDir,
-            $normalized
+            $appName
         );
 
 
@@ -333,7 +393,7 @@ function readApplication(
         return [
             'success' => false,
             'message' =>
-                'index.phpが存在しません。'
+                'アプリのindex.phpが存在しません。'
         ];
     }
 
@@ -356,7 +416,7 @@ function readApplication(
 
     return [
         'success' => true,
-        'path' => $normalized,
+        'appName' => $appName,
         'content' => $content
     ];
 }
@@ -364,71 +424,62 @@ function readApplication(
 
 /*
 |--------------------------------------------------------------------------
-| ファイル保存
+| アプリ保存
+|--------------------------------------------------------------------------
+|
+| 既存アプリのみ更新する。
+|
+| 新規ディレクトリは作らない。
+|
 |--------------------------------------------------------------------------
 */
 
-function writeApplication(
+function saveApplication(
     string $baseDir,
     string $historyBaseDir,
-    string $path,
+    string $appName,
     string $content
 ): array {
 
-    $normalized =
-        normalizePath($path);
+    $appName =
+        normalizeAppName(
+            $appName
+        );
 
 
-    if ($normalized === null) {
-
-        return [
-            'success' => false,
-            'message' =>
-                '不正なアプリパスです。'
-        ];
-    }
-
-
-    /*
-     * 今回は既存アプリだけを編集する。
-     *
-     * 新規ディレクトリは作らない。
-     */
-    if (
-        substr_count(
-            $normalized,
-            '/'
-        ) !== 0
-    ) {
+    if ($appName === null) {
 
         return [
             'success' => false,
             'message' =>
-                'アプリパスは1階層のみ指定できます。'
+                'アプリ名が不正です。'
         ];
     }
 
 
     $directory =
-        targetDirectory(
+        getAppDirectory(
             $baseDir,
-            $normalized
+            $appName
         );
 
 
     $file =
-        targetFile(
+        getAppFile(
             $baseDir,
-            $normalized
+            $appName
         );
 
 
+    /*
+     * 既存アプリ限定
+     */
     if (!is_dir($directory)) {
 
         return [
             'success' => false,
             'message' =>
-                '保存対象のアプリディレクトリが存在しません。'
+                '保存対象のアプリが存在しません。'
         ];
     }
 
@@ -444,7 +495,7 @@ function writeApplication(
 
 
     /*
-     * バックアップ
+     * 履歴ディレクトリ
      */
     if (!is_dir($historyBaseDir)) {
 
@@ -468,7 +519,7 @@ function writeApplication(
     $historyDirectory =
         $historyBaseDir .
         DIRECTORY_SEPARATOR .
-        $normalized;
+        $appName;
 
 
     if (!is_dir($historyDirectory)) {
@@ -491,7 +542,7 @@ function writeApplication(
 
 
     /*
-     * 保存前の内容を履歴へ退避
+     * 現在の内容をバックアップ
      */
     $oldContent =
         file_get_contents(
@@ -521,9 +572,9 @@ function writeApplication(
 
 
     /*
-     * 本体保存
+     * 保存
      */
-    $result =
+    $written =
         file_put_contents(
             $file,
             $content,
@@ -531,7 +582,7 @@ function writeApplication(
         );
 
 
-    if ($result === false) {
+    if ($written === false) {
 
         return [
             'success' => false,
@@ -545,15 +596,161 @@ function writeApplication(
         'success' => true,
         'message' =>
             '保存しました。',
-        'path' =>
-            $normalized
+        'appName' =>
+            $appName
     ];
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| 状態
+| 新規アプリ作成
+|--------------------------------------------------------------------------
+|
+| この処理だけがmkdir()を実行する。
+|
+|--------------------------------------------------------------------------
+*/
+
+function createApplication(
+    string $baseDir,
+    string $appName,
+    string $initialContent
+): array {
+
+    $appName =
+        normalizeAppName(
+            $appName
+        );
+
+
+    if ($appName === null) {
+
+        return [
+            'success' => false,
+            'message' =>
+                'アプリ名が不正です。'
+        ];
+    }
+
+
+    $directory =
+        getAppDirectory(
+            $baseDir,
+            $appName
+        );
+
+
+    $file =
+        getAppFile(
+            $baseDir,
+            $appName
+        );
+
+
+    /*
+     * 既存チェック
+     */
+    if (is_dir($directory)) {
+
+        return [
+            'success' => false,
+            'message' =>
+                '同名のアプリがすでに存在します。'
+        ];
+    }
+
+
+    /*
+     * ディレクトリ作成
+     */
+    if (
+        !mkdir(
+            $directory,
+            0777,
+            true
+        )
+    ) {
+
+        return [
+            'success' => false,
+            'message' =>
+                'アプリディレクトリを作成できませんでした。'
+        ];
+    }
+
+
+    /*
+     * index.php作成
+     */
+    $written =
+        file_put_contents(
+            $file,
+            $initialContent,
+            LOCK_EX
+        );
+
+
+    if ($written === false) {
+
+        /*
+         * index.php作成失敗時は
+         * 作成途中のディレクトリを削除する。
+         */
+        @rmdir($directory);
+
+
+        return [
+            'success' => false,
+            'message' =>
+                'index.phpを作成できませんでした。'
+        ];
+    }
+
+
+    return [
+        'success' => true,
+        'message' =>
+            '新しいアプリを作成しました。',
+        'appName' =>
+            $appName
+    ];
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| 初期PHPコード
+|--------------------------------------------------------------------------
+*/
+
+$defaultApplicationContent =
+<<<'PHP'
+<?php
+
+declare(strict_types=1);
+
+echo '<!DOCTYPE html>';
+echo '<html lang="ja">';
+echo '<head>';
+echo '<meta charset="UTF-8">';
+echo '<title>新しいアプリ</title>';
+echo '</head>';
+echo '<body>';
+
+echo '<h1>新しいアプリ</h1>';
+
+echo '<p>このアプリはPHPから作成されました。</p>';
+
+echo '</body>';
+echo '</html>';
+
+PHP;
+
+
+/*
+|--------------------------------------------------------------------------
+| 画面状態
 |--------------------------------------------------------------------------
 */
 
@@ -561,7 +758,7 @@ $message = '';
 
 $error = '';
 
-$selectedPath = '';
+$selectedApp = '';
 
 $editorContent = '';
 
@@ -584,27 +781,86 @@ if (
 
 
     /*
-     * 読み込み
-     */
-    if ($action === 'load') {
+    |--------------------------------------------------------------------------
+    | 新規作成
+    |--------------------------------------------------------------------------
+    */
 
-        $path =
-            isset($_POST['path'])
-                ? (string)$_POST['path']
+    if ($action === 'create') {
+
+        $appName =
+            isset($_POST['app_name'])
+                ? (string)$_POST['app_name']
                 : '';
 
 
         $result =
-            readApplication(
+            createApplication(
                 $baseDir,
-                $path
+                $appName,
+                $defaultApplicationContent
             );
 
 
         if ($result['success']) {
 
-            $selectedPath =
-                (string)$result['path'];
+            $message =
+                (string)$result['message'];
+
+            $selectedApp =
+                (string)$result['appName'];
+
+
+            /*
+             * 作成したファイルを読み込んで
+             * エディタに表示
+             */
+            $loaded =
+                loadApplication(
+                    $baseDir,
+                    $selectedApp
+                );
+
+
+            if ($loaded['success']) {
+
+                $editorContent =
+                    (string)$loaded['content'];
+            }
+
+        } else {
+
+            $error =
+                (string)$result['message'];
+        }
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | 読み込み
+    |--------------------------------------------------------------------------
+    */
+
+    elseif ($action === 'load') {
+
+        $appName =
+            isset($_POST['app_name'])
+                ? (string)$_POST['app_name']
+                : '';
+
+
+        $result =
+            loadApplication(
+                $baseDir,
+                $appName
+            );
+
+
+        if ($result['success']) {
+
+            $selectedApp =
+                (string)$result['appName'];
 
             $editorContent =
                 (string)$result['content'];
@@ -621,13 +877,16 @@ if (
 
 
     /*
-     * 保存
-     */
+    |--------------------------------------------------------------------------
+    | 保存
+    |--------------------------------------------------------------------------
+    */
+
     elseif ($action === 'save') {
 
-        $path =
-            isset($_POST['path'])
-                ? (string)$_POST['path']
+        $appName =
+            isset($_POST['app_name'])
+                ? (string)$_POST['app_name']
                 : '';
 
 
@@ -638,16 +897,16 @@ if (
 
 
         $result =
-            writeApplication(
+            saveApplication(
                 $baseDir,
                 $historyBaseDir,
-                $path,
+                $appName,
                 $content
             );
 
 
-        $selectedPath =
-            $path;
+        $selectedApp =
+            $appName;
 
         $editorContent =
             $content;
@@ -667,8 +926,11 @@ if (
 
 
     /*
-     * 不明な操作
-     */
+    |--------------------------------------------------------------------------
+    | 不明な操作
+    |--------------------------------------------------------------------------
+    */
+
     else {
 
         $error =
@@ -679,7 +941,7 @@ if (
 
 /*
 |--------------------------------------------------------------------------
-| GET ?app=sample-app
+| GET ?app=xxx
 |--------------------------------------------------------------------------
 */
 
@@ -687,21 +949,21 @@ elseif (
     isset($_GET['app'])
 ) {
 
-    $path =
+    $appName =
         (string)$_GET['app'];
 
 
     $result =
-        readApplication(
+        loadApplication(
             $baseDir,
-            $path
+            $appName
         );
 
 
     if ($result['success']) {
 
-        $selectedPath =
-            (string)$result['path'];
+        $selectedApp =
+            (string)$result['appName'];
 
         $editorContent =
             (string)$result['content'];
@@ -740,7 +1002,7 @@ $applications =
 >
 
 <title>
-PHPファイル管理
+PHPアプリ管理
 </title>
 
 
@@ -760,26 +1022,26 @@ body {
 
 body {
 
+    background: #f3f5f7;
+
+    color: #202124;
+
     font-family:
         -apple-system,
         BlinkMacSystemFont,
         "Segoe UI",
         sans-serif;
-
-    background: #f3f5f7;
-
-    color: #202124;
 }
 
 
 header {
 
-    background: #17202a;
-
-    color: #fff;
-
     padding:
         16px 24px;
+
+    background: #17202a;
+
+    color: white;
 }
 
 
@@ -806,7 +1068,7 @@ main {
 
 .panel {
 
-    background: #fff;
+    background: white;
 
     border-radius: 8px;
 
@@ -825,72 +1087,60 @@ main {
 }
 
 
-.application-list {
+.panel h2 {
 
-    display: grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fill,
-            minmax(
-                220px,
-                1fr
-            )
-        );
-
-    gap: 10px;
+    margin-top: 0;
 }
 
 
-.application {
-
-    border:
-        1px solid #d5d9dd;
-
-    border-radius: 6px;
+.info {
 
     padding: 12px;
 
-    background: #fafafa;
-}
+    background: #eef4ff;
 
-
-.application strong {
-
-    display: block;
-
-    margin-bottom: 8px;
-}
-
-
-button {
-
-    border: 0;
+    border:
+        1px solid #b8c9ed;
 
     border-radius: 5px;
 
-    padding:
-        9px 16px;
+    margin-bottom: 15px;
 
-    background: #1976d2;
-
-    color: #fff;
-
-    cursor: pointer;
-
-    font-size: 14px;
+    line-height: 1.6;
 }
 
 
-button:hover {
+.success {
 
-    background: #125da7;
+    padding: 12px;
+
+    background: #e8f5e9;
+
+    border:
+        1px solid #81c784;
+
+    border-radius: 5px;
+
+    color: #256029;
+
+    margin-bottom: 20px;
 }
 
 
-button.gray {
+.error {
 
-    background: #607d8b;
+    padding: 12px;
+
+    background: #ffebee;
+
+    border:
+        1px solid #e57373;
+
+    border-radius: 5px;
+
+    color: #a51c30;
+
+    margin-bottom: 20px;
 }
 
 
@@ -907,6 +1157,12 @@ textarea {
     padding: 10px;
 
     font-size: 14px;
+}
+
+
+input {
+
+    margin-bottom: 10px;
 }
 
 
@@ -927,54 +1183,92 @@ textarea {
 }
 
 
-.success {
+button {
 
-    padding: 12px;
-
-    margin-bottom: 20px;
-
-    border:
-        1px solid #81c784;
+    border: 0;
 
     border-radius: 5px;
 
-    background: #e8f5e9;
+    padding:
+        9px 16px;
 
-    color: #256029;
+    background: #1976d2;
+
+    color: white;
+
+    cursor: pointer;
+
+    font-size: 14px;
 }
 
 
-.error {
+button:hover {
 
-    padding: 12px;
-
-    margin-bottom: 20px;
-
-    border:
-        1px solid #e57373;
-
-    border-radius: 5px;
-
-    background: #ffebee;
-
-    color: #a51c30;
+    background: #125da7;
 }
 
 
-.info {
+button.gray {
+
+    background: #607d8b;
+}
+
+
+button.green {
+
+    background: #388e3c;
+}
+
+
+button.red {
+
+    background: #c62828;
+}
+
+
+.application-list {
+
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            auto-fill,
+            minmax(
+                230px,
+                1fr
+            )
+        );
+
+    gap: 10px;
+}
+
+
+.application {
 
     padding: 12px;
 
-    margin-bottom: 15px;
-
     border:
-        1px solid #b8c9ed;
+        1px solid #d5d9dd;
 
-    border-radius: 5px;
+    border-radius: 6px;
 
-    background: #eef4ff;
+    background: #fafafa;
+}
 
-    line-height: 1.6;
+
+.application-name {
+
+    font-weight: 600;
+
+    margin-bottom: 10px;
+
+    word-break: break-all;
+}
+
+
+.application form {
+
+    margin: 0;
 }
 
 
@@ -982,11 +1276,47 @@ textarea {
 
     display: flex;
 
-    gap: 10px;
-
     flex-wrap: wrap;
 
-    margin-top: 10px;
+    gap: 10px;
+
+    margin-top: 12px;
+}
+
+
+.create-form {
+
+    max-width: 600px;
+}
+
+
+.path-display {
+
+    padding: 10px;
+
+    background: #f5f5f5;
+
+    border:
+        1px solid #ddd;
+
+    border-radius: 5px;
+
+    margin-bottom: 10px;
+
+    font-family:
+        Consolas,
+        monospace;
+
+    word-break: break-all;
+}
+
+
+code {
+
+    font-family:
+        Consolas,
+        "Courier New",
+        monospace;
 }
 
 
@@ -1025,7 +1355,7 @@ textarea {
 <header>
 
 <h1>
-PHPファイル管理・編集
+PHPアプリ管理
 </h1>
 
 </header>
@@ -1056,33 +1386,114 @@ PHPファイル管理・編集
 <?php endif; ?>
 
 
+<!-- ======================================================
+     新規アプリ作成
+     ====================================================== -->
+
 <div class="panel">
 
 <h2>
-既存アプリ
+新規アプリ作成
 </h2>
 
 
 <div class="info">
 
-この一覧はPHPが
+ここで作成した場合だけ、
 
-<code>scandir()</code>
+<code>mkdir()</code>
 
-でサーバー側から取得しています。
+で新しいアプリディレクトリを作成します。
 
 <br>
 
-ブラウザからAPIを呼び出しているわけではありません。
+既存アプリの保存処理では、新しいディレクトリを作成しません。
 
 </div>
 
 
-<?php if (count($applications) === 0): ?>
+<form
+    method="post"
+    action=""
+    class="create-form"
+>
+
+
+<input
+    type="hidden"
+    name="action"
+    value="create"
+>
+
+
+<label for="app-name">
+
+アプリ名
+
+</label>
+
+
+<input
+    id="app-name"
+    name="app_name"
+    type="text"
+    placeholder="例：test-app"
+    required
+    autocomplete="off"
+>
+
+
+<button
+    type="submit"
+    class="green"
+>
+
+アプリを作成
+
+</button>
+
+
+</form>
+
+</div>
+
+
+<!-- ======================================================
+     アプリ一覧
+     ====================================================== -->
+
+<div class="panel">
+
+<h2>
+アプリ一覧
+</h2>
+
+
+<div class="info">
+
+PHPの
+
+<code>scandir()</code>
+
+でサーバー上のディレクトリを直接調べています。
+
+<br>
+
+<code>index.php</code>
+
+を持つ既存ディレクトリだけを表示します。
+
+</div>
+
+
+<?php if (
+    count($applications) === 0
+): ?>
 
 <p>
-index.phpを持つアプリがありません。
+アプリはありません。
 </p>
+
 
 <?php else: ?>
 
@@ -1098,17 +1509,19 @@ index.phpを持つアプリがありません。
 
 <div class="application">
 
-<strong>
+
+<div class="application-name">
 
 <?= h($application['name']) ?>
 
-</strong>
+</div>
 
 
 <form
     method="post"
     action=""
 >
+
 
 <input
     type="hidden"
@@ -1119,8 +1532,8 @@ index.phpを持つアプリがありません。
 
 <input
     type="hidden"
-    name="path"
-    value="<?= h($application['path']) ?>"
+    name="app_name"
+    value="<?= h($application['name']) ?>"
 >
 
 
@@ -1132,7 +1545,9 @@ index.phpを持つアプリがありません。
 
 </button>
 
+
 </form>
+
 
 </div>
 
@@ -1142,30 +1557,50 @@ index.phpを持つアプリがありません。
 
 </div>
 
+
 <?php endif; ?>
 
 </div>
 
 
-<?php if ($selectedPath !== ''): ?>
+<!-- ======================================================
+     エディタ
+     ====================================================== -->
+
+<?php if (
+    $selectedApp !== ''
+): ?>
 
 
 <div class="panel">
 
 <h2>
-編集中
+アプリ編集
 </h2>
+
+
+<div class="path-display">
+
+<?= h($selectedApp) ?>/index.php
+
+</div>
 
 
 <div class="info">
 
-<strong>
-<?= h($selectedPath) ?>/index.php
-</strong>
+これは既存ファイルの編集です。
 
 <br>
 
-保存すると、サーバー上のこのファイルが直接更新されます。
+保存時にサーバー側PHPが直接
+
+<code>file_put_contents()</code>
+
+を実行します。
+
+<br>
+
+ブラウザからAPIを呼び出していません。
 
 </div>
 
@@ -1185,8 +1620,8 @@ index.phpを持つアプリがありません。
 
 <input
     type="hidden"
-    name="path"
-    value="<?= h($selectedPath) ?>"
+    name="app_name"
+    value="<?= h($selectedApp) ?>"
 >
 
 
@@ -1214,7 +1649,7 @@ index.phpを持つアプリがありません。
     onclick="location.reload()"
 >
 
-破棄して再読み込み
+再読み込み
 
 </button>
 
@@ -1230,81 +1665,105 @@ index.phpを持つアプリがありません。
 <?php endif; ?>
 
 
+<!-- ======================================================
+     構造確認
+     ====================================================== -->
+
 <div class="panel">
 
 <h2>
-現在の通信構造
+現在の基本構造
 </h2>
 
 
 <div class="info">
 
 <strong>
-読み込み
+① 新規作成
 </strong>
 
 <br>
 
 ブラウザ
 
-→
+→ POST
 
-POST
+→ Apache
 
-→
+→ この index.php
 
-Apache
+→ createApplication()
 
-→
+→ mkdir()
 
-この index.php
-
-→
-
-PHP
-
-→
-
-<code>file_get_contents()</code>
+→ index.php作成
 
 
 <br><br>
 
 
 <strong>
-保存
+② 読み込み
 </strong>
 
 <br>
 
 ブラウザ
 
-→
+→ POST
 
-POST
+→ Apache
 
-→
+→ この index.php
 
-Apache
+→ loadApplication()
 
-→
-
-この index.php
-
-→
-
-PHP
-
-→
-
-<code>file_put_contents()</code>
+→ file_get_contents()
 
 
 <br><br>
 
 
 <strong>
-使用していないもの
+③ 保存
+</strong>
+
+<br>
+
+ブラウザ
+
+→ POST
+
+→ Apache
+
+→ この index.php
+
+→ saveApplication()
+
+→ file_put_contents()
+
+
+<br><br>
+
+
+<strong>
+④ 履歴
+</strong>
+
+<br>
+
+保存前の内容を
+
+<code>.history/アプリ名/</code>
+
+へ退避します。
+
+
+<br><br>
+
+
+<strong>
+サーバー通信に使用していないもの
 </strong>
 
 <br>
@@ -1322,6 +1781,10 @@ XMLHttpRequest
 <br>
 
 JSON API
+
+<br>
+
+AJAX
 
 <br>
 
