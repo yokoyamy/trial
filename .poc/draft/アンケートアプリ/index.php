@@ -1,6 +1,19 @@
 <?php
 declare(strict_types=1);
+// Preview環境からのCORSを許可
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 
+if ($origin === 'null') {
+    header('Access-Control-Allow-Origin: null');
+    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+    header('Access-Control-Allow-Headers: Content-Type, X-Requested-With');
+}
+
+// CORSの事前確認リクエスト
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
 
 /*
  * アンケート管理システム
