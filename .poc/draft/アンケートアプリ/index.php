@@ -1818,13 +1818,8 @@ function apiSaveKintoneSettings(): never
         $settings
     );
 
-    // クライアントへ返す情報からパスワードを除外
-    $responseSettings = $settings['kintone'];
-    unset($responseSettings['password']);
-
     jsonResponse([
-        'success' => true,
-        'settings' => $responseSettings,  // ←ここ
+        'success' => true
     ]);
 }
 
