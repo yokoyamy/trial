@@ -1,13 +1,7 @@
 <?php
 declare(strict_types=1);
 
-echo '<pre>';
-echo '__FILE__        = ' . __FILE__ . PHP_EOL;
-echo '__DIR__         = ' . __DIR__ . PHP_EOL;
-echo 'realpath(__DIR__) = ' . realpath(__DIR__) . PHP_EOL;
-echo 'DOCUMENT_ROOT    = ' . ($_SERVER['DOCUMENT_ROOT'] ?? '') . PHP_EOL;
-echo 'SCRIPT_FILENAME  = ' . ($_SERVER['SCRIPT_FILENAME'] ?? '') . PHP_EOL;
-echo '</pre>';
+
 /*
  * アンケート管理システム
  *
