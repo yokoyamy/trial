@@ -3,969 +3,1225 @@ declare(strict_types=1);
 
 /**
  * アンケート管理システム
- * Single Entry: index.php
+ * 通信基盤 第1段階
+ * screen: admin
+ * Request ID: c22fc0418a3e0126fad9e587d67c1353
  *
- * PHP 8.4 / 8.5
- *
- * 第1段階:
- * - GET / POST / OPTIONS
- * - action routing
- * - JSON response
- * - Session
- * - CSRF
- * - Request ID
- * - CORS / Origin
- * - 共通例外処理
- * - PHP Error対策
- *
- * 業務APIは後続段階で追加する。
+ * Apache + PHP 8.x
+ * 外部ライブラリ不要
  */
 
+session_start();
+
 /* =========================================================
- * 基本設定
+ * Configuration
  * ======================================================= */
 
 const APP_NAME = 'アンケート管理システム';
+const DATA_DIR = __DIR__ . '/data';
+const DATA_FILE = DATA_DIR . '/surveys.json';
 
-const CSRF_ACTION = 'csrf';
-const HEALTH_ACTION = 'health';
+if (!is_dir(DATA_DIR)) {
+    @mkdir(DATA_DIR, 0775, true);
+}
 
-/*
- * 本番環境では false。
- * 開発時に必要なら環境変数等から切り替える。
- */
-const DEBUG = false;
-
-/*
- * 同一オリジンを基本とする。
- *
- * cross-originを許可する場合だけ明示的に追加する。
- *
- * 例:
- * [
- *     'https://example.com'
- * ]
- */
-const CORS_ALLOWED_ORIGINS = [];
-
-/*
- * fetch timeout等はフロントエンド側にも
- * 同じ設定値を提供できるようにする。
- */
-const CLIENT_TIMEOUT_MS = 30000;
-
+if (!file_exists(DATA_FILE)) {
+    file_put_contents(
+        DATA_FILE,
+        json_encode([], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT),
+        LOCK_EX
+    );
+}
 
 /* =========================================================
- * PHPエラー設定
+ * Helpers
  * ======================================================= */
 
-ini_set('display_errors', '0');
-ini_set('display_startup_errors', '0');
-
-error_reporting(E_ALL);
-
-
-/* =========================================================
- * 共通ユーティリティ
- * ======================================================= */
-
-/**
- * Request ID生成
- */
-function generateRequestId(): string
+function h(mixed $value): string
 {
-    try {
-        return bin2hex(random_bytes(16));
-    } catch (Throwable) {
-        return uniqid('req_', true);
-    }
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 }
 
-
-/**
- * Request ID取得
- *
- * クライアント指定値をそのまま信用しない。
- */
-function getRequestId(): string
+function loadSurveys(): array
 {
-    $header = $_SERVER['HTTP_X_REQUEST_ID'] ?? '';
-
-    if (
-        is_string($header)
-        && preg_match('/^[A-Za-z0-9._-]{1,64}$/', $header)
-    ) {
-        /*
-         * 外部から渡された値をそのままログ上の
-         * 識別子として使わず、サーバー側IDを生成する。
-         */
-    }
-
-    return generateRequestId();
-}
-
-
-/**
- * ログ出力
- *
- * 秘密情報を引数として渡さないこと。
- */
-function appLog(
-    string $level,
-    string $message,
-    array $context = []
-): void {
-    $safeContext = [];
-
-    foreach ($context as $key => $value) {
-        /*
-         * 念のため秘密情報らしいキーは除外。
-         */
-        $lowerKey = strtolower((string)$key);
-
-        if (
-            str_contains($lowerKey, 'password')
-            || str_contains($lowerKey, 'token')
-            || str_contains($lowerKey, 'cookie')
-            || str_contains($lowerKey, 'authorization')
-            || str_contains($lowerKey, 'secret')
-        ) {
-            continue;
-        }
-
-        $safeContext[$key] = $value;
-    }
-
-    $line = sprintf(
-        '[%s] [%s] %s %s',
-        date('c'),
-        strtoupper($level),
-        $message,
-        $safeContext !== []
-            ? json_encode(
-                $safeContext,
-                JSON_UNESCAPED_UNICODE |
-                JSON_UNESCAPED_SLASHES |
-                JSON_INVALID_UTF8_SUBSTITUTE
-            )
-            : ''
-    );
-
-    error_log($line);
-}
-
-
-/**
- * JSONレスポンス
- */
-function sendJson(
-    array $body,
-    int $statusCode = 200,
-    array $headers = []
-): never {
-    http_response_code($statusCode);
-
-    header('Content-Type: application/json; charset=UTF-8');
-    header('Cache-Control: no-store');
-    header('X-Content-Type-Options: nosniff');
-
-    foreach ($headers as $name => $value) {
-        header($name . ': ' . $value);
-    }
-
-    echo json_encode(
-        $body,
-        JSON_UNESCAPED_UNICODE |
-        JSON_UNESCAPED_SLASHES |
-        JSON_INVALID_UTF8_SUBSTITUTE
-    );
-
-    exit;
-}
-
-
-/**
- * 成功レスポンス
- */
-function successResponse(
-    array $data = [],
-    string $message = '',
-    int $statusCode = 200
-): never {
-    sendJson(
-        [
-            'success' => true,
-            'data' => $data,
-            'message' => $message,
-        ],
-        $statusCode
-    );
-}
-
-
-/**
- * エラーレスポンス
- */
-function errorResponse(
-    string $code,
-    string $message,
-    int $statusCode = 400,
-    ?string $requestId = null
-): never {
-    $error = [
-        'code' => $code,
-        'message' => $message,
-    ];
-
-    if ($requestId !== null && $requestId !== '') {
-        $error['requestId'] = $requestId;
-    }
-
-    sendJson(
-        [
-            'success' => false,
-            'error' => $error,
-        ],
-        $statusCode
-    );
-}
-
-
-/* =========================================================
- * Request ID
- * ======================================================= */
-
-$requestId = getRequestId();
-
-header('X-Request-Id: ' . $requestId);
-
-
-/* =========================================================
- * セキュリティヘッダー
- * ======================================================= */
-
-header('X-Frame-Options: SAMEORIGIN');
-header('Referrer-Policy: strict-origin-when-cross-origin');
-header(
-    'Content-Security-Policy: ' .
-    "default-src 'self'; " .
-    "script-src 'self' 'unsafe-inline'; " .
-    "style-src 'self' 'unsafe-inline'; " .
-    "img-src 'self' data:; " .
-    "connect-src 'self'; " .
-    "font-src 'self' data:; " .
-    "object-src 'none'; " .
-    "base-uri 'self'; " .
-    "form-action 'self'; " .
-    "frame-ancestors 'self'"
-);
-
-
-/* =========================================================
- * HTTPS判定
- * ======================================================= */
-
-$isHttps =
-    (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-    || ((int)($_SERVER['SERVER_PORT'] ?? 0) === 443);
-
-
-/* =========================================================
- * Session
- * ======================================================= */
-
-if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_set_cookie_params([
-        'lifetime' => 0,
-        'path' => '/',
-        'secure' => $isHttps,
-        'httponly' => true,
-        'samesite' => 'Lax',
-    ]);
-
-    session_start();
-}
-
-
-/* =========================================================
- * Origin / CORS
- * ======================================================= */
-
-$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-
-$isAllowedOrigin = false;
-
-if ($origin !== '') {
-    $isAllowedOrigin = in_array(
-        $origin,
-        CORS_ALLOWED_ORIGINS,
-        true
-    );
-}
-
-
-/**
- * 同一オリジン判定
- */
-function isSameOriginRequest(): bool
-{
-    $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-
-    if ($origin === '') {
-        return true;
-    }
-
-    $scheme =
-        (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-            ? 'https'
-            : 'http';
-
-    $host = $_SERVER['HTTP_HOST'] ?? '';
-
-    if ($host === '') {
-        return false;
-    }
-
-    return hash_equals(
-        $scheme . '://' . $host,
-        $origin
-    );
-}
-
-
-/*
- * CORS設定。
- *
- * 同一オリジンの場合はCORSヘッダーを付けない。
- */
-if ($origin !== '') {
-    if ($isAllowedOrigin) {
-        header('Access-Control-Allow-Origin: ' . $origin);
-        header('Access-Control-Allow-Credentials: true');
-        header('Vary: Origin');
-    } elseif (!isSameOriginRequest()) {
-        /*
-         * 許可されていないcross-origin。
-         *
-         * preflightの場合は後段で処理する。
-         * 通常リクエストではブラウザからレスポンスを
-         * 読ませない構成とする。
-         */
-    }
-}
-
-
-/* =========================================================
- * OPTIONS / CORS Preflight
- * ======================================================= */
-
-$method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
-
-if ($method === 'OPTIONS') {
-
-    /*
-     * cross-origin preflightの場合だけ処理。
-     */
-    if ($origin !== '' && !$isAllowedOrigin && !isSameOriginRequest()) {
-        http_response_code(403);
-
-        header('Content-Type: application/json; charset=UTF-8');
-
-        echo json_encode(
-            [
-                'success' => false,
-                'error' => [
-                    'code' => 'CORS_ORIGIN_DENIED',
-                    'message' => '許可されていないOriginです。',
-                    'requestId' => $requestId,
-                ],
-            ],
-            JSON_UNESCAPED_UNICODE |
-            JSON_UNESCAPED_SLASHES
-        );
-
-        exit;
-    }
-
-    /*
-     * preflightに業務副作用を発生させない。
-     */
-    header(
-        'Access-Control-Allow-Methods: GET, POST, OPTIONS'
-    );
-
-    $requestedHeaders =
-        $_SERVER['HTTP_ACCESS_CONTROL_REQUEST_HEADERS'] ?? '';
-
-    if ($requestedHeaders !== '') {
-        /*
-         * 実際に利用を許可するヘッダーのみを返す。
-         */
-        $allowedHeaders = [];
-
-        $requested = array_map(
-            'trim',
-            explode(',', $requestedHeaders)
-        );
-
-        foreach ($requested as $headerName) {
-            $normalized = strtolower($headerName);
-
-            if (
-                $normalized === 'content-type'
-                || $normalized === 'x-csrf-token'
-                || $normalized === 'x-request-id'
-            ) {
-                $allowedHeaders[] = $headerName;
-            }
-        }
-
-        if ($allowedHeaders !== []) {
-            header(
-                'Access-Control-Allow-Headers: ' .
-                implode(', ', $allowedHeaders)
-            );
-        }
-    }
-
-    if ($isAllowedOrigin) {
-        header('Access-Control-Allow-Credentials: true');
-    }
-
-    http_response_code(204);
-    exit;
-}
-
-
-/* =========================================================
- * HTTPメソッド
- * ======================================================= */
-
-if (!in_array($method, ['GET', 'POST'], true)) {
-    errorResponse(
-        'METHOD_NOT_ALLOWED',
-        '許可されていないHTTPメソッドです。',
-        405,
-        $requestId
-    );
-}
-
-
-/* =========================================================
- * PHP Error Handler
- * ======================================================= */
-
-set_error_handler(
-    function (
-        int $severity,
-        string $message,
-        string $file,
-        int $line
-    ) use ($requestId): bool {
-
-        /*
-         * Warning / Notice等をレスポンスへ直接出さない。
-         */
-        appLog(
-            'PHP',
-            $message,
-            [
-                'requestId' => $requestId,
-                'severity' => $severity,
-                'file' => basename($file),
-                'line' => $line,
-            ]
-        );
-
-        /*
-         * 通常のPHPエラーを例外化。
-         */
-        if (!(error_reporting() & $severity)) {
-            return false;
-        }
-
-        throw new ErrorException(
-            $message,
-            0,
-            $severity,
-            $file,
-            $line
-        );
-    }
-);
-
-
-/* =========================================================
- * Shutdown Handler
- * ======================================================= */
-
-register_shutdown_function(
-    function () use ($requestId): void {
-
-        $error = error_get_last();
-
-        if ($error === null) {
-            return;
-        }
-
-        $fatalTypes = [
-            E_ERROR,
-            E_PARSE,
-            E_CORE_ERROR,
-            E_COMPILE_ERROR,
-        ];
-
-        if (in_array($error['type'], $fatalTypes, true)) {
-
-            appLog(
-                'FATAL',
-                $error['message'],
-                [
-                    'requestId' => $requestId,
-                    'file' => basename($error['file']),
-                    'line' => $error['line'],
-                    'type' => $error['type'],
-                ]
-            );
-
-            /*
-             * 既にレスポンスが開始されている可能性があるため、
-             * shutdown handlerだけでJSON化できるとは考えない。
-             *
-             * 実際のFatal Error対策は構文検査・Apache実動作確認と
-             * あわせて行う。
-             */
-        }
-    }
-);
-
-
-/* =========================================================
- * 入力処理
- * ======================================================= */
-
-/**
- * POST JSON取得
- */
-function getJsonInput(): array
-{
-    $raw = file_get_contents('php://input');
-
-    if ($raw === false || trim($raw) === '') {
+    if (!file_exists(DATA_FILE)) {
         return [];
     }
 
-    try {
-        $data = json_decode(
-            $raw,
-            true,
-            512,
-            JSON_THROW_ON_ERROR
-        );
-    } catch (JsonException) {
-        throw new InvalidArgumentException(
-            'JSON形式が不正です。'
-        );
-    }
+    $json = file_get_contents(DATA_FILE);
+    $data = json_decode($json ?: '[]', true);
 
-    if (!is_array($data)) {
-        throw new InvalidArgumentException(
-            'JSONオブジェクトを指定してください。'
-        );
-    }
-
-    return $data;
+    return is_array($data) ? $data : [];
 }
 
-
-/**
- * action取得
- */
-function getAction(string $method): string
+function saveSurveys(array $surveys): bool
 {
-    if ($method === 'GET') {
-        $action = $_GET['action'] ?? '';
-    } else {
-        $action = $_GET['action'] ?? '';
+    return file_put_contents(
+        DATA_FILE,
+        json_encode(
+            array_values($surveys),
+            JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
+        ),
+        LOCK_EX
+    ) !== false;
+}
 
-        if ($action === '') {
-            $input = getJsonInput();
-            $action = $input['action'] ?? '';
+function redirect(string $url = 'index.php'): never
+{
+    header('Location: ' . $url);
+    exit;
+}
+
+function flash(string $message, string $type = 'success'): void
+{
+    $_SESSION['flash'] = [
+        'message' => $message,
+        'type' => $type,
+    ];
+}
+
+function getFlash(): ?array
+{
+    $flash = $_SESSION['flash'] ?? null;
+    unset($_SESSION['flash']);
+
+    return $flash;
+}
+
+function generateId(): string
+{
+    return bin2hex(random_bytes(8));
+}
+
+function csrfToken(): string
+{
+    if (empty($_SESSION['csrf'])) {
+        $_SESSION['csrf'] = bin2hex(random_bytes(32));
+    }
+
+    return $_SESSION['csrf'];
+}
+
+function verifyCsrf(): void
+{
+    $token = $_POST['csrf'] ?? '';
+
+    if (
+        !$token ||
+        empty($_SESSION['csrf']) ||
+        !hash_equals($_SESSION['csrf'], $token)
+    ) {
+        http_response_code(403);
+        exit('Invalid CSRF token.');
+    }
+}
+
+function findSurvey(array $surveys, string $id): ?array
+{
+    foreach ($surveys as $survey) {
+        if (($survey['id'] ?? '') === $id) {
+            return $survey;
         }
     }
 
-    if (!is_string($action)) {
-        return '';
-    }
-
-    return trim($action);
+    return null;
 }
 
-
-/* =========================================================
- * CSRF
- * ======================================================= */
-
-/**
- * CSRF token取得/生成
- */
-function getCsrfToken(): string
+function statusLabel(string $status): string
 {
-    if (
-        !isset($_SESSION['csrf_token'])
-        || !is_string($_SESSION['csrf_token'])
-        || $_SESSION['csrf_token'] === ''
-    ) {
-        $_SESSION['csrf_token'] = bin2hex(
-            random_bytes(32)
-        );
-    }
-
-    return $_SESSION['csrf_token'];
+    return match ($status) {
+        'published' => '公開中',
+        'closed' => '終了',
+        default => '下書き',
+    };
 }
 
-
-/**
- * CSRF検証
- */
-function validateCsrfToken(
-    string $requestId
-): void {
-
-    $headerToken =
-        $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
-
-    $bodyToken = '';
-
-    if ($headerToken === '') {
-        try {
-            $input = getJsonInput();
-
-            if (isset($input['csrfToken'])) {
-                $bodyToken = is_string($input['csrfToken'])
-                    ? $input['csrfToken']
-                    : '';
-            }
-        } catch (Throwable) {
-            /*
-             * JSONエラーは後段で入力エラーとして扱う。
-             */
-        }
-    }
-
-    $token =
-        $headerToken !== ''
-            ? $headerToken
-            : $bodyToken;
-
-    $sessionToken =
-        $_SESSION['csrf_token'] ?? '';
-
-    if (
-        !is_string($sessionToken)
-        || $sessionToken === ''
-    ) {
-        errorResponse(
-            'CSRF_TOKEN_INVALID',
-            'CSRFトークンが不正です。',
-            403,
-            $requestId
-        );
-    }
-
-    if (
-        $token === ''
-        || !is_string($token)
-        || !hash_equals($sessionToken, $token)
-    ) {
-        errorResponse(
-            'CSRF_TOKEN_INVALID',
-            'CSRFトークンが不正です。',
-            403,
-            $requestId
-        );
-    }
+function statusClass(string $status): string
+{
+    return match ($status) {
+        'published' => 'status-published',
+        'closed' => 'status-closed',
+        default => 'status-draft',
+    };
 }
 
-
 /* =========================================================
- * Action定義
+ * Actions
  * ======================================================= */
 
-const ALLOWED_GET_ACTIONS = [
-    'health',
-    'csrf',
-];
+$action = $_POST['action'] ?? $_GET['action'] ?? '';
 
-const ALLOWED_POST_ACTIONS = [
-    /*
-     * 後続段階で追加:
-     *
-     * survey_create
-     * survey_update
-     * survey_delete
-     * survey_status
-     * response_submit
-     * customer_sync
-     * mail_send
-     * etc.
-     */
-];
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    verifyCsrf();
 
+    $surveys = loadSurveys();
 
-/* =========================================================
- * API処理
- * ======================================================= */
+    switch ($action) {
 
-try {
+        case 'create':
+            $title = trim((string)($_POST['title'] ?? ''));
+            $description = trim((string)($_POST['description'] ?? ''));
 
-    $action = getAction($method);
-
-    /*
-     * actionがない場合。
-     */
-    if ($action === '') {
-
-        /*
-         * actionなしGETは画面表示として扱う。
-         */
-        if ($method === 'GET') {
-            $screen = $_GET['screen'] ?? 'admin';
-
-            if (!is_string($screen)) {
-                $screen = 'admin';
+            if ($title === '') {
+                flash('アンケート名を入力してください。', 'error');
+                redirect();
             }
 
-            $screen = trim($screen);
+            $now = date('Y-m-d H:i:s');
 
-            /*
-             * 最小画面。
-             *
-             * 実際の管理画面は後続段階で実装。
-             */
-            header(
-                'Content-Type: text/html; charset=UTF-8'
+            $surveys[] = [
+                'id' => generateId(),
+                'title' => $title,
+                'description' => $description,
+                'status' => 'draft',
+                'responses' => 0,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+
+            if (saveSurveys($surveys)) {
+                flash('アンケートを作成しました。');
+            } else {
+                flash('保存に失敗しました。', 'error');
+            }
+
+            redirect();
+
+        case 'update':
+            $id = (string)($_POST['id'] ?? '');
+            $title = trim((string)($_POST['title'] ?? ''));
+            $description = trim((string)($_POST['description'] ?? ''));
+
+            if ($title === '') {
+                flash('アンケート名を入力してください。', 'error');
+                redirect();
+            }
+
+            foreach ($surveys as &$survey) {
+                if (($survey['id'] ?? '') === $id) {
+                    $survey['title'] = $title;
+                    $survey['description'] = $description;
+                    $survey['updated_at'] = date('Y-m-d H:i:s');
+                    break;
+                }
+            }
+            unset($survey);
+
+            if (saveSurveys($surveys)) {
+                flash('アンケートを更新しました。');
+            } else {
+                flash('更新に失敗しました。', 'error');
+            }
+
+            redirect();
+
+        case 'status':
+            $id = (string)($_POST['id'] ?? '');
+            $status = (string)($_POST['status'] ?? 'draft');
+
+            if (!in_array($status, ['draft', 'published', 'closed'], true)) {
+                flash('不正なステータスです。', 'error');
+                redirect();
+            }
+
+            foreach ($surveys as &$survey) {
+                if (($survey['id'] ?? '') === $id) {
+                    $survey['status'] = $status;
+                    $survey['updated_at'] = date('Y-m-d H:i:s');
+                    break;
+                }
+            }
+            unset($survey);
+
+            saveSurveys($surveys);
+            flash('ステータスを変更しました。');
+            redirect();
+
+        case 'delete':
+            $id = (string)($_POST['id'] ?? '');
+
+            $before = count($surveys);
+
+            $surveys = array_filter(
+                $surveys,
+                static fn(array $survey): bool =>
+                    ($survey['id'] ?? '') !== $id
             );
 
-            $safeScreen = htmlspecialchars(
-                $screen,
-                ENT_QUOTES | ENT_SUBSTITUTE,
-                'UTF-8'
-            );
+            if ($before === count($surveys)) {
+                flash('対象データが見つかりません。', 'error');
+            } elseif (saveSurveys($surveys)) {
+                flash('アンケートを削除しました。');
+            } else {
+                flash('削除に失敗しました。', 'error');
+            }
 
-            /*
-             * 現在アクセスされているindex.phpのURLを
-             * サーバー側で生成。
-             *
-             * JavaScript側で物理パスを推測しない。
-             */
-            $scheme =
-                $isHttps ? 'https' : 'http';
-
-            $host =
-                $_SERVER['HTTP_HOST'] ?? 'localhost';
-
-            $script =
-                $_SERVER['SCRIPT_NAME'] ?? '/index.php';
-
-            $entryPoint =
-                $scheme . '://' . $host . $script;
-
-            $safeEntryPoint = htmlspecialchars(
-                $entryPoint,
-                ENT_QUOTES | ENT_SUBSTITUTE,
-                'UTF-8'
-            );
-
-            $safeRequestId = htmlspecialchars(
-                $requestId,
-                ENT_QUOTES | ENT_SUBSTITUTE,
-                'UTF-8'
-            );
-
-            echo '<!doctype html>';
-            echo '<html lang="ja">';
-            echo '<head>';
-            echo '<meta charset="UTF-8">';
-            echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
-            echo '<meta name="application-entry-point" content="';
-            echo $safeEntryPoint;
-            echo '">';
-            echo '<title>';
-            echo htmlspecialchars(
-                APP_NAME,
-                ENT_QUOTES | ENT_SUBSTITUTE,
-                'UTF-8'
-            );
-            echo '</title>';
-            echo '</head>';
-            echo '<body>';
-
-            echo '<h1>';
-            echo htmlspecialchars(
-                APP_NAME,
-                ENT_QUOTES | ENT_SUBSTITUTE,
-                'UTF-8'
-            );
-            echo '</h1>';
-
-            echo '<p>通信基盤 第1段階</p>';
-
-            echo '<p>screen: ';
-            echo $safeScreen;
-            echo '</p>';
-
-            echo '<p>Request ID: ';
-            echo $safeRequestId;
-            echo '</p>';
-
-            echo '</body>';
-            echo '</html>';
-
-            exit;
-        }
-
-        errorResponse(
-            'ACTION_REQUIRED',
-            'actionを指定してください。',
-            400,
-            $requestId
-        );
+            redirect();
     }
-
-
-    /* =====================================================
-     * GET
-     * =================================================== */
-
-    if ($method === 'GET') {
-
-        if (!in_array(
-            $action,
-            ALLOWED_GET_ACTIONS,
-            true
-        )) {
-            errorResponse(
-                'ACTION_NOT_FOUND',
-                '指定されたactionは存在しません。',
-                404,
-                $requestId
-            );
-        }
-
-
-        /* ---------------------------------------------
-         * health
-         * ------------------------------------------- */
-
-        if ($action === HEALTH_ACTION) {
-
-            successResponse(
-                [
-                    'status' => 'ok',
-                    'application' => APP_NAME,
-                    'phpVersion' => PHP_VERSION,
-                    'requestId' => $requestId,
-                    'timestamp' => date('c'),
-                ]
-            );
-        }
-
-
-        /* ---------------------------------------------
-         * csrf
-         * ------------------------------------------- */
-
-        if ($action === CSRF_ACTION) {
-
-            $token = getCsrfToken();
-
-            successResponse(
-                [
-                    'csrfToken' => $token,
-                    'requestId' => $requestId,
-                ]
-            );
-        }
-    }
-
-
-    /* =====================================================
-     * POST
-     * =================================================== */
-
-    if ($method === 'POST') {
-
-        if (!in_array(
-            $action,
-            ALLOWED_POST_ACTIONS,
-            true
-        )) {
-            errorResponse(
-                'ACTION_NOT_FOUND',
-                '指定されたactionは存在しません。',
-                404,
-                $requestId
-            );
-        }
-
-        /*
-         * 現段階ではPOST業務APIは未実装。
-         *
-         * 後続段階で各actionを追加する。
-         */
-        validateCsrfToken($requestId);
-    }
-
-
-    /*
-     * 想定外。
-     */
-    errorResponse(
-        'INTERNAL_SERVER_ERROR',
-        'サーバー内部でエラーが発生しました。',
-        500,
-        $requestId
-    );
-
-} catch (InvalidArgumentException $e) {
-
-    appLog(
-        'WARNING',
-        $e->getMessage(),
-        [
-            'requestId' => $requestId,
-            'action' => $action ?? '',
-        ]
-    );
-
-    errorResponse(
-        'VALIDATION_ERROR',
-        $e->getMessage(),
-        422,
-        $requestId
-    );
-
-} catch (Throwable $e) {
-
-    /*
-     * 内部例外を利用者へ直接出さない。
-     */
-    appLog(
-        'ERROR',
-        $e->getMessage(),
-        [
-            'requestId' => $requestId,
-            'exception' => get_class($e),
-            'file' => basename($e->getFile()),
-            'line' => $e->getLine(),
-        ]
-    );
-
-    errorResponse(
-        'INTERNAL_SERVER_ERROR',
-        'サーバー内部でエラーが発生しました。',
-        500,
-        $requestId
-    );
 }
+
+/* =========================================================
+ * Display
+ * ======================================================= */
+
+$surveys = loadSurveys();
+
+usort(
+    $surveys,
+    static fn(array $a, array $b): int =>
+        strcmp(
+            (string)($b['updated_at'] ?? ''),
+            (string)($a['updated_at'] ?? '')
+        )
+);
+
+$flash = getFlash();
+
+$total = count($surveys);
+$published = count(
+    array_filter(
+        $surveys,
+        static fn(array $s): bool =>
+            ($s['status'] ?? '') === 'published'
+    )
+);
+$draft = count(
+    array_filter(
+        $surveys,
+        static fn(array $s): bool =>
+            ($s['status'] ?? '') === 'draft'
+    )
+);
+$responses = array_sum(
+    array_map(
+        static fn(array $s): int => (int)($s['responses'] ?? 0),
+        $surveys
+    )
+);
+
+$editId = (string)($_GET['edit'] ?? '');
+$editSurvey = $editId !== '' ? findSurvey($surveys, $editId) : null;
+
+?>
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><?= h(APP_NAME) ?> - 管理</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    background: #f5f7fa;
+    color: #1f2937;
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        "Hiragino Kaku Gothic ProN",
+        "Yu Gothic",
+        Meiryo,
+        sans-serif;
+}
+
+a {
+    color: inherit;
+    text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+    font: inherit;
+}
+
+.header {
+    height: 64px;
+    background: #111827;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    padding: 0 28px;
+    justify-content: space-between;
+}
+
+.logo {
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.logo span {
+    color: #93c5fd;
+    margin-left: 8px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.header-right {
+    font-size: 13px;
+    color: #d1d5db;
+}
+
+.layout {
+    display: flex;
+    min-height: calc(100vh - 64px);
+}
+
+.sidebar {
+    width: 230px;
+    background: #fff;
+    border-right: 1px solid #e5e7eb;
+    padding: 24px 14px;
+}
+
+.nav-title {
+    color: #9ca3af;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 0 12px 8px;
+    letter-spacing: .08em;
+}
+
+.nav-item {
+    display: block;
+    padding: 11px 12px;
+    border-radius: 7px;
+    margin-bottom: 4px;
+    font-size: 14px;
+    color: #4b5563;
+}
+
+.nav-item.active {
+    background: #eff6ff;
+    color: #2563eb;
+    font-weight: 700;
+}
+
+.main {
+    flex: 1;
+    padding: 30px;
+    max-width: 1500px;
+}
+
+.page-title {
+    margin: 0;
+    font-size: 25px;
+    font-weight: 700;
+}
+
+.page-subtitle {
+    color: #6b7280;
+    font-size: 13px;
+    margin-top: 7px;
+}
+
+.topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 24px;
+}
+
+.btn {
+    border: 0;
+    border-radius: 7px;
+    padding: 10px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.btn-primary {
+    background: #2563eb;
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: #1d4ed8;
+}
+
+.btn-secondary {
+    background: #fff;
+    color: #374151;
+    border: 1px solid #d1d5db;
+}
+
+.btn-danger {
+    background: #fff;
+    color: #dc2626;
+    border: 1px solid #fecaca;
+}
+
+.btn-small {
+    padding: 7px 10px;
+    font-size: 12px;
+}
+
+.stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.stat {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 9px;
+    padding: 18px 20px;
+}
+
+.stat-label {
+    color: #6b7280;
+    font-size: 12px;
+    margin-bottom: 8px;
+}
+
+.stat-value {
+    font-size: 26px;
+    font-weight: 700;
+}
+
+.card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 9px;
+    overflow: hidden;
+}
+
+.card-header {
+    padding: 17px 20px;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.card-title {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.table-wrap {
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th,
+td {
+    padding: 14px 16px;
+    text-align: left;
+    border-bottom: 1px solid #eef0f3;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+th {
+    color: #6b7280;
+    font-size: 11px;
+    font-weight: 700;
+    background: #fafafa;
+}
+
+tr:last-child td {
+    border-bottom: 0;
+}
+
+.survey-title {
+    font-weight: 600;
+    color: #111827;
+}
+
+.survey-description {
+    color: #6b7280;
+    margin-top: 4px;
+    max-width: 420px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.status {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.status-draft {
+    background: #f3f4f6;
+    color: #4b5563;
+}
+
+.status-published {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.status-closed {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.inline-form {
+    display: inline;
+}
+
+.empty {
+    padding: 60px 20px;
+    text-align: center;
+    color: #9ca3af;
+}
+
+.alert {
+    border-radius: 7px;
+    padding: 12px 15px;
+    margin-bottom: 20px;
+    font-size: 13px;
+}
+
+.alert-success {
+    background: #ecfdf5;
+    border: 1px solid #a7f3d0;
+    color: #047857;
+}
+
+.alert-error {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #b91c1c;
+}
+
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(17, 24, 39, .45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 100;
+}
+
+.modal {
+    width: min(600px, 100%);
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.2);
+}
+
+.modal-header {
+    padding: 18px 22px;
+    border-bottom: 1px solid #e5e7eb;
+    font-weight: 700;
+}
+
+.modal-body {
+    padding: 22px;
+}
+
+.modal-footer {
+    padding: 15px 22px;
+    border-top: 1px solid #e5e7eb;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.form-group {
+    margin-bottom: 17px;
+}
+
+.form-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 7px;
+}
+
+.form-control {
+    width: 100%;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    padding: 10px 11px;
+    outline: none;
+    background: #fff;
+}
+
+.form-control:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37,99,235,.1);
+}
+
+textarea.form-control {
+    min-height: 110px;
+    resize: vertical;
+}
+
+@media (max-width: 900px) {
+    .sidebar {
+        display: none;
+    }
+
+    .main {
+        padding: 20px;
+    }
+
+    .stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 560px) {
+    .header {
+        padding: 0 16px;
+    }
+
+    .main {
+        padding: 14px;
+    }
+
+    .stats {
+        grid-template-columns: 1fr;
+    }
+
+    .topbar {
+        flex-direction: column;
+        gap: 15px;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<header class="header">
+    <div class="logo">
+        <?= h(APP_NAME) ?>
+        <span>通信基盤 第1段階</span>
+    </div>
+    <div class="header-right">
+        screen: admin
+    </div>
+</header>
+
+<div class="layout">
+
+    <aside class="sidebar">
+        <div class="nav-title">MENU</div>
+
+        <a href="index.php" class="nav-item active">
+            アンケート管理
+        </a>
+
+        <a href="index.php" class="nav-item">
+            回答データ
+        </a>
+
+        <a href="index.php" class="nav-item">
+            集計・レポート
+        </a>
+
+        <div style="height:25px"></div>
+
+        <div class="nav-title">SYSTEM</div>
+
+        <a href="index.php" class="nav-item">
+            システム設定
+        </a>
+    </aside>
+
+    <main class="main">
+
+        <div class="topbar">
+            <div>
+                <h1 class="page-title">アンケート管理</h1>
+                <div class="page-subtitle">
+                    アンケートの作成・公開状態・回答状況を管理します。
+                </div>
+            </div>
+
+            <button
+                type="button"
+                class="btn btn-primary"
+                onclick="openCreateModal()"
+            >
+                ＋ アンケート作成
+            </button>
+        </div>
+
+        <?php if ($flash): ?>
+            <div class="alert alert-<?= h($flash['type']) ?>">
+                <?= h($flash['message']) ?>
+            </div>
+        <?php endif; ?>
+
+        <section class="stats">
+
+            <div class="stat">
+                <div class="stat-label">アンケート総数</div>
+                <div class="stat-value"><?= $total ?></div>
+            </div>
+
+            <div class="stat">
+                <div class="stat-label">公開中</div>
+                <div class="stat-value"><?= $published ?></div>
+            </div>
+
+            <div class="stat">
+                <div class="stat-label">下書き</div>
+                <div class="stat-value"><?= $draft ?></div>
+            </div>
+
+            <div class="stat">
+                <div class="stat-label">回答総数</div>
+                <div class="stat-value"><?= $responses ?></div>
+            </div>
+
+        </section>
+
+        <section class="card">
+
+            <div class="card-header">
+                <div class="card-title">アンケート一覧</div>
+                <div style="font-size:12px;color:#9ca3af">
+                    <?= $total ?> 件
+                </div>
+            </div>
+
+            <?php if (!$surveys): ?>
+
+                <div class="empty">
+                    <div style="font-size:30px;margin-bottom:10px">📋</div>
+                    <div>アンケートがありません。</div>
+                    <div style="font-size:12px;margin-top:5px">
+                        「アンケート作成」から登録してください。
+                    </div>
+                </div>
+
+            <?php else: ?>
+
+                <div class="table-wrap">
+
+                    <table>
+
+                        <thead>
+                        <tr>
+                            <th>アンケート</th>
+                            <th>ステータス</th>
+                            <th>回答数</th>
+                            <th>更新日時</th>
+                            <th>操作</th>
+                        </tr>
+                        </thead>
+
+                        <tbody>
+
+                        <?php foreach ($surveys as $survey): ?>
+
+                            <?php
+                            $id = (string)$survey['id'];
+                            $status = (string)($survey['status'] ?? 'draft');
+                            ?>
+
+                            <tr>
+
+                                <td>
+                                    <div class="survey-title">
+                                        <?= h($survey['title'] ?? '') ?>
+                                    </div>
+
+                                    <?php if (!empty($survey['description'])): ?>
+                                        <div class="survey-description">
+                                            <?= h($survey['description']) ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </td>
+
+                                <td>
+                                    <span class="status <?= h(statusClass($status)) ?>">
+                                        <?= h(statusLabel($status)) ?>
+                                    </span>
+                                </td>
+
+                                <td>
+                                    <?= (int)($survey['responses'] ?? 0) ?>
+                                </td>
+
+                                <td>
+                                    <?= h($survey['updated_at'] ?? '-') ?>
+                                </td>
+
+                                <td>
+                                    <div class="actions">
+
+                                        <a
+                                            href="?edit=<?= urlencode($id) ?>"
+                                            class="btn btn-secondary btn-small"
+                                        >
+                                            編集
+                                        </a>
+
+                                        <?php if ($status === 'draft'): ?>
+
+                                            <form
+                                                method="post"
+                                                class="inline-form"
+                                            >
+                                                <input
+                                                    type="hidden"
+                                                    name="csrf"
+                                                    value="<?= h(csrfToken()) ?>"
+                                                >
+                                                <input
+                                                    type="hidden"
+                                                    name="action"
+                                                    value="status"
+                                                >
+                                                <input
+                                                    type="hidden"
+                                                    name="id"
+                                                    value="<?= h($id) ?>"
+                                                >
+                                                <input
+                                                    type="hidden"
+                                                    name="status"
+                                                    value="published"
+                                                >
+
+                                                <button
+                                                    class="btn btn-primary btn-small"
+                                                    type="submit"
+                                                >
+                                                    公開
+                                                </button>
+                                            </form>
+
+                                        <?php elseif ($status === 'published'): ?>
+
+                                            <form
+                                                method="post"
+                                                class="inline-form"
+                                            >
+                                                <input
+                                                    type="hidden"
+                                                    name="csrf"
+                                                    value="<?= h(csrfToken()) ?>"
+                                                >
+                                                <input
+                                                    type="hidden"
+                                                    name="action"
+                                                    value="status"
+                                                >
+                                                <input
+                                                    type="hidden"
+                                                    name="id"
+                                                    value="<?= h($id) ?>"
+                                                >
+                                                <input
+                                                    type="hidden"
+                                                    name="status"
+                                                    value="closed"
+                                                >
+
+                                                <button
+                                                    class="btn btn-secondary btn-small"
+                                                    type="submit"
+                                                >
+                                                    終了
+                                                </button>
+                                            </form>
+
+                                        <?php endif; ?>
+
+                                        <form
+                                            method="post"
+                                            class="inline-form"
+                                            onsubmit="return confirm('このアンケートを削除しますか？');"
+                                        >
+                                            <input
+                                                type="hidden"
+                                                name="csrf"
+                                                value="<?= h(csrfToken()) ?>"
+                                            >
+                                            <input
+                                                type="hidden"
+                                                name="action"
+                                                value="delete"
+                                            >
+                                            <input
+                                                type="hidden"
+                                                name="id"
+                                                value="<?= h($id) ?>"
+                                            >
+
+                                            <button
+                                                class="btn btn-danger btn-small"
+                                                type="submit"
+                                            >
+                                                削除
+                                            </button>
+                                        </form>
+
+                                    </div>
+                                </td>
+
+                            </tr>
+
+                        <?php endforeach; ?>
+
+                        </tbody>
+
+                    </table>
+
+                </div>
+
+            <?php endif; ?>
+
+        </section>
+
+    </main>
+</div>
+
+<!-- Create Modal -->
+<div
+    id="createModal"
+    class="modal-backdrop"
+    style="display:none"
+    onclick="closeCreateModal(event)"
+>
+    <div class="modal" onclick="event.stopPropagation()">
+
+        <div class="modal-header">
+            アンケート作成
+        </div>
+
+        <form method="post">
+
+            <div class="modal-body">
+
+                <input
+                    type="hidden"
+                    name="csrf"
+                    value="<?= h(csrfToken()) ?>"
+                >
+
+                <input
+                    type="hidden"
+                    name="action"
+                    value="create"
+                >
+
+                <div class="form-group">
+
+                    <label class="form-label">
+                        アンケート名
+                    </label>
+
+                    <input
+                        type="text"
+                        name="title"
+                        class="form-control"
+                        maxlength="200"
+                        required
+                        autofocus
+                        placeholder="例：2026年度 顧客満足度アンケート"
+                    >
+
+                </div>
+
+                <div class="form-group">
+
+                    <label class="form-label">
+                        説明
+                    </label>
+
+                    <textarea
+                        name="description"
+                        class="form-control"
+                        maxlength="1000"
+                        placeholder="アンケートの目的や回答者への説明を入力してください。"
+                    ></textarea>
+
+                </div>
+
+            </div>
+
+            <div class="modal-footer">
+
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    onclick="closeCreateModal()"
+                >
+                    キャンセル
+                </button>
+
+                <button
+                    type="submit"
+                    class="btn btn-primary"
+                >
+                    作成する
+                </button>
+
+            </div>
+
+        </form>
+
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<?php if ($editSurvey): ?>
+
+<div
+    class="modal-backdrop"
+    onclick="closeEditModal()"
+>
+    <div class="modal" onclick="event.stopPropagation()">
+
+        <div class="modal-header">
+            アンケート編集
+        </div>
+
+        <form method="post">
+
+            <div class="modal-body">
+
+                <input
+                    type="hidden"
+                    name="csrf"
+                    value="<?= h(csrfToken()) ?>"
+                >
+
+                <input
+                    type="hidden"
+                    name="action"
+                    value="update"
+                >
+
+                <input
+                    type="hidden"
+                    name="id"
+                    value="<?= h($editSurvey['id']) ?>"
+                >
+
+                <div class="form-group">
+
+                    <label class="form-label">
+                        アンケート名
+                    </label>
+
+                    <input
+                        type="text"
+                        name="title"
+                        class="form-control"
+                        maxlength="200"
+                        required
+                        value="<?= h($editSurvey['title'] ?? '') ?>"
+                    >
+
+                </div>
+
+                <div class="form-group">
+
+                    <label class="form-label">
+                        説明
+                    </label>
+
+                    <textarea
+                        name="description"
+                        class="form-control"
+                        maxlength="1000"
+                    ><?= h($editSurvey['description'] ?? '') ?></textarea>
+
+                </div>
+
+            </div>
+
+            <div class="modal-footer">
+
+                <a
+                    href="index.php"
+                    class="btn btn-secondary"
+                >
+                    キャンセル
+                </a>
+
+                <button
+                    type="submit"
+                    class="btn btn-primary"
+                >
+                    保存する
+                </button>
+
+            </div>
+
+        </form>
+
+    </div>
+</div>
+
+<?php endif; ?>
+
+<script>
+function openCreateModal() {
+    document.getElementById('createModal').style.display = 'flex';
+
+    const input = document.querySelector(
+        '#createModal input[name="title"]'
+    );
+
+    if (input) {
+        setTimeout(() => input.focus(), 50);
+    }
+}
+
+function closeCreateModal(event) {
+    if (event && event.target !== event.currentTarget) {
+        return;
+    }
+
+    document.getElementById('createModal').style.display = 'none';
+}
+
+function closeEditModal() {
+    window.location.href = 'index.php';
+}
+
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+        const modal = document.getElementById('createModal');
+
+        if (modal) {
+            modal.style.display = 'none';
+        }
+
+        <?php if ($editSurvey): ?>
+        window.location.href = 'index.php';
+        <?php endif; ?>
+    }
+});
+</script>
+
+</body>
+</html>
