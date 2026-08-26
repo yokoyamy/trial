@@ -1,87 +1,70 @@
 <?php
 declare(strict_types=1);
 
-/**
- * ============================================================
- * 最小構成・単一入口テスト
- * ============================================================
- *
- * 目的:
- *
- *  1. Apache24 + PHP 8.4 / 8.5 で index.php が動く
- *  2. GET API が動く
- *  3. CSRF が動く
- *  4. POST API が動く
- *  5. JavaScript のボタンが確実に反応する
- *  6. fetch のURLを物理パスからハードコードしない
- *  7. history API が動く
- *
- * この段階では業務ロジックを入れない。
- *
- * 単一入口:
- *
- *     index.php
- *
- * GET:
- *
- *     index.php?action=health
- *     index.php?action=csrf
- *
- * POST:
- *
- *     index.php
- *
- * JSON:
- *
- *     {
- *         "action": "test_post",
- *         "csrf_token": "..."
- *     }
- *
- * ============================================================
- */
-
-const APP_TIMEZONE = 'Asia/Tokyo';
-
-date_default_timezone_set(APP_TIMEZONE);
+/*
+|--------------------------------------------------------------------------
+| アンケート管理システム
+| 最小通信基盤
+|--------------------------------------------------------------------------
+|
+| 目的：
+|   - 単一入口 index.php
+|   - GET / POST
+|   - action
+|   - 共通JSONレスポンス
+|   - 共通例外処理
+|   - セッション
+|   - CSRF
+|   - JavaScript callApi()
+|   - fetch() は callApi() 内だけ
+|   - URL / History API の最小確認
+|
+| 業務機能はまだ実装しない。
+|
+*/
 
 
-/* ============================================================
- * 1. 共通HTTPヘッダー
- * ============================================================
- */
+/* ==========================================================================
+ * 1. 基本設定
+ * ========================================================================== */
 
-header('X-Content-Type-Options: nosniff');
-header('X-Frame-Options: SAMEORIGIN');
-header('Referrer-Policy: same-origin');
+date_default_timezone_set('Asia/Tokyo');
+
+$isApiRequest = isset($_GET['action']) || ($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET';
 
 
-/* ============================================================
- * 2. 共通レスポンス
- * ============================================================
- */
+/* ==========================================================================
+ * 2. セッション
+ * ========================================================================== */
+
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
+
+
+/* ==========================================================================
+ * 3. JSONレスポンス
+ * ========================================================================== */
 
 function successResponse(
     mixed $data = [],
     string $message = '',
     int $status = 200
 ): never {
-
     http_response_code($status);
 
-    header(
-        'Content-Type: application/json; charset=utf-8'
-    );
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
     echo json_encode(
         [
             'success' => true,
-            'data' => $data,
+            'data'    => $data,
             'message' => $message,
         ],
-        JSON_UNESCAPED_UNICODE
-        | JSON_UNESCAPED_SLASHES
-        | JSON_INVALID_UTF8_SUBSTITUTE
+        JSON_UNESCAPED_UNICODE |
+        JSON_UNESCAPED_SLASHES |
+        JSON_INVALID_UTF8_SUBSTITUTE
     );
 
     exit;
@@ -91,77 +74,80 @@ function successResponse(
 function errorResponse(
     string $code,
     string $message,
-    int $status = 400
+    int $status = 400,
+    mixed $data = null
 ): never {
-
     http_response_code($status);
 
-    header(
-        'Content-Type: application/json; charset=utf-8'
-    );
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+
+    $response = [
+        'success' => false,
+        'error'   => [
+            'code'    => $code,
+            'message' => $message,
+        ],
+    ];
+
+    if ($data !== null) {
+        $response['data'] = $data;
+    }
 
     echo json_encode(
-        [
-            'success' => false,
-            'error' => [
-                'code' => $code,
-                'message' => $message,
-            ],
-        ],
-        JSON_UNESCAPED_UNICODE
-        | JSON_UNESCAPED_SLASHES
-        | JSON_INVALID_UTF8_SUBSTITUTE
+        $response,
+        JSON_UNESCAPED_UNICODE |
+        JSON_UNESCAPED_SLASHES |
+        JSON_INVALID_UTF8_SUBSTITUTE
     );
 
     exit;
 }
 
 
-/* ============================================================
- * 3. HTMLエスケープ
- * ============================================================
- */
+/* ==========================================================================
+ * 4. ログ
+ * ========================================================================== */
 
-function h(mixed $value): string
+function appLog(string $message, array $context = []): void
 {
-    return htmlspecialchars(
-        (string)$value,
-        ENT_QUOTES | ENT_SUBSTITUTE,
-        'UTF-8'
-    );
-}
+    /*
+     * パスワード、CSRF token、Cookie等はここへ渡さない。
+     */
 
+    $line = '[survey-app] ' . $message;
 
-/* ============================================================
- * 4. 例外処理
- * ============================================================
- */
-
-function isApiRequest(): bool
-{
-    return isset($_GET['action'])
-        || isset($_POST['action'])
-        || str_contains(
-            strtolower(
-                $_SERVER['CONTENT_TYPE'] ?? ''
-            ),
-            'application/json'
+    if ($context !== []) {
+        $line .= ' ' . json_encode(
+            $context,
+            JSON_UNESCAPED_UNICODE |
+            JSON_UNESCAPED_SLASHES |
+            JSON_INVALID_UTF8_SUBSTITUTE
         );
+    }
+
+    error_log($line);
 }
 
+
+/* ==========================================================================
+ * 5. 共通例外処理
+ * ========================================================================== */
 
 set_exception_handler(
-    function (Throwable $e): void {
+    function (Throwable $e) use (&$isApiRequest): void {
 
-        error_log(
-            '[APP_EXCEPTION] '
-            . get_class($e)
-            . ': '
-            . $e->getMessage()
+        appLog(
+            'Unhandled exception',
+            [
+                'class'   => get_class($e),
+                'message' => $e->getMessage(),
+                'file'    => $e->getFile(),
+                'line'    => $e->getLine(),
+            ]
         );
 
-        if (isApiRequest()) {
-
+        if ($isApiRequest) {
             errorResponse(
                 'INTERNAL_ERROR',
                 'サーバー内部で予期しないエラーが発生しました。',
@@ -174,14 +160,13 @@ set_exception_handler(
         echo '<!doctype html>';
         echo '<html lang="ja">';
         echo '<head>';
-        echo '<meta charset="utf-8">';
+        echo '<meta charset="UTF-8">';
+        echo '<meta name="viewport" content="width=device-width,initial-scale=1">';
         echo '<title>サーバーエラー</title>';
         echo '</head>';
         echo '<body>';
         echo '<h1>サーバーエラー</h1>';
-        echo '<p>';
-        echo 'サーバー内部で予期しないエラーが発生しました。';
-        echo '</p>';
+        echo '<p>サーバー内部で予期しないエラーが発生しました。</p>';
         echo '</body>';
         echo '</html>';
 
@@ -190,271 +175,146 @@ set_exception_handler(
 );
 
 
-/* ============================================================
- * 5. HTTPメソッド
- * ============================================================
- */
+/* ==========================================================================
+ * 6. PHP Warning / Notice等
+ * ========================================================================== */
 
-$method = strtoupper(
-    $_SERVER['REQUEST_METHOD'] ?? 'GET'
+set_error_handler(
+    function (
+        int $severity,
+        string $message,
+        string $file,
+        int $line
+    ): bool {
+
+        /*
+         * PHP Warning / NoticeをHTMLへ直接出力させない。
+         */
+
+        appLog(
+            'PHP error',
+            [
+                'severity' => $severity,
+                'message'  => $message,
+                'file'     => $file,
+                'line'     => $line,
+            ]
+        );
+
+        /*
+         * ErrorExceptionへ変換して共通例外処理へ送る。
+         */
+
+        throw new ErrorException(
+            $message,
+            0,
+            $severity,
+            $file,
+            $line
+        );
+    }
 );
 
-if (!in_array(
-    $method,
-    ['GET', 'POST'],
-    true
-)) {
 
-    errorResponse(
-        'METHOD_NOT_ALLOWED',
-        '許可されていないHTTPメソッドです。',
-        405
-    );
-}
+/* ==========================================================================
+ * 7. Fatal Error監視
+ * ========================================================================== */
 
+register_shutdown_function(
+    function () use (&$isApiRequest): void {
 
-/* ============================================================
- * 6. セッション
- * ============================================================
- */
+        $error = error_get_last();
 
-if (
-    session_status()
-    !== PHP_SESSION_ACTIVE
-) {
+        if ($error === null) {
+            return;
+        }
 
-    session_start(
-        [
-            'cookie_httponly' => true,
-            'cookie_samesite' => 'Lax',
-        ]
-    );
-}
+        $fatalTypes = [
+            E_ERROR,
+            E_PARSE,
+            E_CORE_ERROR,
+            E_COMPILE_ERROR,
+        ];
 
+        if (!in_array($error['type'], $fatalTypes, true)) {
+            return;
+        }
 
-/* ============================================================
- * 7. CSRFトークン
- * ============================================================
- */
-
-if (
-    !isset($_SESSION['csrf_token'])
-    || !is_string($_SESSION['csrf_token'])
-    || $_SESSION['csrf_token'] === ''
-) {
-
-    $_SESSION['csrf_token'] =
-        bin2hex(
-            random_bytes(32)
-        );
-}
-
-
-$csrfToken =
-    $_SESSION['csrf_token'];
-
-
-/* ============================================================
- * 8. JSON POST取得
- * ============================================================
- */
-
-function getJsonBody(): array
-{
-    $contentType =
-        strtolower(
-            $_SERVER['CONTENT_TYPE'] ?? ''
+        appLog(
+            'Fatal PHP error',
+            [
+                'type'    => $error['type'],
+                'message' => $error['message'],
+                'file'    => $error['file'],
+                'line'    => $error['line'],
+            ]
         );
 
-    if (
-        !str_contains(
-            $contentType,
-            'application/json'
-        )
-    ) {
-        return [];
+        /*
+         * すでにレスポンスが開始されている場合、
+         * JSONへ完全に戻すことはできない。
+         *
+         * したがって、Fatal Errorを発生させない構造を
+         * 基本とする。
+         */
     }
-
-    $raw =
-        file_get_contents(
-            'php://input'
-        );
-
-    if (
-        !is_string($raw)
-        || trim($raw) === ''
-    ) {
-        return [];
-    }
-
-    $data =
-        json_decode(
-            $raw,
-            true
-        );
-
-    if (!is_array($data)) {
-
-        errorResponse(
-            'INVALID_JSON',
-            'POSTデータが正しいJSONではありません。',
-            400
-        );
-    }
-
-    return $data;
-}
+);
 
 
-/* ============================================================
- * 9. action取得
- * ============================================================
- */
+/* ==========================================================================
+ * 8. CSRF
+ * ========================================================================== */
 
-function getAction(
-    string $method
-): string {
-
-    if ($method === 'GET') {
-
-        $action =
-            $_GET['action'] ?? '';
-
-        return is_string($action)
-            ? trim($action)
-            : '';
-    }
-
-
-    /*
-     * application/x-www-form-urlencoded
-     */
-    if (
-        isset($_POST['action'])
-        && is_string($_POST['action'])
-    ) {
-
-        return trim(
-            $_POST['action']
-        );
-    }
-
-
-    /*
-     * application/json
-     */
-    $json =
-        getJsonBody();
-
-    if (
-        isset($json['action'])
-        && is_string($json['action'])
-    ) {
-
-        return trim(
-            $json['action']
-        );
-    }
-
-    return '';
-}
-
-
-/* ============================================================
- * 10. POSTデータ取得
- * ============================================================
- */
-
-function getPostData(): array
+function getCsrfToken(): string
 {
     if (
-        isset($_SERVER['CONTENT_TYPE'])
-        && str_contains(
-            strtolower(
-                $_SERVER['CONTENT_TYPE']
-            ),
-            'application/json'
-        )
+        !isset($_SESSION['csrf_token']) ||
+        !is_string($_SESSION['csrf_token']) ||
+        $_SESSION['csrf_token'] === ''
     ) {
-
-        return getJsonBody();
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
     }
 
-    return $_POST;
+    return $_SESSION['csrf_token'];
 }
 
 
-/* ============================================================
- * 11. CSRF取得
- * ============================================================
- */
-
-function getRequestCsrfToken(
-    array $postData
-): string {
+function requireCsrf(): void
+{
+    $token = '';
 
     /*
-     * HTTPヘッダー
+     * JSON POST
      */
-    $header =
-        $_SERVER['HTTP_X_CSRF_TOKEN']
-        ?? '';
 
-    if (
-        is_string($header)
-        && $header !== ''
-    ) {
+    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
 
-        return $header;
+    if (str_contains(strtolower($contentType), 'application/json')) {
+        $raw = file_get_contents('php://input');
+
+        if ($raw !== false && $raw !== '') {
+            $json = json_decode($raw, true);
+
+            if (is_array($json) && isset($json['csrfToken'])) {
+                $token = (string)$json['csrfToken'];
+            }
+        }
     }
-
 
     /*
-     * POST / JSON
+     * 通常POST
      */
-    if (
-        isset($postData['csrf_token'])
-        && is_string(
-            $postData['csrf_token']
-        )
-    ) {
 
-        return $postData['csrf_token'];
+    if ($token === '' && isset($_POST['csrfToken'])) {
+        $token = (string)$_POST['csrfToken'];
     }
 
-    return '';
-}
-
-
-/* ============================================================
- * 12. CSRF検証
- * ============================================================
- */
-
-function validateCsrf(
-    array $postData
-): void {
-
-    $expected =
-        $_SESSION['csrf_token']
-        ?? '';
-
-    $actual =
-        getRequestCsrfToken(
-            $postData
-        );
+    $sessionToken = getCsrfToken();
 
     if (
-        !is_string($expected)
-        || $expected === ''
-        || !is_string($actual)
-        || $actual === ''
-        || !hash_equals(
-            $expected,
-            $actual
-        )
+        $token === '' ||
+        !hash_equals($sessionToken, $token)
     ) {
-
         errorResponse(
             'CSRF_INVALID',
             'CSRFトークンが不正です。',
@@ -464,318 +324,216 @@ function validateCsrf(
 }
 
 
-/* ============================================================
- * 13. 単一入口URL
- * ============================================================
- *
- * ここが重要。
- *
- * REQUEST_URI は使わない。
- *
- * REQUEST_URI:
- *
- *     /gojacic/.../アンケートアプリ/
- *
- * のように、index.phpを省略したURLになる可能性がある。
- *
- * そこで SCRIPT_NAME を使う。
- *
- * 例:
- *
- *     /gojacic/.poc/draft/アンケートアプリ/index.php
- *
- * JavaScriptではこの値を基準にAPI URLを作る。
- *
- * ============================================================
- */
+/* ==========================================================================
+ * 9. JSON Request Body
+ * ========================================================================== */
 
-function getEntryPath(): string
+function getJsonBody(): array
 {
-    $scriptName =
-        $_SERVER['SCRIPT_NAME']
-        ?? '';
+    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
 
-    if (
-        !is_string($scriptName)
-        || $scriptName === ''
-    ) {
-
-        return '/index.php';
+    if (!str_contains(strtolower($contentType), 'application/json')) {
+        return [];
     }
 
-    return $scriptName;
-}
+    $raw = file_get_contents('php://input');
 
+    if ($raw === false || trim($raw) === '') {
+        return [];
+    }
 
-/* ============================================================
- * 14. GET action
- * ============================================================
- */
+    $json = json_decode($raw, true);
 
-$allowedGetActions = [
-    '',
-    'health',
-    'csrf',
-];
-
-
-/* ============================================================
- * 15. POST action
- * ============================================================
- */
-
-$allowedPostActions = [
-    'test_post',
-];
-
-
-/* ============================================================
- * 16. action判定
- * ============================================================
- */
-
-$action =
-    getAction($method);
-
-
-/* ============================================================
- * 17. GET API
- * ============================================================
- */
-
-if ($method === 'GET') {
-
-    if (
-        !in_array(
-            $action,
-            $allowedGetActions,
-            true
-        )
-    ) {
-
+    if (!is_array($json)) {
         errorResponse(
-            'INVALID_ACTION',
-            'GETでは利用できないactionです。',
+            'INVALID_JSON',
+            'リクエストJSONが不正です。',
             400
         );
     }
 
-
-    /*
-     * --------------------------------------------------------
-     * GET health
-     * --------------------------------------------------------
-     */
-
-    if ($action === 'health') {
-
-        successResponse(
-            [
-                'status' => 'ok',
-                'method' => 'GET',
-                'phpVersion' => PHP_VERSION,
-                'serverSoftware' =>
-                    $_SERVER['SERVER_SOFTWARE']
-                    ?? '',
-                'scriptName' =>
-                    $_SERVER['SCRIPT_NAME']
-                    ?? '',
-                'requestUri' =>
-                    $_SERVER['REQUEST_URI']
-                    ?? '',
-                'https' =>
-                    $_SERVER['HTTPS']
-                    ?? '',
-                'time' =>
-                    date(DATE_ATOM),
-            ],
-            'GET API通信成功'
-        );
-    }
-
-
-    /*
-     * --------------------------------------------------------
-     * GET csrf
-     * --------------------------------------------------------
-     */
-
-    if ($action === 'csrf') {
-
-        successResponse(
-            [
-                'csrfToken' =>
-                    $csrfToken,
-            ],
-            'CSRFトークン取得成功'
-        );
-    }
+    return $json;
 }
 
 
-/* ============================================================
- * 18. POST API
- * ============================================================
- */
+/* ==========================================================================
+ * 10. HTTP Method
+ * ========================================================================== */
 
-if ($method === 'POST') {
-
-    if (
-        !in_array(
-            $action,
-            $allowedPostActions,
-            true
-        )
-    ) {
-
-        errorResponse(
-            'INVALID_ACTION',
-            'POSTでは利用できないactionです。',
-            400
-        );
-    }
-
-
-    $postData =
-        getPostData();
-
-
-    /*
-     * POSTは必ずCSRF検証。
-     */
-    validateCsrf(
-        $postData
+function getRequestMethod(): string
+{
+    return strtoupper(
+        (string)($_SERVER['REQUEST_METHOD'] ?? 'GET')
     );
-
-
-    /*
-     * --------------------------------------------------------
-     * POST test
-     * --------------------------------------------------------
-     */
-
-    if ($action === 'test_post') {
-
-        successResponse(
-            [
-                'status' => 'ok',
-                'method' => 'POST',
-                'csrf' => 'validated',
-                'received' => $postData,
-                'time' => date(DATE_ATOM),
-            ],
-            'POST API通信成功'
-        );
-    }
 }
 
 
-/* ============================================================
- * 19. 画面表示
- * ============================================================
- */
+/* ==========================================================================
+ * 11. Action
+ * ========================================================================== */
 
-if (
-    $method === 'GET'
-    && $action === ''
-) {
-
-    /*
-     * --------------------------------------------------------
-     * JavaScriptへ渡すURL
-     * --------------------------------------------------------
-     *
-     * PHPの変数をJSコードへ直接文字列連結しない。
-     *
-     * json_encode() を使って安全にJavaScript文字列にする。
-     *
-     * --------------------------------------------------------
-     */
-
-    $entryPath =
-        getEntryPath();
+function getAction(): string
+{
+    return trim(
+        (string)($_GET['action'] ?? '')
+    );
+}
 
 
-    $entryUrl =
-        $entryPath;
+/* ==========================================================================
+ * 12. API処理
+ * ========================================================================== */
 
-
-    $healthUrl =
-        $entryPath
-        . '?action=health';
-
-
-    $csrfUrl =
-        $entryPath
-        . '?action=csrf';
-
+function handleApi(): never
+{
+    $method = getRequestMethod();
+    $action = getAction();
 
     /*
-     * json_encode失敗時もHTMLを壊さない。
+     * actionなし
      */
-    $jsEntryUrl =
-        json_encode(
-            $entryUrl,
-            JSON_UNESCAPED_UNICODE
-            | JSON_UNESCAPED_SLASHES
-            | JSON_HEX_TAG
-            | JSON_HEX_AMP
-            | JSON_HEX_APOS
-            | JSON_HEX_QUOT
-        );
 
-    $jsHealthUrl =
-        json_encode(
-            $healthUrl,
-            JSON_UNESCAPED_UNICODE
-            | JSON_UNESCAPED_SLASHES
-            | JSON_HEX_TAG
-            | JSON_HEX_AMP
-            | JSON_HEX_APOS
-            | JSON_HEX_QUOT
-        );
-
-    $jsCsrfUrl =
-        json_encode(
-            $csrfUrl,
-            JSON_UNESCAPED_UNICODE
-            | JSON_UNESCAPED_SLASHES
-            | JSON_HEX_TAG
-            | JSON_HEX_AMP
-            | JSON_HEX_APOS
-            | JSON_HEX_QUOT
-        );
-
-
-    if (
-        !is_string($jsEntryUrl)
-        || !is_string($jsHealthUrl)
-        || !is_string($jsCsrfUrl)
-    ) {
-
-        throw new RuntimeException(
-            'JavaScript用URLの生成に失敗しました。'
+    if ($action === '') {
+        errorResponse(
+            'ACTION_REQUIRED',
+            'actionを指定してください。',
+            400
         );
     }
 
+    /*
+     * GET
+     */
 
-    ?>
+    if ($method === 'GET') {
+
+        switch ($action) {
+
+            case 'health':
+
+                successResponse(
+                    [
+                        'status'    => 'ok',
+                        'php'       => PHP_VERSION,
+                        'method'    => $method,
+                        'action'    => $action,
+                        'timestamp' => date('c'),
+                    ],
+                    'APIは正常に動作しています。'
+                );
+
+
+            case 'csrf':
+
+                successResponse(
+                    [
+                        'csrfToken' => getCsrfToken(),
+                    ],
+                    'CSRFトークンを取得しました。'
+                );
+
+
+            default:
+
+                errorResponse(
+                    'ACTION_NOT_FOUND',
+                    '指定されたactionは存在しません。',
+                    404
+                );
+        }
+    }
+
+
+    /*
+     * POST
+     */
+
+    if ($method === 'POST') {
+
+        /*
+         * POSTのJSONを先に取得。
+         */
+
+        $body = getJsonBody();
+
+        /*
+         * CSRF確認。
+         */
+
+        requireCsrf();
+
+        switch ($action) {
+
+            case 'healthPost':
+
+                successResponse(
+                    [
+                        'status' => 'ok',
+                        'method' => $method,
+                        'action' => $action,
+                        'received' => $body,
+                        'timestamp' => date('c'),
+                    ],
+                    'POST APIは正常に動作しています。'
+                );
+
+
+            default:
+
+                errorResponse(
+                    'ACTION_NOT_FOUND',
+                    '指定されたPOST actionは存在しません。',
+                    404
+                );
+        }
+    }
+
+
+    /*
+     * 許可していないHTTPメソッド
+     */
+
+    errorResponse(
+        'METHOD_NOT_ALLOWED',
+        '許可されていないHTTPメソッドです。',
+        405
+    );
+}
+
+
+/* ==========================================================================
+ * 13. APIか画面かを判定
+ * ========================================================================== */
+
+if ($isApiRequest) {
+    handleApi();
+}
+
+
+/* ==========================================================================
+ * 14. 画面
+ * ========================================================================== */
+
+$csrfToken = htmlspecialchars(
+    getCsrfToken(),
+    ENT_QUOTES | ENT_SUBSTITUTE,
+    'UTF-8'
+);
+
+?>
 <!doctype html>
 <html lang="ja">
 
 <head>
 
-<meta charset="utf-8">
+<meta charset="UTF-8">
 
 <meta
     name="viewport"
     content="width=device-width, initial-scale=1"
 >
 
-<title>
-    PHP単一入口 基盤テスト
-</title>
-
+<title>アンケート管理システム - 通信基盤テスト</title>
 
 <style>
 
@@ -785,591 +543,710 @@ if (
 
 body {
     margin: 0;
+    padding: 24px;
     background: #f4f6f8;
     color: #222;
     font-family:
-        system-ui,
         -apple-system,
         BlinkMacSystemFont,
         "Segoe UI",
+        "Noto Sans JP",
         sans-serif;
 }
 
-main {
-    width: min(1000px, 100%);
+.container {
+    width: min(100%, 960px);
     margin: 0 auto;
-    padding: 24px;
-}
-
-.card {
-    background: #fff;
-    border-radius: 12px;
-    padding: 24px;
-    margin-bottom: 20px;
-    box-shadow:
-        0 2px 10px rgba(0,0,0,.07);
 }
 
 h1 {
     margin-top: 0;
 }
 
-h2 {
-    margin-top: 0;
-}
-
-.buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
+.card {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 16px;
 }
 
 button {
     appearance: none;
     border: 0;
-    border-radius: 8px;
-    padding: 12px 18px;
-    background: #1769aa;
+    border-radius: 6px;
+    padding: 10px 16px;
+    margin: 4px;
+    background: #2563eb;
     color: #fff;
-    font-size: 15px;
     cursor: pointer;
+    font-size: 14px;
 }
 
 button:hover:not(:disabled) {
-    background: #0f578d;
+    background: #1d4ed8;
 }
 
 button:disabled {
     opacity: .5;
-    cursor: wait;
+    cursor: not-allowed;
 }
 
-button.green {
-    background: #198754;
+button.secondary {
+    background: #475569;
 }
 
-button.gray {
-    background: #555;
+button.danger {
+    background: #dc2626;
 }
 
 .status {
-    margin-top: 16px;
-    padding: 14px;
-    border-radius: 8px;
-    background: #f1f3f5;
+    padding: 12px;
+    border-radius: 6px;
+    margin-top: 12px;
+    background: #eef2ff;
     white-space: pre-wrap;
-    overflow-wrap: anywhere;
 }
 
-.status.ok {
-    background: #e8f7ed;
-    color: #146c2e;
+.status.success {
+    background: #dcfce7;
+    color: #166534;
 }
 
 .status.error {
-    background: #fff0f0;
-    color: #a11a1a;
-}
-
-.status.loading {
-    background: #fff8dc;
-    color: #775d00;
+    background: #fee2e2;
+    color: #991b1b;
 }
 
 pre {
     background: #111827;
-    color: #d1fae5;
+    color: #e5e7eb;
     padding: 16px;
     border-radius: 8px;
     overflow: auto;
     white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
-.endpoint {
-    padding: 12px;
-    background: #f1f3f5;
-    border-radius: 8px;
-    word-break: break-all;
-    font-family: monospace;
+.loading {
+    display: none;
+    margin-left: 8px;
+    color: #2563eb;
 }
 
-table {
-    width: 100%;
-    border-collapse: collapse;
+.loading.active {
+    display: inline;
 }
 
-th,
-td {
-    text-align: left;
-    padding: 10px;
-    border-bottom: 1px solid #ddd;
-    vertical-align: top;
+.meta {
+    font-size: 13px;
+    color: #64748b;
+    line-height: 1.8;
 }
 
-th {
-    width: 220px;
+.ok {
+    color: #15803d;
 }
 
-@media (max-width: 600px) {
-
-    main {
-        padding: 12px;
-    }
-
-    .card {
-        padding: 16px;
-    }
-
-    .buttons {
-        display: grid;
-    }
-
-    button {
-        width: 100%;
-    }
-
-    th {
-        width: 40%;
-    }
+.ng {
+    color: #dc2626;
 }
 
 </style>
 
 </head>
 
-
 <body>
 
-<main>
+<div class="container">
 
+    <div class="card">
 
-<!-- ========================================================
-     基本情報
-     ======================================================== -->
+        <h1>
+            アンケート管理システム
+        </h1>
 
-<section class="card">
+        <p>
+            最小通信基盤テスト
+        </p>
 
-<h1>
-    PHP単一入口 基盤テスト
-</h1>
+        <p class="meta">
+            PHP: <?= htmlspecialchars(PHP_VERSION, ENT_QUOTES, 'UTF-8') ?><br>
+            現在URL:
+            <span id="currentUrl"></span>
+        </p>
 
-<p>
-    まずは業務機能を入れず、
-    Apache + PHP + JavaScript + fetch
-    の基本構造だけを確認します。
-</p>
+    </div>
 
-<p>
-    <strong>現在のindex.php入口</strong>
-</p>
 
-<div
-    class="endpoint"
-    id="entry-url"
->
-    <?= h($entryUrl) ?>
-</div>
+    <!-- ================================================================
+         GET
+         ================================================================ -->
 
-</section>
+    <div class="card">
 
+        <h2>GET API</h2>
 
-<!-- ========================================================
-     GET
-     ======================================================== -->
+        <p>
+            <code>index.php?action=health</code>
+        </p>
 
-<section class="card">
+        <button
+            type="button"
+            id="btnGetHealth"
+        >
+            GET health
+        </button>
 
-<h2>
-    1. GET API
-</h2>
+        <span
+            id="loadingGet"
+            class="loading"
+        >
+            通信中...
+        </span>
 
-<div class="endpoint">
-    <?= h($healthUrl) ?>
-</div>
+    </div>
 
-<br>
 
-<div class="buttons">
+    <!-- ================================================================
+         CSRF
+         ================================================================ -->
 
-<button
-    type="button"
-    id="health-button"
->
-    GET health
-</button>
+    <div class="card">
 
+        <h2>CSRF</h2>
 
-<button
-    type="button"
-    id="csrf-button"
-    class="gray"
->
-    CSRF取得
-</button>
+        <button
+            type="button"
+            id="btnCsrf"
+        >
+            CSRF取得
+        </button>
 
-</div>
+        <span
+            id="loadingCsrf"
+            class="loading"
+        >
+            通信中...
+        </span>
 
-<div
-    id="csrf-status"
-    class="status"
->
-    CSRF未取得
-</div>
+    </div>
 
-</section>
 
+    <!-- ================================================================
+         POST
+         ================================================================ -->
 
-<!-- ========================================================
-     POST
-     ======================================================== -->
+    <div class="card">
 
-<section class="card">
+        <h2>POST API</h2>
 
-<h2>
-    2. POST API
-</h2>
+        <p>
+            CSRF取得後にPOSTを実行します。
+        </p>
 
-<p>
-    POSTボタンを押すと、
-    CSRF取得 → POST
-    の順番で処理します。
-</p>
+        <button
+            type="button"
+            id="btnPostHealth"
+        >
+            POST health
+        </button>
 
-<div class="buttons">
+        <span
+            id="loadingPost"
+            class="loading"
+        >
+            通信中...
+        </span>
 
-<button
-    type="button"
-    id="post-button"
-    class="green"
->
-    POST test
-</button>
+    </div>
 
-</div>
 
-</section>
+    <!-- ================================================================
+         URL / History
+         ================================================================ -->
 
+    <div class="card">
 
-<!-- ========================================================
-     結果
-     ======================================================== -->
+        <h2>URL / History API</h2>
 
-<section class="card">
+        <button
+            type="button"
+            data-screen="admin"
+        >
+            screen=admin
+        </button>
 
-<h2>
-    通信結果
-</h2>
+        <button
+            type="button"
+            data-screen="survey"
+        >
+            screen=survey
+        </button>
 
-<div
-    id="status"
-    class="status"
->
-    未実行
-</div>
+        <button
+            type="button"
+            data-screen="answer"
+        >
+            screen=answer
+        </button>
 
-<pre
-    id="result"
->-</pre>
+        <button
+            type="button"
+            id="btnReplace"
+            class="secondary"
+        >
+            replaceState
+        </button>
 
-</section>
+        <button
+            type="button"
+            id="btnBack"
+            class="secondary"
+        >
+            history.back()
+        </button>
 
+    </div>
 
-<!-- ========================================================
-     通信診断
-     ======================================================== -->
 
-<section class="card">
+    <!-- ================================================================
+         通信診断
+         ================================================================ -->
 
-<h2>
-    通信診断
-</h2>
+    <div class="card">
 
-<table>
+        <h2>通信結果</h2>
 
-<tr>
-<th>API URL</th>
-<td id="diag-url">-</td>
-</tr>
+        <div
+            id="status"
+            class="status"
+        >
+            未実行
+        </div>
 
-<tr>
-<th>HTTPメソッド</th>
-<td id="diag-method">-</td>
-</tr>
+        <pre id="result">---</pre>
 
-<tr>
-<th>HTTPステータス</th>
-<td id="diag-status">-</td>
-</tr>
+    </div>
 
-<tr>
-<th>レスポンス</th>
-<td id="diag-response">-</td>
-</tr>
 
-<tr>
-<th>Content-Type</th>
-<td id="diag-content-type">-</td>
-</tr>
+    <!-- ================================================================
+         現在のURL状態
+         ================================================================ -->
 
-<tr>
-<th>JSON解析</th>
-<td id="diag-json">-</td>
-</tr>
+    <div class="card">
 
-<tr>
-<th>APIエラーコード</th>
-<td id="diag-error-code">-</td>
-</tr>
+        <h2>現在のURL状態</h2>
 
-<tr>
-<th>エラーメッセージ</th>
-<td id="diag-error-message">-</td>
-</tr>
+        <pre id="urlState">---</pre>
 
-</table>
-
-</section>
-
-
-<!-- ========================================================
-     History API
-     ======================================================== -->
-
-<section class="card">
-
-<h2>
-    URL / History API
-</h2>
-
-<div class="buttons">
-
-<button
-    type="button"
-    id="admin-button"
->
-    screen=admin
-</button>
-
-
-<button
-    type="button"
-    id="survey-button"
->
-    screen=survey
-</button>
-
-
-<button
-    type="button"
-    id="answer-button"
->
-    screen=answer
-</button>
-
-
-<button
-    type="button"
-    id="replace-button"
-    class="gray"
->
-    replaceState
-</button>
-
-
-<button
-    type="button"
-    id="back-button"
-    class="gray"
->
-    history.back()
-</button>
+    </div>
 
 </div>
-
-<pre
-    id="history-result"
->-</pre>
-
-</section>
-
-
-<!-- ========================================================
-     JSエラー表示
-     ======================================================== -->
-
-<section class="card">
-
-<h2>
-    JavaScript状態
-</h2>
-
-<div
-    id="js-status"
-    class="status"
->
-    JavaScript初期化中...
-</div>
-
-</section>
-
-
-</main>
 
 
 <script>
-'use strict';
 
-/*
- * ============================================================
- * 1. PHPから渡されたURL
- * ============================================================
+/* ==========================================================================
+ * 1. PHPから安全にCSRFを受け取る
+ * ========================================================================== */
+
+const initialCsrfToken =
+    <?= json_encode(
+        $csrfToken,
+        JSON_UNESCAPED_UNICODE |
+        JSON_UNESCAPED_SLASHES
+    ) ?>;
+
+
+/* ==========================================================================
+ * 2. CSRF token
+ * ========================================================================== */
+
+let csrfToken = initialCsrfToken;
+
+
+/* ==========================================================================
+ * 3. API入口URL
  *
- * 重要:
+ * 重要：
  *
- * PHP側でjson_encode済みなので、
- * JavaScriptの構文を壊さない。
+ * ここでは
  *
- */
+ * /gojacic/...
+ *
+ * /アンケートアプリ/...
+ *
+ * 等をハードコードしない。
+ *
+ * 現在表示しているページのURLを基準に
+ * index.phpを解決する。
+ * ========================================================================== */
 
-const ENTRY_URL =
-    <?= $jsEntryUrl ?>;
+function getApiUrl(action) {
 
-const HEALTH_URL =
-    <?= $jsHealthUrl ?>;
-
-const CSRF_URL =
-    <?= $jsCsrfUrl ?>;
-
-
-/*
- * ============================================================
- * 2. DOM取得
- * ============================================================
- */
-
-const healthButton =
-    document.getElementById(
-        'health-button'
+    const url = new URL(
+        'index.php',
+        window.location.href
     );
 
-const csrfButton =
-    document.getElementById(
-        'csrf-button'
+    url.search = '';
+
+    url.searchParams.set(
+        'action',
+        action
     );
 
-const postButton =
-    document.getElementById(
-        'post-button'
-    );
-
-const statusElement =
-    document.getElementById(
-        'status'
-    );
-
-const resultElement =
-    document.getElementById(
-        'result'
-    );
-
-const csrfStatusElement =
-    document.getElementById(
-        'csrf-status'
-    );
-
-const jsStatusElement =
-    document.getElementById(
-        'js-status'
-    );
-
-
-/*
- * ============================================================
- * 3. DOM存在確認
- * ============================================================
- */
-
-const requiredElements = [
-    healthButton,
-    csrfButton,
-    postButton,
-    statusElement,
-    resultElement,
-    csrfStatusElement,
-    jsStatusElement
-];
-
-if (
-    requiredElements.some(
-        element => !element
-    )
-) {
-
-    throw new Error(
-        '必要なHTML要素を取得できません。'
-    );
+    return url;
 }
 
 
-/*
- * ============================================================
- * 4. 状態
- * ============================================================
- */
+/* ==========================================================================
+ * 4. API共通通信関数
+ *
+ * fetch() はここだけ。
+ *
+ * 画面側からfetch()を直接呼ばない。
+ * ========================================================================== */
 
-let csrfToken = '';
+async function callApi(action, options = {}) {
 
-let requestRunning = false;
+    const method =
+        String(options.method || 'GET').toUpperCase();
 
+    const url =
+        getApiUrl(action);
 
-/*
- * ============================================================
- * 5. 初期化
- * ============================================================
- */
-
-jsStatusElement.textContent =
-    'JavaScript初期化成功';
-
-jsStatusElement.className =
-    'status ok';
+    const startedAt =
+        performance.now();
 
 
-/*
- * ============================================================
- * 6. 結果表示
- * ============================================================
- */
+    /*
+     * Request
+     */
+
+    const headers = {
+        'Accept': 'application/json'
+    };
+
+
+    const request = {
+        method,
+        credentials: 'same-origin',
+        headers
+    };
+
+
+    /*
+     * POST等
+     */
+
+    if (
+        method !== 'GET' &&
+        method !== 'HEAD'
+    ) {
+
+        headers['Content-Type'] =
+            'application/json; charset=UTF-8';
+
+
+        const body = {
+            ...(options.body || {}),
+            csrfToken
+        };
+
+
+        request.body =
+            JSON.stringify(body);
+    }
+
+
+    console.log(
+        '[API REQUEST]',
+        {
+            url: url.toString(),
+            method,
+            request
+        }
+    );
+
+
+    /*
+     * fetch
+     *
+     * このアプリでfetch()を直接呼ぶのはここだけ。
+     */
+
+    let response;
+
+    try {
+
+        response = await fetch(
+            url.toString(),
+            request
+        );
+
+    } catch (error) {
+
+        const elapsedMs =
+            Math.round(
+                performance.now() - startedAt
+            );
+
+
+        console.error(
+            '[API NETWORK ERROR]',
+            {
+                url: url.toString(),
+                method,
+                elapsedMs,
+                error
+            }
+        );
+
+
+        throw {
+            code: 'NETWORK_ERROR',
+
+            message:
+                'HTTPレスポンスを取得できませんでした。',
+
+            detail:
+                error instanceof Error
+                    ? error.message
+                    : String(error),
+
+            url:
+                url.toString(),
+
+            method,
+
+            status:
+                null,
+
+            contentType:
+                null,
+
+            response:
+                null
+        };
+    }
+
+
+    /*
+     * Response
+     */
+
+    const contentType =
+        response.headers.get(
+            'Content-Type'
+        ) || '';
+
+
+    const text =
+        await response.text();
+
+
+    const elapsedMs =
+        Math.round(
+            performance.now() - startedAt
+        );
+
+
+    console.log(
+        '[API RESPONSE]',
+        {
+            url: url.toString(),
+            method,
+            status: response.status,
+            ok: response.ok,
+            contentType,
+            elapsedMs,
+            text
+        }
+    );
+
+
+    /*
+     * HTTPエラー
+     */
+
+    if (!response.ok) {
+
+        throw {
+            code: 'HTTP_ERROR',
+
+            message:
+                `HTTP ${response.status} エラー`,
+
+            url:
+                url.toString(),
+
+            method,
+
+            status:
+                response.status,
+
+            contentType,
+
+            response:
+                text
+        };
+    }
+
+
+    /*
+     * Content-Type確認
+     */
+
+    if (
+        !contentType
+            .toLowerCase()
+            .includes('application/json')
+    ) {
+
+        throw {
+            code: 'INVALID_CONTENT_TYPE',
+
+            message:
+                'APIがJSONを返していません。',
+
+            url:
+                url.toString(),
+
+            method,
+
+            status:
+                response.status,
+
+            contentType,
+
+            response:
+                text
+        };
+    }
+
+
+    /*
+     * JSON解析
+     */
+
+    let json;
+
+    try {
+
+        json =
+            JSON.parse(text);
+
+    } catch (error) {
+
+        throw {
+            code: 'INVALID_JSON',
+
+            message:
+                'APIレスポンスのJSON解析に失敗しました。',
+
+            url:
+                url.toString(),
+
+            method,
+
+            status:
+                response.status,
+
+            contentType,
+
+            response:
+                text
+        };
+    }
+
+
+    /*
+     * API success確認
+     */
+
+    if (
+        !json ||
+        json.success !== true
+    ) {
+
+        throw {
+            code:
+                json?.error?.code ||
+                'API_ERROR',
+
+            message:
+                json?.error?.message ||
+                json?.message ||
+                'API処理に失敗しました。',
+
+            url:
+                url.toString(),
+
+            method,
+
+            status:
+                response.status,
+
+            contentType,
+
+            response:
+                json
+        };
+    }
+
+
+    /*
+     * 正常終了
+     */
+
+    return json;
+}
+
+
+/* ==========================================================================
+ * 5. UI共通
+ * ========================================================================== */
 
 function setStatus(
     message,
     type = ''
 ) {
 
-    statusElement.textContent =
+    const element =
+        document.getElementById(
+            'status'
+        );
+
+    element.textContent =
         message;
 
-    statusElement.className =
+    element.className =
         'status ' + type;
 }
 
 
-function showResult(
-    value
-) {
+function setResult(value) {
+
+    const element =
+        document.getElementById(
+            'result'
+        );
+
 
     if (
         typeof value === 'string'
     ) {
 
-        resultElement.textContent =
+        element.textContent =
             value;
 
         return;
     }
 
-    resultElement.textContent =
+
+    element.textContent =
         JSON.stringify(
             value,
             null,
@@ -1378,677 +1255,442 @@ function showResult(
 }
 
 
-/*
- * ============================================================
- * 7. 診断初期化
- * ============================================================
- */
-
-function resetDiagnostic(
-    url,
-    method
+function setLoading(
+    id,
+    loading
 ) {
 
-    document.getElementById(
-        'diag-url'
-    ).textContent = url;
+    const element =
+        document.getElementById(id);
 
-    document.getElementById(
-        'diag-method'
-    ).textContent = method;
+    if (!element) {
+        return;
+    }
 
-    document.getElementById(
-        'diag-status'
-    ).textContent = '通信中';
-
-    document.getElementById(
-        'diag-response'
-    ).textContent = '-';
-
-    document.getElementById(
-        'diag-content-type'
-    ).textContent = '-';
-
-    document.getElementById(
-        'diag-json'
-    ).textContent = '-';
-
-    document.getElementById(
-        'diag-error-code'
-    ).textContent = '-';
-
-    document.getElementById(
-        'diag-error-message'
-    ).textContent = '-';
+    element.classList.toggle(
+        'active',
+        loading
+    );
 }
 
 
-/*
- * ============================================================
- * 8. 診断更新
- * ============================================================
- */
+/* ==========================================================================
+ * 6. ボタン二重実行防止
+ * ========================================================================== */
 
-function setDiagnosticResponse(
-    response,
-    contentType
+async function runButton(
+    button,
+    loadingId,
+    operation
 ) {
 
-    document.getElementById(
-        'diag-status'
-    ).textContent =
-        String(
-            response.status
-        );
-
-    document.getElementById(
-        'diag-response'
-    ).textContent =
-        response.ok
-            ? 'あり'
-            : 'HTTPエラー';
-
-    document.getElementById(
-        'diag-content-type'
-    ).textContent =
-        contentType || '(なし)';
-}
-
-
-function setDiagnosticError(
-    code,
-    message
-) {
-
-    document.getElementById(
-        'diag-error-code'
-    ).textContent =
-        code || '-';
-
-    document.getElementById(
-        'diag-error-message'
-    ).textContent =
-        message || '-';
-}
-
-
-/*
- * ============================================================
- * 9. 共通fetch
- * ============================================================
- */
-
-async function apiFetch(
-    url,
-    options = {}
-) {
-
-    if (requestRunning) {
-
-        throw new Error(
-            '別の通信を実行中です。'
-        );
+    if (button.disabled) {
+        return;
     }
 
 
-    requestRunning = true;
+    button.disabled =
+        true;
 
 
-    resetDiagnostic(
-        url,
-        options.method || 'GET'
+    setLoading(
+        loadingId,
+        true
     );
-
-
-    setStatus(
-        '通信中...',
-        'loading'
-    );
-
-
-    /*
-     * ボタンを全部止める。
-     */
-    healthButton.disabled = true;
-    csrfButton.disabled = true;
-    postButton.disabled = true;
-
-
-    const controller =
-        new AbortController();
-
-
-    const timeoutId =
-        window.setTimeout(
-            () => {
-                controller.abort();
-            },
-            10000
-        );
 
 
     try {
 
-        const headers = {
-            'Accept':
-                'application/json'
-        };
-
-
-        /*
-         * 呼び出し側のheadersを追加。
-         */
-        if (
-            options.headers
-        ) {
-
-            Object.assign(
-                headers,
-                options.headers
-            );
-        }
-
-
-        const response =
-            await fetch(
-                url,
-                {
-                    ...options,
-
-                    credentials:
-                        'same-origin',
-
-                    headers,
-
-                    signal:
-                        controller.signal
-                }
-            );
-
-
-        window.clearTimeout(
-            timeoutId
-        );
-
-
-        const contentType =
-            response.headers.get(
-                'content-type'
-            ) || '';
-
-
-        setDiagnosticResponse(
-            response,
-            contentType
-        );
-
-
-        const text =
-            await response.text();
-
-
-        if (
-            text === ''
-        ) {
-
-            document.getElementById(
-                'diag-response'
-            ).textContent =
-                '空';
-
-            throw new Error(
-                'HTTPレスポンスが空です。'
-            );
-        }
-
-
-        let data;
-
-
-        try {
-
-            data =
-                JSON.parse(
-                    text
-                );
-
-            document.getElementById(
-                'diag-json'
-            ).textContent =
-                '成功';
-
-        } catch (jsonError) {
-
-            document.getElementById(
-                'diag-json'
-            ).textContent =
-                '失敗';
-
-            showResult(
-                text
-            );
-
-            throw new Error(
-                'JSON解析失敗。'
-                + '\n'
-                + 'Content-Type: '
-                + contentType
-                + '\n'
-                + 'HTTP Status: '
-                + response.status
-            );
-        }
-
-
-        showResult(
-            data
-        );
-
-
-        if (
-            !response.ok
-        ) {
-
-            const code =
-                data?.error?.code
-                || 'HTTP_ERROR';
-
-            const message =
-                data?.error?.message
-                || 'HTTPエラーです。';
-
-
-            setDiagnosticError(
-                code,
-                message
-            );
-
-
-            setStatus(
-                'APIエラー: ' + code,
-                'error'
-            );
-
-
-            throw new Error(
-                message
-            );
-        }
-
-
-        if (
-            data?.success !== true
-        ) {
-
-            const code =
-                data?.error?.code
-                || 'API_ERROR';
-
-            const message =
-                data?.error?.message
-                || 'APIエラーです。';
-
-
-            setDiagnosticError(
-                code,
-                message
-            );
-
-
-            setStatus(
-                'APIエラー: ' + code,
-                'error'
-            );
-
-
-            throw new Error(
-                message
-            );
-        }
-
-
-        setStatus(
-            data.message
-                || '通信成功',
-            'ok'
-        );
-
-
-        return data;
-
-    } catch (error) {
-
-        window.clearTimeout(
-            timeoutId
-        );
-
-
-        /*
-         * タイムアウト
-         */
-        if (
-            error?.name ===
-            'AbortError'
-        ) {
-
-            setDiagnosticError(
-                'TIMEOUT',
-                '10秒以内に応答がありません。'
-            );
-
-            setStatus(
-                'タイムアウト',
-                'error'
-            );
-
-            showResult(
-                '10秒以内にサーバーから応答がありませんでした。'
-            );
-
-            throw error;
-        }
-
-
-        /*
-         * fetch自体が失敗
-         *
-         * HTTPレスポンスが存在しない。
-         */
-        if (
-            error instanceof TypeError
-        ) {
-
-            setDiagnosticError(
-                'NETWORK_ERROR',
-                error.message
-            );
-
-
-            setStatus(
-                'ネットワーク通信に失敗',
-                'error'
-            );
-
-
-            showResult(
-                'fetch失敗'
-                + '\n\n'
-                + 'URL: '
-                + url
-                + '\n\n'
-                + 'HTTPレスポンスを取得できませんでした。'
-                + '\n'
-                + 'Apache / HTTPS / VirtualHost / '
-                + '証明書 / ポート / Networkタブを確認してください。'
-            );
-
-            throw error;
-        }
-
-
-        /*
-         * その他
-         */
-        setDiagnosticError(
-            'CLIENT_ERROR',
-            error?.message
-                || String(error)
-        );
-
-
-        setStatus(
-            '通信処理エラー',
-            'error'
-        );
-
-
-        throw error;
+        await operation();
 
     } finally {
 
-        requestRunning = false;
-
-
-        /*
-         * 必ずボタンを復帰。
-         *
-         * エラー時もここを通る。
-         */
-        healthButton.disabled =
+        button.disabled =
             false;
 
-        csrfButton.disabled =
-            false;
-
-        postButton.disabled =
-            false;
+        setLoading(
+            loadingId,
+            false
+        );
     }
 }
 
 
-/*
- * ============================================================
- * 10. GET health
- * ============================================================
- */
+/* ==========================================================================
+ * 7. GET health
+ * ========================================================================== */
 
-healthButton.addEventListener(
-    'click',
-    async () => {
+async function testGetHealth() {
 
-        try {
+    const button =
+        document.getElementById(
+            'btnGetHealth'
+        );
 
-            await apiFetch(
-                HEALTH_URL,
-                {
-                    method: 'GET'
+
+    await runButton(
+        button,
+        'loadingGet',
+        async () => {
+
+            setStatus(
+                'GET API通信中...'
+            );
+
+            setResult(
+                '通信中...'
+            );
+
+
+            try {
+
+                const result =
+                    await callApi(
+                        'health'
+                    );
+
+
+                setStatus(
+                    'GET API 成功',
+                    'success'
+                );
+
+
+                setResult(
+                    result
+                );
+
+
+            } catch (error) {
+
+                setStatus(
+                    'GET API 失敗',
+                    'error'
+                );
+
+
+                setResult(
+                    normalizeApiError(
+                        error
+                    )
+                );
+            }
+        }
+    );
+}
+
+
+/* ==========================================================================
+ * 8. CSRF
+ * ========================================================================== */
+
+async function getCsrf() {
+
+    const button =
+        document.getElementById(
+            'btnCsrf'
+        );
+
+
+    await runButton(
+        button,
+        'loadingCsrf',
+        async () => {
+
+            setStatus(
+                'CSRF取得中...'
+            );
+
+
+            try {
+
+                const result =
+                    await callApi(
+                        'csrf'
+                    );
+
+
+                if (
+                    !result.data ||
+                    !result.data.csrfToken
+                ) {
+
+                    throw {
+                        code:
+                            'CSRF_RESPONSE_INVALID',
+
+                        message:
+                            'CSRFレスポンスが不正です。',
+
+                        response:
+                            result
+                    };
                 }
-            );
-
-        } catch (error) {
-
-            console.error(
-                error
-            );
-        }
-    }
-);
 
 
-/*
- * ============================================================
- * 11. CSRF取得
- * ============================================================
- */
-
-async function fetchCsrf()
-{
-    const data =
-        await apiFetch(
-            CSRF_URL,
-            {
-                method: 'GET'
-            }
-        );
+                csrfToken =
+                    result.data.csrfToken;
 
 
-    csrfToken =
-        data?.data?.csrfToken
-        || '';
+                setStatus(
+                    'CSRF取得成功',
+                    'success'
+                );
 
 
-    if (
-        csrfToken === ''
-    ) {
-
-        csrfStatusElement.textContent =
-            'CSRF取得失敗';
-
-        throw new Error(
-            'CSRFトークンがレスポンスにありません。'
-        );
-    }
-
-
-    csrfStatusElement.textContent =
-        'CSRF取得済み';
-
-    return csrfToken;
-}
-
-
-csrfButton.addEventListener(
-    'click',
-    async () => {
-
-        try {
-
-            await fetchCsrf();
-
-        } catch (error) {
-
-            csrfToken = '';
-
-            csrfStatusElement.textContent =
-                'CSRF取得失敗';
-
-            console.error(
-                error
-            );
-        }
-    }
-);
-
-
-/*
- * ============================================================
- * 12. POST test
- * ============================================================
- */
-
-postButton.addEventListener(
-    'click',
-    async () => {
-
-        try {
-
-            /*
-             * CSRFがなければ取得。
-             */
-            if (
-                csrfToken === ''
-            ) {
-
-                await fetchCsrf();
-            }
-
-
-            /*
-             * POST。
-             */
-            const body =
-                JSON.stringify(
+                setResult(
                     {
-                        action:
-                            'test_post',
-
-                        csrf_token:
-                            csrfToken,
-
-                        clientTime:
-                            new Date()
-                                .toISOString()
+                        success: true,
+                        message:
+                            'CSRF tokenを取得しました。',
+                        tokenLength:
+                            csrfToken.length
                     }
                 );
 
 
-            await apiFetch(
-                ENTRY_URL,
-                {
-                    method: 'POST',
+            } catch (error) {
 
-                    headers: {
-                        'Content-Type':
-                            'application/json',
+                setStatus(
+                    'CSRF取得失敗',
+                    'error'
+                );
 
-                        'X-CSRF-Token':
-                            csrfToken
-                    },
 
-                    body
-                }
-            );
-
-        } catch (error) {
-
-            console.error(
-                error
-            );
+                setResult(
+                    normalizeApiError(
+                        error
+                    )
+                );
+            }
         }
-    }
-);
+    );
+}
 
 
-/*
- * ============================================================
- * 13. URL状態
- * ============================================================
- */
+/* ==========================================================================
+ * 9. POST health
+ * ========================================================================== */
 
-function getScreenState()
-{
-    const params =
-        new URLSearchParams(
-            window.location.search
+async function testPostHealth() {
+
+    const button =
+        document.getElementById(
+            'btnPostHealth'
         );
 
 
+    await runButton(
+        button,
+        'loadingPost',
+        async () => {
+
+            setStatus(
+                'POST API通信中...'
+            );
+
+
+            setResult(
+                '通信中...'
+            );
+
+
+            try {
+
+                /*
+                 * まずCSRFがあるか確認。
+                 */
+
+                if (
+                    !csrfToken
+                ) {
+
+                    throw {
+                        code:
+                            'CSRF_NOT_AVAILABLE',
+
+                        message:
+                            'CSRF tokenがありません。先にCSRF取得を実行してください。'
+                    };
+                }
+
+
+                const result =
+                    await callApi(
+                        'healthPost',
+                        {
+                            method: 'POST',
+
+                            body: {
+                                test: true,
+                                clientTime:
+                                    new Date().toISOString()
+                            }
+                        }
+                    );
+
+
+                setStatus(
+                    'POST API 成功',
+                    'success'
+                );
+
+
+                setResult(
+                    result
+                );
+
+
+            } catch (error) {
+
+                setStatus(
+                    'POST API 失敗',
+                    'error'
+                );
+
+
+                setResult(
+                    normalizeApiError(
+                        error
+                    )
+                );
+            }
+        }
+    );
+}
+
+
+/* ==========================================================================
+ * 10. エラーを画面表示用に正規化
+ * ========================================================================== */
+
+function normalizeApiError(
+    error
+) {
+
+    if (
+        error &&
+        typeof error === 'object'
+    ) {
+
+        return {
+            code:
+                error.code ||
+                'UNKNOWN_ERROR',
+
+            message:
+                error.message ||
+                '不明なエラー',
+
+            detail:
+                error.detail ||
+                null,
+
+            url:
+                error.url ||
+                null,
+
+            method:
+                error.method ||
+                null,
+
+            status:
+                error.status ??
+                null,
+
+            contentType:
+                error.contentType ||
+                null,
+
+            response:
+                error.response ??
+                null
+        };
+    }
+
+
     return {
-        screen:
-            params.get('screen')
-            || '',
+        code:
+            'UNKNOWN_ERROR',
 
-        surveyId:
-            params.get('surveyId')
-            || '',
-
-        customerId:
-            params.get('customerId')
-            || '',
-
-        questionId:
-            params.get('questionId')
-            || ''
+        message:
+            String(error)
     };
 }
 
 
-function showHistoryState()
-{
+/* ==========================================================================
+ * 11. URL状態表示
+ * ========================================================================== */
+
+function renderUrlState() {
+
+    const url =
+        new URL(
+            window.location.href
+        );
+
+
+    const state = {
+        currentUrl:
+            window.location.href,
+
+        pathname:
+            url.pathname,
+
+        search:
+            url.search,
+
+        hash:
+            url.hash,
+
+        screen:
+            url.searchParams.get(
+                'screen'
+            ),
+
+        surveyId:
+            url.searchParams.get(
+                'surveyId'
+            ),
+
+        customerId:
+            url.searchParams.get(
+                'customerId'
+            ),
+
+        questionId:
+            url.searchParams.get(
+                'questionId'
+            ),
+
+        historyState:
+            window.history.state
+    };
+
+
     document.getElementById(
-        'history-result'
+        'currentUrl'
+    ).textContent =
+        window.location.href;
+
+
+    document.getElementById(
+        'urlState'
     ).textContent =
         JSON.stringify(
-            {
-                currentUrl:
-                    window.location.href,
-
-                pathname:
-                    window.location.pathname,
-
-                search:
-                    window.location.search,
-
-                state:
-                    getScreenState()
-            },
+            state,
             null,
             2
         );
 }
 
 
-function makeScreenUrl(
+/* ==========================================================================
+ * 12. screen URL
+ * ========================================================================== */
+
+function changeScreen(
     screen
 ) {
 
@@ -2058,7 +1700,46 @@ function makeScreenUrl(
         );
 
 
-    url.search = '';
+    url.searchParams.set(
+        'screen',
+        screen
+    );
+
+
+    /*
+     * 業務上の状態はquery string。
+     *
+     * pathnameは変更しない。
+     */
+
+    const state = {
+        screen
+    };
+
+
+    window.history.pushState(
+        state,
+        '',
+        url
+    );
+
+
+    renderUrlState();
+}
+
+
+/* ==========================================================================
+ * 13. replaceState
+ * ========================================================================== */
+
+function replaceScreen(
+    screen
+) {
+
+    const url =
+        new URL(
+            window.location.href
+        );
 
 
     url.searchParams.set(
@@ -2067,201 +1748,155 @@ function makeScreenUrl(
     );
 
 
-    return url.toString();
+    const state = {
+        screen,
+        replaced: true
+    };
+
+
+    window.history.replaceState(
+        state,
+        '',
+        url
+    );
+
+
+    renderUrlState();
 }
 
 
-/*
- * ============================================================
- * 14. pushState
- * ============================================================
- */
-
-document
-    .getElementById(
-        'admin-button'
-    )
-    .addEventListener(
-        'click',
-        () => {
-
-            const url =
-                makeScreenUrl(
-                    'admin'
-                );
-
-
-            history.pushState(
-                {
-                    screen: 'admin'
-                },
-                '',
-                url
-            );
-
-
-            showHistoryState();
-        }
-    );
-
-
-document
-    .getElementById(
-        'survey-button'
-    )
-    .addEventListener(
-        'click',
-        () => {
-
-            const url =
-                makeScreenUrl(
-                    'survey'
-                );
-
-
-            history.pushState(
-                {
-                    screen: 'survey'
-                },
-                '',
-                url
-            );
-
-
-            showHistoryState();
-        }
-    );
-
-
-document
-    .getElementById(
-        'answer-button'
-    )
-    .addEventListener(
-        'click',
-        () => {
-
-            const url =
-                makeScreenUrl(
-                    'answer'
-                );
-
-
-            history.pushState(
-                {
-                    screen: 'answer'
-                },
-                '',
-                url
-            );
-
-
-            showHistoryState();
-        }
-    );
-
-
-/*
- * ============================================================
- * 15. replaceState
- * ============================================================
- */
-
-document
-    .getElementById(
-        'replace-button'
-    )
-    .addEventListener(
-        'click',
-        () => {
-
-            const url =
-                makeScreenUrl(
-                    'survey'
-                );
-
-
-            history.replaceState(
-                {
-                    screen: 'survey',
-                    replaced: true
-                },
-                '',
-                url
-            );
-
-
-            showHistoryState();
-        }
-    );
-
-
-/*
- * ============================================================
- * 16. history.back()
- * ============================================================
- */
-
-document
-    .getElementById(
-        'back-button'
-    )
-    .addEventListener(
-        'click',
-        () => {
-
-            history.back();
-        }
-    );
-
-
-/*
- * ============================================================
- * 17. popstate
- * ============================================================
- */
+/* ==========================================================================
+ * 14. popstate
+ * ========================================================================== */
 
 window.addEventListener(
     'popstate',
     () => {
 
-        showHistoryState();
+        console.log(
+            '[HISTORY] popstate',
+            window.location.href,
+            window.history.state
+        );
+
+
+        renderUrlState();
     }
 );
 
 
-/*
- * ============================================================
- * 18. 初期状態表示
- * ============================================================
- */
+/* ==========================================================================
+ * 15. DOMイベント
+ * ========================================================================== */
 
-showHistoryState();
+document.addEventListener(
+    'DOMContentLoaded',
+    () => {
+
+        renderUrlState();
 
 
-/*
- * ============================================================
- * 19. 起動完了
- * ============================================================
- */
+        /*
+         * GET
+         */
 
-console.log(
-    'Application initialized.'
-);
+        document
+            .getElementById(
+                'btnGetHealth'
+            )
+            .addEventListener(
+                'click',
+                testGetHealth
+            );
 
-console.log(
-    'ENTRY_URL:',
-    ENTRY_URL
-);
 
-console.log(
-    'HEALTH_URL:',
-    HEALTH_URL
-);
+        /*
+         * CSRF
+         */
 
-console.log(
-    'CSRF_URL:',
-    CSRF_URL
+        document
+            .getElementById(
+                'btnCsrf'
+            )
+            .addEventListener(
+                'click',
+                getCsrf
+            );
+
+
+        /*
+         * POST
+         */
+
+        document
+            .getElementById(
+                'btnPostHealth'
+            )
+            .addEventListener(
+                'click',
+                testPostHealth
+            );
+
+
+        /*
+         * screen buttons
+         */
+
+        document
+            .querySelectorAll(
+                '[data-screen]'
+            )
+            .forEach(
+                button => {
+
+                    button.addEventListener(
+                        'click',
+                        () => {
+
+                            changeScreen(
+                                button.dataset.screen
+                            );
+                        }
+                    );
+                }
+            );
+
+
+        /*
+         * replaceState
+         */
+
+        document
+            .getElementById(
+                'btnReplace'
+            )
+            .addEventListener(
+                'click',
+                () => {
+
+                    replaceScreen(
+                        'survey'
+                    );
+                }
+            );
+
+
+        /*
+         * history.back()
+         */
+
+        document
+            .getElementById(
+                'btnBack'
+            )
+            .addEventListener(
+                'click',
+                () => {
+
+                    window.history.back();
+                }
+            );
+    }
 );
 
 </script>
@@ -2269,20 +1904,3 @@ console.log(
 </body>
 
 </html>
-
-<?php
-
-    exit;
-}
-
-
-/* ============================================================
- * 20. 想定外
- * ============================================================
- */
-
-errorResponse(
-    'NO_ROUTE',
-    'リクエストを処理できませんでした。',
-    500
-);
