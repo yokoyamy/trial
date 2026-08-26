@@ -1,58 +1,55 @@
 <?php
-
 declare(strict_types=1);
 
-/*
-|--------------------------------------------------------------------------
-| 1ファイル PHP アプリ管理・編集システム
-|--------------------------------------------------------------------------
-|
-| この段階では「基本構造」を優先する。
-|
-| 通信方式：
-|
-|   GET
-|   POST
-|
-| サーバー処理：
-|
-|   PHP
-|   scandir()
-|   file_get_contents()
-|   file_put_contents()
-|   mkdir()
-|
-| 使用しない：
-|
-|   fetch()
-|   apiCall()
-|   XMLHttpRequest
-|   JSON API
-|   データベース
-|
-|--------------------------------------------------------------------------
-*/
+/**
+ * ============================================================
+ * sample-app
+ * 単一ファイル・基本構造
+ * ============================================================
+ *
+ * 方針
+ *
+ * 1. index.php だけで動作
+ * 2. fetch() 不使用
+ * 3. API 不使用
+ * 4. JavaScript の apiCall() 不使用
+ * 5. HTML form POST でサーバー処理を実行
+ * 6. PHP が直接ファイルを読み書きする
+ * 7. 保存処理は PHP 側で実施
+ *
+ * ============================================================
+ */
 
+
+/* ============================================================
+ * 基本設定
+ * ============================================================
+ */
+
+date_default_timezone_set('Asia/Tokyo');
+
+$appRoot = __DIR__;
 
 /*
-|--------------------------------------------------------------------------
-| 基本設定
-|--------------------------------------------------------------------------
-*/
+ * sample-app/data/
+ *   └─ sample.txt
+ *
+ * 実際の業務データは、将来的にここを
+ * JSON保存領域として利用する。
+ */
+$dataDir = $appRoot . DIRECTORY_SEPARATOR . 'data';
 
-$baseDir = __DIR__;
+if (!is_dir($dataDir)) {
+    mkdir($dataDir, 0775, true);
+}
 
-$historyBaseDir =
-    $baseDir .
-    DIRECTORY_SEPARATOR .
-    '.history';
+$dataFile = $dataDir . DIRECTORY_SEPARATOR . 'sample.txt';
 
 
-/*
-|--------------------------------------------------------------------------
-| HTMLエスケープ
-|--------------------------------------------------------------------------
-*/
+/* ============================================================
+ * 共通関数
+ * ============================================================
+ */
 
 function h(mixed $value): string
 {
@@ -64,932 +61,218 @@ function h(mixed $value): string
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| パス正規化
-|--------------------------------------------------------------------------
-|
-| この段階では、
-|
-|   管理用index.php
-|       ├── app-a/
-|       │   └── index.php
-|       ├── app-b/
-|       │   └── index.php
-|       └── ...
-|
-| という第1階層のアプリだけを扱う。
-|
-|--------------------------------------------------------------------------
-*/
+/**
+ * 現在ページへ戻る
+ */
+function redirectToSelf(): never
+{
+    $url = $_SERVER['REQUEST_URI'] ?? '/';
 
-function normalizeAppName(
-    string $name
-): ?string {
-
-    $name = trim($name);
-
-    /*
-     * URLエンコード対策
-     */
-    $name = rawurldecode($name);
-
-    /*
-     * Windows区切り文字を拒否
-     */
-    if (str_contains($name, '\\')) {
-        return null;
-    }
-
-    /*
-     * パス区切りを拒否
-     */
-    if (str_contains($name, '/')) {
-        return null;
-    }
-
-    /*
-     * 空
-     */
-    if ($name === '') {
-        return null;
-    }
-
-    /*
-     * . と ..
-     */
-    if (
-        $name === '.' ||
-        $name === '..'
-    ) {
-        return null;
-    }
-
-    /*
-     * Windowsドライブ
-     */
-    if (
-        preg_match(
-            '/^[A-Za-z]:$/',
-            $name
-        )
-    ) {
-        return null;
-    }
-
-    /*
-     * 制御文字を拒否
-     */
-    if (
-        preg_match(
-            '/[\x00-\x1F\x7F]/',
-            $name
-        )
-    ) {
-        return null;
-    }
-
-    /*
-     * ディレクトリ名として許可する文字。
-     *
-     * 日本語も許可する。
-     *
-     * 例：
-     *
-     *   sample-app
-     *   test_app
-     *   アンケート
-     *   アンケート2026
-     */
-    if (
-        preg_match(
-            '/^[\p{L}\p{N}_.\- ]+$/u',
-            $name
-        ) !== 1
-    ) {
-        return null;
-    }
-
-    return $name;
+    header('Location: ' . $url, true, 303);
+    exit;
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| アプリディレクトリ
-|--------------------------------------------------------------------------
-*/
+/**
+ * POST値を取得
+ */
+function postString(string $key, string $default = ''): string
+{
+    if (!isset($_POST[$key])) {
+        return $default;
+    }
 
-function getAppDirectory(
-    string $baseDir,
-    string $appName
-): string {
+    if (!is_string($_POST[$key])) {
+        return $default;
+    }
 
-    return
-        $baseDir .
-        DIRECTORY_SEPARATOR .
-        $appName;
+    return $_POST[$key];
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| アプリ index.php
-|--------------------------------------------------------------------------
-*/
-
-function getAppFile(
-    string $baseDir,
-    string $appName
-): string {
-
-    return
-        getAppDirectory(
-            $baseDir,
-            $appName
-        )
-        .
-        DIRECTORY_SEPARATOR .
-        'index.php';
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| 管理対象外ディレクトリ判定
-|--------------------------------------------------------------------------
-*/
-
-function isSystemDirectory(
-    string $name
-): bool {
-
-    return in_array(
-        $name,
-        [
-            '.',
-            '..',
-            '.history'
-        ],
-        true
+/**
+ * 成功メッセージをセッションではなく
+ * GETパラメータで渡す簡易方式。
+ */
+function redirectWithMessage(string $message): never
+{
+    $base = strtok(
+        $_SERVER['REQUEST_URI'] ?? '/',
+        '?'
     );
+
+    $url =
+        $base .
+        '?message=' .
+        rawurlencode($message);
+
+    header('Location: ' . $url, true, 303);
+
+    exit;
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| アプリ一覧取得
-|--------------------------------------------------------------------------
-|
-| 「index.phpを持つディレクトリ」だけをアプリとする。
-|
-|--------------------------------------------------------------------------
-*/
+/* ============================================================
+ * POST処理
+ * ============================================================
+ *
+ * ここが今回の重要部分。
+ *
+ * fetch()
+ * API
+ * XMLHttpRequest
+ *
+ * は一切使用しない。
+ *
+ * ブラウザのHTMLフォームから
+ *
+ * POST /sample-app/index.php
+ *
+ * が来たら、このPHPが直接処理する。
+ * ============================================================
+ */
 
-function getApplications(
-    string $baseDir
-): array {
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    $applications = [];
-
-    $items =
-        scandir(
-            $baseDir
-        );
-
-
-    if ($items === false) {
-        return [];
-    }
+    $action = postString('action');
 
 
-    foreach ($items as $item) {
+    /* --------------------------------------------------------
+     * save_file
+     * --------------------------------------------------------
+     */
 
-        if (
-            isSystemDirectory(
-                $item
-            )
-        ) {
-            continue;
-        }
+    if ($action === 'save_file') {
 
+        $content = postString('content');
 
-        $directory =
-            $baseDir .
-            DIRECTORY_SEPARATOR .
-            $item;
-
-
-        if (!is_dir($directory)) {
-            continue;
-        }
+        /*
+         * このサンプルでは保存先を固定する。
+         *
+         * ユーザーから任意のパスを受け取って
+         * file_put_contents() する構造にはしない。
+         *
+         * これが重要。
+         */
+        $targetFile = $dataFile;
 
 
         /*
-         * index.phpが存在すること
+         * 排他的ロック付きで保存
          */
-        $file =
-            $directory .
-            DIRECTORY_SEPARATOR .
-            'index.php';
-
-
-        if (!is_file($file)) {
-            continue;
-        }
-
-
-        /*
-         * アプリ名として安全なものだけ
-         */
-        if (
-            normalizeAppName(
-                $item
-            ) === null
-        ) {
-            continue;
-        }
-
-
-        $applications[] = [
-            'name' => $item,
-            'path' => $item
-        ];
-    }
-
-
-    usort(
-        $applications,
-        static function (
-            array $a,
-            array $b
-        ): int {
-
-            return strnatcasecmp(
-                $a['name'],
-                $b['name']
-            );
-        }
-    );
-
-
-    return $applications;
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| アプリ読み込み
-|--------------------------------------------------------------------------
-*/
-
-function loadApplication(
-    string $baseDir,
-    string $appName
-): array {
-
-    $appName =
-        normalizeAppName(
-            $appName
-        );
-
-
-    if ($appName === null) {
-
-        return [
-            'success' => false,
-            'message' =>
-                'アプリ名が不正です。'
-        ];
-    }
-
-
-    $directory =
-        getAppDirectory(
-            $baseDir,
-            $appName
-        );
-
-
-    $file =
-        getAppFile(
-            $baseDir,
-            $appName
-        );
-
-
-    if (!is_dir($directory)) {
-
-        return [
-            'success' => false,
-            'message' =>
-                'アプリディレクトリが存在しません。'
-        ];
-    }
-
-
-    if (!is_file($file)) {
-
-        return [
-            'success' => false,
-            'message' =>
-                'アプリのindex.phpが存在しません。'
-        ];
-    }
-
-
-    $content =
-        file_get_contents(
-            $file
-        );
-
-
-    if ($content === false) {
-
-        return [
-            'success' => false,
-            'message' =>
-                'index.phpを読み込めませんでした。'
-        ];
-    }
-
-
-    return [
-        'success' => true,
-        'appName' => $appName,
-        'content' => $content
-    ];
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| アプリ保存
-|--------------------------------------------------------------------------
-|
-| 既存アプリのみ更新する。
-|
-| 新規ディレクトリは作らない。
-|
-|--------------------------------------------------------------------------
-*/
-
-function saveApplication(
-    string $baseDir,
-    string $historyBaseDir,
-    string $appName,
-    string $content
-): array {
-
-    $appName =
-        normalizeAppName(
-            $appName
-        );
-
-
-    if ($appName === null) {
-
-        return [
-            'success' => false,
-            'message' =>
-                'アプリ名が不正です。'
-        ];
-    }
-
-
-    $directory =
-        getAppDirectory(
-            $baseDir,
-            $appName
-        );
-
-
-    $file =
-        getAppFile(
-            $baseDir,
-            $appName
-        );
-
-
-    /*
-     * 既存アプリ限定
-     */
-    if (!is_dir($directory)) {
-
-        return [
-            'success' => false,
-            'message' =>
-                '保存対象のアプリが存在しません。'
-        ];
-    }
-
-
-    if (!is_file($file)) {
-
-        return [
-            'success' => false,
-            'message' =>
-                '保存対象のindex.phpが存在しません。'
-        ];
-    }
-
-
-    /*
-     * 履歴ディレクトリ
-     */
-    if (!is_dir($historyBaseDir)) {
-
-        if (
-            !mkdir(
-                $historyBaseDir,
-                0777,
-                true
-            )
-        ) {
-
-            return [
-                'success' => false,
-                'message' =>
-                    '履歴ディレクトリを作成できませんでした。'
-            ];
-        }
-    }
-
-
-    $historyDirectory =
-        $historyBaseDir .
-        DIRECTORY_SEPARATOR .
-        $appName;
-
-
-    if (!is_dir($historyDirectory)) {
-
-        if (
-            !mkdir(
-                $historyDirectory,
-                0777,
-                true
-            )
-        ) {
-
-            return [
-                'success' => false,
-                'message' =>
-                    'アプリ履歴ディレクトリを作成できませんでした。'
-            ];
-        }
-    }
-
-
-    /*
-     * 現在の内容をバックアップ
-     */
-    $oldContent =
-        file_get_contents(
-            $file
-        );
-
-
-    if ($oldContent !== false) {
-
-        $historyFile =
-            $historyDirectory .
-            DIRECTORY_SEPARATOR .
-            date('YmdHis') .
-            '_' .
-            bin2hex(
-                random_bytes(4)
-            ) .
-            '_before.txt';
-
-
-        file_put_contents(
-            $historyFile,
-            $oldContent,
-            LOCK_EX
-        );
-    }
-
-
-    /*
-     * 保存
-     */
-    $written =
-        file_put_contents(
-            $file,
+        $result = file_put_contents(
+            $targetFile,
             $content,
             LOCK_EX
         );
 
 
-    if ($written === false) {
+        if ($result === false) {
 
-        return [
-            'success' => false,
-            'message' =>
-                'index.phpの保存に失敗しました。'
-        ];
+            http_response_code(500);
+
+            $errorMessage =
+                'ファイルの保存に失敗しました。';
+
+        } else {
+
+            redirectWithMessage(
+                '保存しました。'
+            );
+        }
     }
 
 
-    return [
-        'success' => true,
-        'message' =>
-            '保存しました。',
-        'appName' =>
-            $appName
-    ];
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| 新規アプリ作成
-|--------------------------------------------------------------------------
-|
-| この処理だけがmkdir()を実行する。
-|
-|--------------------------------------------------------------------------
-*/
-
-function createApplication(
-    string $baseDir,
-    string $appName,
-    string $initialContent
-): array {
-
-    $appName =
-        normalizeAppName(
-            $appName
-        );
-
-
-    if ($appName === null) {
-
-        return [
-            'success' => false,
-            'message' =>
-                'アプリ名が不正です。'
-        ];
-    }
-
-
-    $directory =
-        getAppDirectory(
-            $baseDir,
-            $appName
-        );
-
-
-    $file =
-        getAppFile(
-            $baseDir,
-            $appName
-        );
-
-
-    /*
-     * 既存チェック
+    /* --------------------------------------------------------
+     * clear_file
+     * --------------------------------------------------------
      */
-    if (is_dir($directory)) {
 
-        return [
-            'success' => false,
-            'message' =>
-                '同名のアプリがすでに存在します。'
-        ];
-    }
+    if ($action === 'clear_file') {
 
-
-    /*
-     * ディレクトリ作成
-     */
-    if (
-        !mkdir(
-            $directory,
-            0777,
-            true
-        )
-    ) {
-
-        return [
-            'success' => false,
-            'message' =>
-                'アプリディレクトリを作成できませんでした。'
-        ];
-    }
-
-
-    /*
-     * index.php作成
-     */
-    $written =
-        file_put_contents(
-            $file,
-            $initialContent,
+        $result = file_put_contents(
+            $dataFile,
+            '',
             LOCK_EX
         );
 
 
-    if ($written === false) {
+        if ($result === false) {
 
-        /*
-         * index.php作成失敗時は
-         * 作成途中のディレクトリを削除する。
-         */
-        @rmdir($directory);
+            http_response_code(500);
 
+            $errorMessage =
+                'ファイルのクリアに失敗しました。';
 
-        return [
-            'success' => false,
-            'message' =>
-                'index.phpを作成できませんでした。'
-        ];
+        } else {
+
+            redirectWithMessage(
+                'クリアしました。'
+            );
+        }
     }
 
 
-    return [
-        'success' => true,
-        'message' =>
-            '新しいアプリを作成しました。',
-        'appName' =>
-            $appName
-    ];
+    /* --------------------------------------------------------
+     * 未知のaction
+     * --------------------------------------------------------
+     */
+
+    if (
+        $action !== 'save_file' &&
+        $action !== 'clear_file'
+    ) {
+
+        http_response_code(400);
+
+        $errorMessage =
+            '不正な操作です。';
+    }
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| 初期PHPコード
-|--------------------------------------------------------------------------
-*/
+/* ============================================================
+ * GET処理
+ * ============================================================
+ *
+ * GETではファイルを読むだけ。
+ *
+ * GETによる保存・変更はしない。
+ * ============================================================
+ */
 
-$defaultApplicationContent =
-<<<'PHP'
-<?php
+$content = '';
 
-declare(strict_types=1);
+if (is_file($dataFile)) {
 
-echo '<!DOCTYPE html>';
-echo '<html lang="ja">';
-echo '<head>';
-echo '<meta charset="UTF-8">';
-echo '<title>新しいアプリ</title>';
-echo '</head>';
-echo '<body>';
+    $loaded = file_get_contents($dataFile);
 
-echo '<h1>新しいアプリ</h1>';
-
-echo '<p>このアプリはPHPから作成されました。</p>';
-
-echo '</body>';
-echo '</html>';
-
-PHP;
+    if ($loaded !== false) {
+        $content = $loaded;
+    }
+}
 
 
-/*
-|--------------------------------------------------------------------------
-| 画面状態
-|--------------------------------------------------------------------------
-*/
+/* ============================================================
+ * メッセージ
+ * ============================================================
+ */
 
 $message = '';
 
-$error = '';
+if (isset($_GET['message'])) {
 
-$selectedApp = '';
-
-$editorContent = '';
-
-
-/*
-|--------------------------------------------------------------------------
-| POST
-|--------------------------------------------------------------------------
-*/
-
-if (
-    ($_SERVER['REQUEST_METHOD'] ?? 'GET')
-    === 'POST'
-) {
-
-    $action =
-        isset($_POST['action'])
-            ? (string)$_POST['action']
-            : '';
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | 新規作成
-    |--------------------------------------------------------------------------
-    */
-
-    if ($action === 'create') {
-
-        $appName =
-            isset($_POST['app_name'])
-                ? (string)$_POST['app_name']
-                : '';
-
-
-        $result =
-            createApplication(
-                $baseDir,
-                $appName,
-                $defaultApplicationContent
-            );
-
-
-        if ($result['success']) {
-
-            $message =
-                (string)$result['message'];
-
-            $selectedApp =
-                (string)$result['appName'];
-
-
-            /*
-             * 作成したファイルを読み込んで
-             * エディタに表示
-             */
-            $loaded =
-                loadApplication(
-                    $baseDir,
-                    $selectedApp
-                );
-
-
-            if ($loaded['success']) {
-
-                $editorContent =
-                    (string)$loaded['content'];
-            }
-
-        } else {
-
-            $error =
-                (string)$result['message'];
-        }
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | 読み込み
-    |--------------------------------------------------------------------------
-    */
-
-    elseif ($action === 'load') {
-
-        $appName =
-            isset($_POST['app_name'])
-                ? (string)$_POST['app_name']
-                : '';
-
-
-        $result =
-            loadApplication(
-                $baseDir,
-                $appName
-            );
-
-
-        if ($result['success']) {
-
-            $selectedApp =
-                (string)$result['appName'];
-
-            $editorContent =
-                (string)$result['content'];
-
-            $message =
-                '読み込みました。';
-
-        } else {
-
-            $error =
-                (string)$result['message'];
-        }
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | 保存
-    |--------------------------------------------------------------------------
-    */
-
-    elseif ($action === 'save') {
-
-        $appName =
-            isset($_POST['app_name'])
-                ? (string)$_POST['app_name']
-                : '';
-
-
-        $content =
-            isset($_POST['content'])
-                ? (string)$_POST['content']
-                : '';
-
-
-        $result =
-            saveApplication(
-                $baseDir,
-                $historyBaseDir,
-                $appName,
-                $content
-            );
-
-
-        $selectedApp =
-            $appName;
-
-        $editorContent =
-            $content;
-
-
-        if ($result['success']) {
-
-            $message =
-                (string)$result['message'];
-
-        } else {
-
-            $error =
-                (string)$result['message'];
-        }
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | 不明な操作
-    |--------------------------------------------------------------------------
-    */
-
-    else {
-
-        $error =
-            '不明な操作です。';
-    }
+    $message = (string)$_GET['message'];
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| GET ?app=xxx
-|--------------------------------------------------------------------------
-*/
-
-elseif (
-    isset($_GET['app'])
-) {
-
-    $appName =
-        (string)$_GET['app'];
-
-
-    $result =
-        loadApplication(
-            $baseDir,
-            $appName
-        );
-
-
-    if ($result['success']) {
-
-        $selectedApp =
-            (string)$result['appName'];
-
-        $editorContent =
-            (string)$result['content'];
-
-    } else {
-
-        $error =
-            (string)$result['message'];
-    }
-}
-
-
-/*
-|--------------------------------------------------------------------------
-| アプリ一覧
-|--------------------------------------------------------------------------
-*/
-
-$applications =
-    getApplications(
-        $baseDir
-    );
+/* ============================================================
+ * HTML
+ * ============================================================
+ */
 
 ?>
 <!DOCTYPE html>
-
 <html lang="ja">
 
 <head>
@@ -1001,10 +284,7 @@ $applications =
     content="width=device-width, initial-scale=1.0"
 >
 
-<title>
-PHPアプリ管理
-</title>
-
+<title>Sample App</title>
 
 <style>
 
@@ -1012,20 +292,11 @@ PHPアプリ管理
     box-sizing: border-box;
 }
 
-
-html,
 body {
     margin: 0;
-    padding: 0;
-}
-
-
-body {
-
-    background: #f3f5f7;
-
-    color: #202124;
-
+    padding: 30px;
+    background: #f5f5f5;
+    color: #222;
     font-family:
         -apple-system,
         BlinkMacSystemFont,
@@ -1033,315 +304,92 @@ body {
         sans-serif;
 }
 
-
-header {
-
-    padding:
-        16px 24px;
-
-    background: #17202a;
-
-    color: white;
+.container {
+    max-width: 1000px;
+    margin: 0 auto;
 }
 
-
-header h1 {
-
-    margin: 0;
-
-    font-size: 20px;
-}
-
-
-main {
-
-    width:
-        min(
-            1300px,
-            calc(100% - 30px)
-        );
-
-    margin:
-        20px auto;
-}
-
-
-.panel {
-
-    background: white;
-
-    border-radius: 8px;
-
-    padding: 20px;
-
-    margin-bottom: 20px;
-
-    box-shadow:
-        0 2px 8px
-        rgba(
-            0,
-            0,
-            0,
-            .08
-        );
-}
-
-
-.panel h2 {
-
+h1 {
     margin-top: 0;
 }
 
-
-.info {
-
-    padding: 12px;
-
-    background: #eef4ff;
-
-    border:
-        1px solid #b8c9ed;
-
-    border-radius: 5px;
-
-    margin-bottom: 15px;
-
-    line-height: 1.6;
-}
-
-
-.success {
-
-    padding: 12px;
-
-    background: #e8f5e9;
-
-    border:
-        1px solid #81c784;
-
-    border-radius: 5px;
-
-    color: #256029;
-
+.card {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 20px;
     margin-bottom: 20px;
 }
 
-
-.error {
-
-    padding: 12px;
-
-    background: #ffebee;
-
-    border:
-        1px solid #e57373;
-
-    border-radius: 5px;
-
-    color: #a51c30;
-
-    margin-bottom: 20px;
-}
-
-
-input,
 textarea {
-
     width: 100%;
-
-    border:
-        1px solid #c7ccd1;
-
-    border-radius: 5px;
-
-    padding: 10px;
-
+    min-height: 400px;
+    padding: 12px;
+    font-family: monospace;
     font-size: 14px;
-}
-
-
-input {
-
-    margin-bottom: 10px;
-}
-
-
-textarea {
-
-    min-height: 600px;
-
-    resize: vertical;
-
-    font-family:
-        Consolas,
-        "Courier New",
-        monospace;
-
     line-height: 1.5;
-
-    tab-size: 4;
+    border: 1px solid #bbb;
+    border-radius: 5px;
+    resize: vertical;
 }
-
 
 button {
-
+    padding: 10px 18px;
     border: 0;
-
     border-radius: 5px;
-
-    padding:
-        9px 16px;
-
-    background: #1976d2;
-
+    background: #2563eb;
     color: white;
-
     cursor: pointer;
-
     font-size: 14px;
 }
 
-
 button:hover {
-
-    background: #125da7;
+    background: #1d4ed8;
 }
 
-
-button.gray {
-
-    background: #607d8b;
+button.danger {
+    background: #dc2626;
 }
 
-
-button.green {
-
-    background: #388e3c;
+button.danger:hover {
+    background: #b91c1c;
 }
-
-
-button.red {
-
-    background: #c62828;
-}
-
-
-.application-list {
-
-    display: grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fill,
-            minmax(
-                230px,
-                1fr
-            )
-        );
-
-    gap: 10px;
-}
-
-
-.application {
-
-    padding: 12px;
-
-    border:
-        1px solid #d5d9dd;
-
-    border-radius: 6px;
-
-    background: #fafafa;
-}
-
-
-.application-name {
-
-    font-weight: 600;
-
-    margin-bottom: 10px;
-
-    word-break: break-all;
-}
-
-
-.application form {
-
-    margin: 0;
-}
-
 
 .actions {
-
     display: flex;
-
-    flex-wrap: wrap;
-
     gap: 10px;
-
-    margin-top: 12px;
+    margin-top: 15px;
 }
 
-
-.create-form {
-
-    max-width: 600px;
-}
-
-
-.path-display {
-
-    padding: 10px;
-
-    background: #f5f5f5;
-
-    border:
-        1px solid #ddd;
-
+.message {
+    padding: 12px;
+    background: #dcfce7;
+    border: 1px solid #86efac;
+    color: #166534;
     border-radius: 5px;
+    margin-bottom: 20px;
+}
 
-    margin-bottom: 10px;
+.error {
+    padding: 12px;
+    background: #fee2e2;
+    border: 1px solid #fca5a5;
+    color: #991b1b;
+    border-radius: 5px;
+    margin-bottom: 20px;
+}
 
-    font-family:
-        Consolas,
-        monospace;
+.info {
+    font-size: 13px;
+    color: #666;
+}
 
+.path {
+    padding: 8px 10px;
+    background: #f3f4f6;
+    border-radius: 4px;
+    font-family: monospace;
     word-break: break-all;
-}
-
-
-code {
-
-    font-family:
-        Consolas,
-        "Courier New",
-        monospace;
-}
-
-
-@media (
-    max-width: 600px
-) {
-
-    main {
-
-        width:
-            calc(100% - 20px);
-    }
-
-
-    .panel {
-
-        padding: 14px;
-    }
-
-
-    textarea {
-
-        min-height: 450px;
-    }
-
 }
 
 </style>
@@ -1352,450 +400,183 @@ code {
 <body>
 
 
-<header>
+<div class="container">
+
 
 <h1>
-PHPアプリ管理
+    Sample App
 </h1>
-
-</header>
-
-
-<main>
 
 
 <?php if ($message !== ''): ?>
 
-<div class="success">
-
-<?= h($message) ?>
-
+<div class="message">
+    <?= h($message) ?>
 </div>
 
 <?php endif; ?>
 
 
-<?php if ($error !== ''): ?>
+<?php if (isset($errorMessage)): ?>
 
 <div class="error">
-
-<?= h($error) ?>
-
+    <?= h($errorMessage) ?>
 </div>
 
 <?php endif; ?>
 
 
-<!-- ======================================================
-     新規アプリ作成
-     ====================================================== -->
-
-<div class="panel">
+<div class="card">
 
 <h2>
-新規アプリ作成
+    基本動作確認
 </h2>
 
-
-<div class="info">
-
-ここで作成した場合だけ、
-
-<code>mkdir()</code>
-
-で新しいアプリディレクトリを作成します。
-
-<br>
-
-既存アプリの保存処理では、新しいディレクトリを作成しません。
-
-</div>
-
-
-<form
-    method="post"
-    action=""
-    class="create-form"
->
-
-
-<input
-    type="hidden"
-    name="action"
-    value="create"
->
-
-
-<label for="app-name">
-
-アプリ名
-
-</label>
-
-
-<input
-    id="app-name"
-    name="app_name"
-    type="text"
-    placeholder="例：test-app"
-    required
-    autocomplete="off"
->
-
-
-<button
-    type="submit"
-    class="green"
->
-
-アプリを作成
-
-</button>
-
-
-</form>
-
-</div>
-
-
-<!-- ======================================================
-     アプリ一覧
-     ====================================================== -->
-
-<div class="panel">
-
-<h2>
-アプリ一覧
-</h2>
-
-
-<div class="info">
-
-PHPの
-
-<code>scandir()</code>
-
-でサーバー上のディレクトリを直接調べています。
-
-<br>
-
-<code>index.php</code>
-
-を持つ既存ディレクトリだけを表示します。
-
-</div>
-
-
-<?php if (
-    count($applications) === 0
-): ?>
-
-<p>
-アプリはありません。
+<p class="info">
+    この画面では JavaScript fetch / API は使用していません。
 </p>
 
+<p>
+    保存先：
+</p>
 
-<?php else: ?>
-
-
-<div class="application-list">
-
-
-<?php foreach (
-    $applications
-    as $application
-): ?>
-
-
-<div class="application">
-
-
-<div class="application-name">
-
-<?= h($application['name']) ?>
+<div class="path">
+    <?= h($dataFile) ?>
+</div>
 
 </div>
 
 
-<form
-    method="post"
-    action=""
->
-
-
-<input
-    type="hidden"
-    name="action"
-    value="load"
->
-
-
-<input
-    type="hidden"
-    name="app_name"
-    value="<?= h($application['name']) ?>"
->
-
-
-<button
-    type="submit"
->
-
-編集
-
-</button>
-
-
-</form>
-
-
-</div>
-
-
-<?php endforeach; ?>
-
-
-</div>
-
-
-<?php endif; ?>
-
-</div>
-
-
-<!-- ======================================================
-     エディタ
-     ====================================================== -->
-
-<?php if (
-    $selectedApp !== ''
-): ?>
-
-
-<div class="panel">
+<div class="card">
 
 <h2>
-アプリ編集
+    ファイル編集
 </h2>
 
 
-<div class="path-display">
+<!--
+    ========================================================
+    保存
+    ========================================================
 
-<?= h($selectedApp) ?>/index.php
+    fetch() ではない。
 
-</div>
+    ブラウザが通常のHTTP POSTを発行する。
 
-
-<div class="info">
-
-これは既存ファイルの編集です。
-
-<br>
-
-保存時にサーバー側PHPが直接
-
-<code>file_put_contents()</code>
-
-を実行します。
-
-<br>
-
-ブラウザからAPIを呼び出していません。
-
-</div>
-
+    POST
+      ↓
+    index.php
+      ↓
+    PHP
+      ↓
+    file_put_contents()
+      ↓
+    ファイル更新
+    ========================================================
+-->
 
 <form
     method="post"
     action=""
 >
 
-
 <input
     type="hidden"
     name="action"
-    value="save"
->
-
-
-<input
-    type="hidden"
-    name="app_name"
-    value="<?= h($selectedApp) ?>"
+    value="save_file"
 >
 
 
 <textarea
     name="content"
-    spellcheck="false"
-><?= h($editorContent) ?></textarea>
+    id="editor-content"
+><?= h($content) ?></textarea>
 
 
 <div class="actions">
 
-
 <button
     type="submit"
 >
-
-保存
-
+    保存
 </button>
-
-
-<button
-    type="button"
-    class="gray"
-    onclick="location.reload()"
->
-
-再読み込み
-
-</button>
-
 
 </div>
-
 
 </form>
 
 </div>
 
 
-<?php endif; ?>
-
-
-<!-- ======================================================
-     構造確認
-     ====================================================== -->
-
-<div class="panel">
+<div class="card">
 
 <h2>
-現在の基本構造
+    ファイル操作
 </h2>
 
 
-<div class="info">
+<form
+    method="post"
+    action=""
+>
 
-<strong>
-① 新規作成
-</strong>
-
-<br>
-
-ブラウザ
-
-→ POST
-
-→ Apache
-
-→ この index.php
-
-→ createApplication()
-
-→ mkdir()
-
-→ index.php作成
+<input
+    type="hidden"
+    name="action"
+    value="clear_file"
+>
 
 
-<br><br>
+<div class="actions">
 
-
-<strong>
-② 読み込み
-</strong>
-
-<br>
-
-ブラウザ
-
-→ POST
-
-→ Apache
-
-→ この index.php
-
-→ loadApplication()
-
-→ file_get_contents()
-
-
-<br><br>
-
-
-<strong>
-③ 保存
-</strong>
-
-<br>
-
-ブラウザ
-
-→ POST
-
-→ Apache
-
-→ この index.php
-
-→ saveApplication()
-
-→ file_put_contents()
-
-
-<br><br>
-
-
-<strong>
-④ 履歴
-</strong>
-
-<br>
-
-保存前の内容を
-
-<code>.history/アプリ名/</code>
-
-へ退避します。
-
-
-<br><br>
-
-
-<strong>
-サーバー通信に使用していないもの
-</strong>
-
-<br>
-
-fetch()
-
-<br>
-
-apiCall()
-
-<br>
-
-XMLHttpRequest
-
-<br>
-
-JSON API
-
-<br>
-
-AJAX
-
-<br>
-
-データベース
+<button
+    type="submit"
+    class="danger"
+>
+    ファイルをクリア
+</button>
 
 </div>
+
+</form>
 
 </div>
 
 
-</main>
+<div class="card">
+
+<h2>
+    現在の構造
+</h2>
+
+<pre>
+ブラウザ
+   │
+   │ HTTP GET
+   ▼
+index.php
+   │
+   │ file_get_contents()
+   ▼
+data/sample.txt
+
+
+ブラウザ
+   │
+   │ HTTP POST
+   │ action=save_file
+   ▼
+index.php
+   │
+   │ file_put_contents()
+   ▼
+data/sample.txt
+</pre>
+
+</div>
+
+
+</div>
 
 
 </body>
