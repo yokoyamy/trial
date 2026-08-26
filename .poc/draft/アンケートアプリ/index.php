@@ -3,302 +3,546 @@ declare(strict_types=1);
 
 /**
  * アンケート管理システム
- *
- * HTTP単一入口
- *
- * 第1工程:
- * - GET / POST の振り分け
- * - action取得
- * - action検証
- * - JSONリクエスト受信
- * - API共通レスポンス
- * - CSRF
- * - HTTPメソッド制御
+ * 単一入口: index.php
  *
  * 実行環境:
- * Apache24 + PHP8.4 / 8.5
- * データベースなし
+ * - Apache24
+ * - PHP 8.4 / 8.5
+ * - データベースなし
+ *
+ * URLのpathnameには業務上の意味を持たせない。
+ * 画面・業務状態はquery stringおよびPOST actionで扱う。
  */
 
-const APP_ROOT = __DIR__;
-const DATA_DIR = APP_ROOT . '/data';
-const SURVEYS_FILE = DATA_DIR . '/surveys.json';
+/* =========================================================
+ * 基本設定
+ * ========================================================= */
 
-date_default_timezone_set('Asia/Tokyo');
+const APP_TIMEZONE = 'Asia/Tokyo';
 
+date_default_timezone_set(APP_TIMEZONE);
+
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: SAMEORIGIN');
+header('Referrer-Policy: same-origin');
 
 /* =========================================================
- * セッション
+ * 共通レスポンス
+ * ========================================================= */
+
+/**
+ * API成功レスポンス
+ *
+ * {
+ *   "success": true,
+ *   "data": {},
+ *   "message": ""
+ * }
+ */
+function successResponse(
+    mixed $data = [],
+    string $message = '',
+    int $status = 200
+): never {
+    http_response_code($status);
+
+    header('Content-Type: application/json; charset=utf-8');
+
+    echo json_encode(
+        [
+            'success' => true,
+            'data' => $data,
+            'message' => $message,
+        ],
+        JSON_UNESCAPED_UNICODE
+        | JSON_UNESCAPED_SLASHES
+        | JSON_INVALID_UTF8_SUBSTITUTE
+    );
+
+    exit;
+}
+
+/**
+ * API失敗レスポンス
+ *
+ * {
+ *   "success": false,
+ *   "error": {
+ *     "code": "...",
+ *     "message": "..."
+ *   }
+ * }
+ */
+function errorResponse(
+    string $code,
+    string $message,
+    int $status = 400
+): never {
+    http_response_code($status);
+
+    header('Content-Type: application/json; charset=utf-8');
+
+    echo json_encode(
+        [
+            'success' => false,
+            'error' => [
+                'code' => $code,
+                'message' => $message,
+            ],
+        ],
+        JSON_UNESCAPED_UNICODE
+        | JSON_UNESCAPED_SLASHES
+        | JSON_INVALID_UTF8_SUBSTITUTE
+    );
+
+    exit;
+}
+
+/**
+ * HTMLエスケープ
+ */
+function h(mixed $value): string
+{
+    return htmlspecialchars(
+        (string)$value,
+        ENT_QUOTES | ENT_SUBSTITUTE,
+        'UTF-8'
+    );
+}
+
+/* =========================================================
+ * HTTPメソッド
+ * ========================================================= */
+
+$method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+
+/*
+ * GET:
+ *   画面表示・参照のみ
+ *
+ * POST:
+ *   保存・削除・状態変更・送信・同期等
+ */
+if (!in_array($method, ['GET', 'POST'], true)) {
+    errorResponse(
+        'METHOD_NOT_ALLOWED',
+        '許可されていないHTTPメソッドです。',
+        405
+    );
+}
+
+/* =========================================================
+ * CSRF
  * ========================================================= */
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_start();
+    session_start([
+        'cookie_httponly' => true,
+        'cookie_samesite' => 'Lax',
+    ]);
 }
 
+if (
+    !isset($_SESSION['csrf_token'])
+    || !is_string($_SESSION['csrf_token'])
+    || $_SESSION['csrf_token'] === ''
+) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 
-/* =========================================================
- * 起動
- * ========================================================= */
+$csrfToken = $_SESSION['csrf_token'];
 
-try {
+/**
+ * POSTの場合だけCSRFを検証する。
+ *
+ * JSON POSTにも対応できるよう、
+ * Header / POST / JSON bodyの順に取得する。
+ */
+function getRequestCsrfToken(): string
+{
+    $headerToken = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
 
-    initializeStorage();
-
-    $requestMethod = strtoupper(
-        $_SERVER['REQUEST_METHOD'] ?? ''
-    );
-
-    /*
-     * GET:
-     *   action はURLのquery stringから取得する。
-     *
-     * POST:
-     *   application/json を正式な入力形式とする。
-     *   actionもJSON本文から取得する。
-     */
-    if ($requestMethod === 'GET') {
-
-        $action = getGetAction();
-
-        dispatchGet($action);
+    if (is_string($headerToken) && $headerToken !== '') {
+        return $headerToken;
     }
 
-    if ($requestMethod === 'POST') {
+    $postToken = $_POST['csrf_token'] ?? '';
 
-        /*
-         * JSON本文を入口で一度だけ解析する。
-         * readJsonBody()側でキャッシュするため、
-         * 後続APIから再利用できる。
-         */
-        $requestData = readJsonBody();
+    if (is_string($postToken) && $postToken !== '') {
+        return $postToken;
+    }
 
-        $action = getPostAction($requestData);
+    return '';
+}
 
-        verifyPostAction($action);
+function validateCsrfToken(): void
+{
+    $expected = $_SESSION['csrf_token'] ?? '';
+    $actual = getRequestCsrfToken();
 
-        verifyCsrf();
-
-        dispatchPost(
-            $action,
-            $requestData
+    if (
+        !is_string($expected)
+        || $expected === ''
+        || !is_string($actual)
+        || $actual === ''
+        || !hash_equals($expected, $actual)
+    ) {
+        errorResponse(
+            'CSRF_INVALID',
+            'CSRFトークンが不正です。',
+            403
         );
     }
+}
 
-    /*
-     * GET / POST 以外は禁止。
-     */
-    errorResponse(
-        'METHOD_NOT_ALLOWED',
-        'GETまたはPOSTのみ許可されています。',
-        405,
+if ($method === 'POST') {
+    validateCsrfToken();
+}
+
+/* =========================================================
+ * リクエスト取得
+ * ========================================================= */
+
+function getAction(): string
+{
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $action = $_POST['action'] ?? '';
+
+        if (
+            (!is_string($action) || $action === '')
+            && str_contains(
+                strtolower($_SERVER['CONTENT_TYPE'] ?? ''),
+                'application/json'
+            )
+        ) {
+            $raw = file_get_contents('php://input');
+
+            if ($raw === false || trim($raw) === '') {
+                return '';
+            }
+
+            $json = json_decode($raw, true);
+
+            if (is_array($json) && isset($json['action'])) {
+                $action = $json['action'];
+            }
+        }
+    } else {
+        $action = $_GET['action'] ?? '';
+    }
+
+    return is_string($action) ? trim($action) : '';
+}
+
+/* =========================================================
+ * action定義
+ * ========================================================= */
+
+$allowedGetActions = [
+    '',
+    'health',
+    'csrf',
+    'survey_list',
+    'survey_get',
+    'response_summary',
+    'csv_export',
+    'pdf_export',
+];
+
+$allowedPostActions = [
+    'survey_create',
+    'survey_update',
+    'survey_delete',
+
+    'survey_publish',
+    'survey_stop',
+    'survey_resume',
+    'survey_end',
+
+    'response_confirm',
+    'response_complete',
+
+    'customer_save',
+    'customer_delete',
+
+    'send_mail',
+    'resend_mail',
+    'remind_mail',
+
+    'kintone_test',
+    'kintone_fields',
+    'kintone_sync',
+
+    'smtp_test',
+
+    'settings_save',
+];
+
+/* =========================================================
+ * action検証
+ * ========================================================= */
+
+$action = getAction();
+
+if ($method === 'GET') {
+    if (!in_array($action, $allowedGetActions, true)) {
+        errorResponse(
+            'INVALID_ACTION',
+            'GETでは利用できないactionです。',
+            400
+        );
+    }
+} else {
+    if (!in_array($action, $allowedPostActions, true)) {
+        errorResponse(
+            'INVALID_ACTION',
+            'POSTでは利用できないactionです。',
+            400
+        );
+    }
+}
+
+/* =========================================================
+ * 最低限の疎通確認
+ * ========================================================= */
+
+if ($action === 'health') {
+    successResponse(
         [
-            'Allow' => 'GET, POST'
+            'status' => 'ok',
+            'php_version' => PHP_VERSION,
+            'time' => date(DATE_ATOM),
+        ],
+        '通信成功'
+    );
+}
+
+if ($action === 'csrf') {
+    successResponse(
+        [
+            'csrfToken' => $csrfToken,
         ]
     );
-
-} catch (Throwable $e) {
-
-    /*
-     * APIとして処理できる例外は、
-     * 必ず共通JSONレスポンスにする。
-     *
-     * 内部例外の詳細は画面へ出さない。
-     */
-    errorResponse(
-        'INTERNAL_ERROR',
-        'システム内部でエラーが発生しました。',
-        500
-    );
 }
-
 
 /* =========================================================
- * GET action
- * ========================================================= */
+ * ここから業務処理
+ * =========================================================
+ *
+ * 現段階では、まず
+ *
+ * 1. PHPがFatal Errorにならない
+ * 2. GET / POSTを正しく分離する
+ * 3. actionを検証する
+ * 4. 共通JSONレスポンスを返す
+ * 5. CSRFを検証する
+ *
+ * という単一入口の基礎を確立する。
+ *
+ * 以降の業務処理は、この入口から呼び出す。
+ */
 
-function getGetAction(): string
-{
-    $action = $_GET['action'] ?? '';
-
-    if (!is_string($action)) {
-        errorResponse(
-            'INVALID_ACTION',
-            'actionが不正です。',
-            400
-        );
-    }
-
-    return trim($action);
+/* GETのデフォルト画面 */
+if ($method === 'GET' && $action === '') {
+    ?>
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>アンケート管理システム</title>
+<style>
+* {
+    box-sizing: border-box;
 }
 
+body {
+    margin: 0;
+    font-family:
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+    background: #f5f6f8;
+    color: #222;
+}
+
+main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px;
+}
+
+.card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.06);
+}
+
+button {
+    appearance: none;
+    border: 0;
+    border-radius: 8px;
+    padding: 10px 16px;
+    background: #1769aa;
+    color: #fff;
+    cursor: pointer;
+}
+
+button:disabled {
+    opacity: .6;
+    cursor: wait;
+}
+
+#result {
+    margin-top: 16px;
+    padding: 12px;
+    border-radius: 8px;
+    background: #f0f2f5;
+    white-space: pre-wrap;
+}
+
+.loading {
+    display: none;
+    margin-left: 8px;
+}
+
+.loading.active {
+    display: inline-block;
+}
+</style>
+</head>
+<body>
+
+<main>
+    <div class="card">
+        <h1>アンケート管理システム</h1>
+
+        <p>
+            単一入口 index.php の疎通確認
+        </p>
+
+        <button
+            type="button"
+            id="healthButton"
+        >
+            通信テスト
+        </button>
+
+        <span
+            id="loading"
+            class="loading"
+            aria-live="polite"
+        >
+            通信中…
+        </span>
+
+        <div id="result"></div>
+    </div>
+</main>
+
+<script>
+(() => {
+    'use strict';
+
+    const button = document.getElementById('healthButton');
+    const loading = document.getElementById('loading');
+    const result = document.getElementById('result');
+
+    let processing = false;
+
+    function setProcessing(value) {
+        processing = value;
+        button.disabled = value;
+        loading.classList.toggle('active', value);
+    }
+
+    async function requestHealth() {
+        if (processing) {
+            return;
+        }
+
+        setProcessing(true);
+        result.textContent = '';
+
+        try {
+            /*
+             * pathnameには業務上の意味を持たせない。
+             * 現在ページ自身を基準にquery stringでactionを指定する。
+             */
+            const url = new URL(window.location.href);
+
+            url.search = '';
+            url.searchParams.set('action', 'health');
+
+            const response = await fetch(url.toString(), {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json'
+                },
+                credentials: 'same-origin'
+            });
+
+            const text = await response.text();
+
+            let data;
+
+            try {
+                data = JSON.parse(text);
+            } catch (e) {
+                throw new Error(
+                    'サーバーからJSONではない応答が返されました。'
+                    + '\nHTTP ' + response.status
+                    + '\n'
+                    + text.slice(0, 500)
+                );
+            }
+
+            if (!response.ok || data.success !== true) {
+                const message =
+                    data?.error?.message
+                    || '通信に失敗しました。';
+
+                throw new Error(message);
+            }
+
+            result.textContent =
+                data.message
+                + '\n'
+                + JSON.stringify(data.data, null, 2);
+
+        } catch (error) {
+            result.textContent =
+                '通信失敗\n'
+                + (
+                    error instanceof Error
+                        ? error.message
+                        : String(error)
+                );
+        } finally {
+            setProcessing(false);
+        }
+    }
+
+    button.addEventListener('click', requestHealth);
+})();
+</script>
+
+</body>
+</html>
+    <?php
+
+    exit;
+}
 
 /* =========================================================
- * POST action
+ * 未実装action
  * ========================================================= */
 
-function getPostAction(array $requestData): string
-{
-    if (!array_key_exists('action', $requestData)) {
-        errorResponse(
-            'REQUIRED_ACTION',
-            'actionは必須です。',
-            400
-        );
-    }
-
-    if (!is_string($requestData['action'])) {
-        errorResponse(
-            'INVALID_ACTION',
-            'actionが不正です。',
-            400
-        );
-    }
-
-    $action = trim($requestData['action']);
-
-    if ($action === '') {
-        errorResponse(
-            'REQUIRED_ACTION',
-            'actionは必須です。',
-            400
-        );
-    }
-
-    return $action;
-}
-
-
-/* =========================================================
- * GET action検証
- * ========================================================= */
-
-function verifyGetAction(string $action): void
-{
-    $allowedActions = [
-        '',
-        'screen',
-        'api.survey.list',
-        'api.survey.get',
-    ];
-
-    if (!in_array($action, $allowedActions, true)) {
-        errorResponse(
-            'INVALID_ACTION',
-            '指定されたGET操作は存在しません。',
-            400
-        );
-    }
-}
-
-
-/* =========================================================
- * POST action検証
- * ========================================================= */
-
-function verifyPostAction(string $action): void
-{
-    $allowedActions = [
-        'api.survey.create',
-        'api.survey.update',
-        'api.survey.delete',
-        'api.survey.publish',
-        'api.survey.stop',
-        'api.survey.resume',
-        'api.survey.end',
-    ];
-
-    if (!in_array($action, $allowedActions, true)) {
-        errorResponse(
-            'INVALID_ACTION',
-            '指定されたPOST操作は存在しません。',
-            400
-        );
-    }
-}
-
-
-/* =========================================================
- * GET dispatch
- * ========================================================= */
-
-function dispatchGet(string $action): never
-{
-    verifyGetAction($action);
-
-    switch ($action) {
-
-        case '':
-        case 'screen':
-            renderScreen();
-            break;
-
-        case 'api.survey.list':
-            apiSurveyList();
-            break;
-
-        case 'api.survey.get':
-            apiSurveyGet();
-            break;
-    }
-
-    errorResponse(
-        'INVALID_ACTION',
-        '指定されたGET操作を処理できません。',
-        400
-    );
-}
-
-
-/* =========================================================
- * POST dispatch
- * ========================================================= */
-
-function dispatchPost(
-    string $action,
-    array $requestData
-): never {
-
-    /*
-     * $requestData は入口で解析済み。
-     *
-     * 現在の業務APIは readJsonBody() を使用しているため、
-     * readJsonBody()側でキャッシュしたデータを返す。
-     */
-
-    switch ($action) {
-
-        case 'api.survey.create':
-            apiSurveyCreate();
-            break;
-
-        case 'api.survey.update':
-            apiSurveyUpdate();
-            break;
-
-        case 'api.survey.delete':
-            apiSurveyDelete();
-            break;
-
-        case 'api.survey.publish':
-            apiSurveyPublish();
-            break;
-
-        case 'api.survey.stop':
-            apiSurveyStop();
-            break;
-
-        case 'api.survey.resume':
-            apiSurveyResume();
-            break;
-
-        case 'api.survey.end':
-            apiSurveyEnd();
-            break;
-    }
-
-    errorResponse(
-        'INVALID_ACTION',
-        '指定されたPOST操作を処理できません。',
-        400
-    );
-}
+errorResponse(
+    'NOT_IMPLEMENTED',
+    'この業務操作はまだ実装されていません。',
+    501
+);
