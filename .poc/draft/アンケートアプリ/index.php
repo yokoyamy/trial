@@ -1808,24 +1808,23 @@ function apiSaveKintoneSettings(): never
         'fields' =>
             $settings['kintone']['fields'] ?? [],
         'lastFieldFetchAt' =>
-            $settings['kintone']['lastFieldFetchAt'] ??
-            null,
+            $settings['kintone']['lastFieldFetchAt'] ?? null,
         'lastSyncAt' =>
-            $settings['kintone']['lastSyncAt'] ??
-            null,
+            $settings['kintone']['lastSyncAt'] ?? null,
     ];
 
     writeJson(
         'settings.json',
         $settings
     );
+
     // クライアントへ返す情報からパスワードを除外
     $responseSettings = $settings['kintone'];
     unset($responseSettings['password']);
 
     jsonResponse([
         'success' => true,
-        'settings' => $settings['kintone'],
+        'settings' => $responseSettings,  // ←ここ
     ]);
 }
 
