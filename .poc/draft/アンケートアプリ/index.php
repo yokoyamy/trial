@@ -2907,17 +2907,8 @@ function navigate(view, surveyId='', token=''){
         params.set('token', token);
     }
 
-    /*
-     * URLを先に更新する。
-     * 画面状態は必ず更新後のURLから再構築する。
-     */
-    history.pushState(
-        {},
-        '',
-        '?' + params.toString()
-    );
-
-    syncFromUrl();
+    window.location.href =
+        '?' + params.toString();
 }
 
 function replaceNavigation(
