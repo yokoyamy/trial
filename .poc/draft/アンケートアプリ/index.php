@@ -4,36 +4,21 @@ declare(strict_types=1);
 
 /*
 |--------------------------------------------------------------------------
-| PHPファイル簡易エディタ
+| 1ファイル PHP ファイル管理・編集
 |--------------------------------------------------------------------------
 |
-| 目的：
+| 通信方式：
 |
-|   1. サーバー上の index.php を読む
-|   2. ブラウザに内容を表示する
-|   3. 編集する
-|   4. 通常のPOSTで保存する
+|   GET  -> このPHP自身
+|   POST -> このPHP自身
 |
-| 通信：
+| 使用しない：
 |
-|   fetch()       使用しない
-|   apiCall()     使用しない
-|   JSON API      使用しない
-|
-| 処理：
-|
-|   Browser
-|      ↓
-|   POST
-|      ↓
-|   Apache
-|      ↓
-|   index.php
-|      ↓
-|   PHP
-|      ↓
-|   file_get_contents()
-|   file_put_contents()
+|   fetch()
+|   apiCall()
+|   XMLHttpRequest
+|   JSON API
+|   データベース
 |
 |--------------------------------------------------------------------------
 */
@@ -41,21 +26,11 @@ declare(strict_types=1);
 
 /*
 |--------------------------------------------------------------------------
-| 基準ディレクトリ
+| 基本設定
 |--------------------------------------------------------------------------
-|
-| この index.php が存在するディレクトリ。
-|
 */
 
 $baseDir = __DIR__;
-
-
-/*
-|--------------------------------------------------------------------------
-| 履歴ディレクトリ
-|--------------------------------------------------------------------------
-*/
 
 $historyBaseDir =
     $baseDir .
@@ -65,10 +40,9 @@ $historyBaseDir =
 
 /*
 |--------------------------------------------------------------------------
-| 共通関数
+| HTMLエスケープ
 |--------------------------------------------------------------------------
 */
-
 
 function h(mixed $value): string
 {
@@ -82,76 +56,32 @@ function h(mixed $value): string
 
 /*
 |--------------------------------------------------------------------------
-| 相対パスを正規化
-|--------------------------------------------------------------------------
-|
-| 例：
-|
-|   sample-app
-|   projects/test
-|
-| OK
-|
-|   ../xxx
-|   ../../xxx
-|   ./xxx
-|
-| NG
-|
+| 相対パス検証
 |--------------------------------------------------------------------------
 */
 
-function normalizeRelativePath(
-    string $path
-): ?string {
+function normalizePath(string $path): ?string
+{
+    $path = trim($path);
 
-    $path =
-        str_replace(
-            '\\',
-            '/',
-            trim($path)
-        );
+    $path = str_replace(
+        '\\',
+        '/',
+        $path
+    );
 
-    $path =
-        trim(
-            $path,
-            '/'
-        );
+    $path = rawurldecode($path);
+
+    $path = trim(
+        $path,
+        '/'
+    );
 
     if ($path === '') {
         return null;
     }
 
-    /*
-     * URLエンコードされた
-     * パストラバーサルも考慮
-     */
-    $decoded =
-        rawurldecode($path);
-
-    if ($decoded !== $path) {
-
-        $path =
-            str_replace(
-                '\\',
-                '/',
-                $decoded
-            );
-
-        $path =
-            trim(
-                $path,
-                '/'
-            );
-    }
-
-
-    $parts =
-        explode(
-            '/',
-            $path
-        );
-
+    $parts = explode('/', $path);
 
     foreach ($parts as $part) {
 
@@ -168,12 +98,7 @@ function normalizeRelativePath(
         }
 
         /*
-         * Windowsドライブ
-         *
-         * C:
-         * D:
-         *
-         * 等を拒否
+         * Windowsドライブ指定を拒否
          */
         if (
             preg_match(
@@ -185,61 +110,52 @@ function normalizeRelativePath(
         }
     }
 
-
-    return implode(
-        '/',
-        $parts
-    );
+    return implode('/', $parts);
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| 実際のディレクトリを作る
+| 対象ディレクトリ
 |--------------------------------------------------------------------------
 */
 
-function buildTargetDirectory(
+function targetDirectory(
     string $baseDir,
     string $relativePath
 ): string {
 
-    $parts =
-        explode(
-            '/',
-            $relativePath
-        );
+    $parts = explode(
+        '/',
+        $relativePath
+    );
 
-
-    $target =
-        $baseDir;
-
+    $path = $baseDir;
 
     foreach ($parts as $part) {
 
-        $target .=
+        $path .=
             DIRECTORY_SEPARATOR .
             $part;
     }
 
-
-    return $target;
+    return $path;
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| 対象ファイル
+| 対象 index.php
 |--------------------------------------------------------------------------
 */
 
-function getTargetFile(
+function targetFile(
     string $baseDir,
     string $relativePath
 ): string {
 
     return
-        buildTargetDirectory(
+        targetDirectory(
             $baseDir,
             $relativePath
         )
@@ -251,54 +167,180 @@ function getTargetFile(
 
 /*
 |--------------------------------------------------------------------------
+| アプリ一覧
+|--------------------------------------------------------------------------
+|
+| このPHP自身が存在するディレクトリ直下から、
+| index.phpを持っているディレクトリだけを取得する。
+|
+| .history は除外。
+|
+|--------------------------------------------------------------------------
+*/
+
+function getApplications(
+    string $baseDir
+): array {
+
+    $applications = [];
+
+    $items = scandir($baseDir);
+
+    if ($items === false) {
+        return [];
+    }
+
+    foreach ($items as $item) {
+
+        if (
+            $item === '.' ||
+            $item === '..' ||
+            $item === '.history'
+        ) {
+            continue;
+        }
+
+        $fullPath =
+            $baseDir .
+            DIRECTORY_SEPARATOR .
+            $item;
+
+
+        if (!is_dir($fullPath)) {
+            continue;
+        }
+
+
+        /*
+         * ディレクトリ名として安全なものだけ
+         */
+        if (
+            preg_match(
+                '/^[A-Za-z0-9_\-\.]+$/u',
+                $item
+            ) !== 1
+        ) {
+            continue;
+        }
+
+
+        $indexFile =
+            $fullPath .
+            DIRECTORY_SEPARATOR .
+            'index.php';
+
+
+        if (!is_file($indexFile)) {
+            continue;
+        }
+
+
+        $applications[] = [
+            'name' => $item,
+            'path' => $item
+        ];
+    }
+
+
+    usort(
+        $applications,
+        static function (
+            array $a,
+            array $b
+        ): int {
+
+            return strnatcasecmp(
+                $a['name'],
+                $b['name']
+            );
+        }
+    );
+
+
+    return $applications;
+}
+
+
+/*
+|--------------------------------------------------------------------------
 | ファイル読み込み
 |--------------------------------------------------------------------------
 */
 
-function loadFile(
+function readApplication(
     string $baseDir,
-    string $relativePath
+    string $path
 ): array {
 
     $normalized =
-        normalizeRelativePath(
-            $relativePath
-        );
+        normalizePath($path);
 
 
     if ($normalized === null) {
 
         return [
             'success' => false,
-            'error' => '不正なパスです。'
+            'message' =>
+                '不正なアプリパスです。'
         ];
     }
 
 
-    $filePath =
-        getTargetFile(
+    /*
+     * 今回は第1階層だけ許可
+     */
+    if (
+        substr_count(
+            $normalized,
+            '/'
+        ) !== 0
+    ) {
+
+        return [
+            'success' => false,
+            'message' =>
+                'アプリパスは1階層のみ指定できます。'
+        ];
+    }
+
+
+    $directory =
+        targetDirectory(
             $baseDir,
             $normalized
         );
 
 
-    if (!is_file($filePath)) {
+    $file =
+        targetFile(
+            $baseDir,
+            $normalized
+        );
+
+
+    if (!is_dir($directory)) {
 
         return [
             'success' => false,
-            'error' =>
-                '指定されたindex.phpが存在しません。',
-            'path' =>
-                $normalized,
-            'file' =>
-                $filePath
+            'message' =>
+                'アプリディレクトリが存在しません。'
+        ];
+    }
+
+
+    if (!is_file($file)) {
+
+        return [
+            'success' => false,
+            'message' =>
+                'index.phpが存在しません。'
         ];
     }
 
 
     $content =
         file_get_contents(
-            $filePath
+            $file
         );
 
 
@@ -306,20 +348,16 @@ function loadFile(
 
         return [
             'success' => false,
-            'error' =>
-                'ファイルを読み込めませんでした。'
+            'message' =>
+                'index.phpを読み込めませんでした。'
         ];
     }
 
 
     return [
         'success' => true,
-        'path' =>
-            $normalized,
-        'file' =>
-            $filePath,
-        'content' =>
-            $content
+        'path' => $normalized,
+        'content' => $content
     ];
 }
 
@@ -330,44 +368,89 @@ function loadFile(
 |--------------------------------------------------------------------------
 */
 
-function saveFile(
+function writeApplication(
     string $baseDir,
     string $historyBaseDir,
-    string $relativePath,
+    string $path,
     string $content
 ): array {
 
     $normalized =
-        normalizeRelativePath(
-            $relativePath
-        );
+        normalizePath($path);
 
 
     if ($normalized === null) {
 
         return [
             'success' => false,
-            'error' =>
-                '保存先パスが不正です。'
+            'message' =>
+                '不正なアプリパスです。'
         ];
     }
 
 
-    $targetDirectory =
-        buildTargetDirectory(
+    /*
+     * 今回は既存アプリだけを編集する。
+     *
+     * 新規ディレクトリは作らない。
+     */
+    if (
+        substr_count(
+            $normalized,
+            '/'
+        ) !== 0
+    ) {
+
+        return [
+            'success' => false,
+            'message' =>
+                'アプリパスは1階層のみ指定できます。'
+        ];
+    }
+
+
+    $directory =
+        targetDirectory(
             $baseDir,
             $normalized
         );
 
 
+    $file =
+        targetFile(
+            $baseDir,
+            $normalized
+        );
+
+
+    if (!is_dir($directory)) {
+
+        return [
+            'success' => false,
+            'message' =>
+                '保存対象のアプリディレクトリが存在しません。'
+        ];
+    }
+
+
+    if (!is_file($file)) {
+
+        return [
+            'success' => false,
+            'message' =>
+                '保存対象のindex.phpが存在しません。'
+        ];
+    }
+
+
     /*
-     * ディレクトリがなければ作成
+     * バックアップ
      */
-    if (!is_dir($targetDirectory)) {
+    if (!is_dir($historyBaseDir)) {
 
         if (
             !mkdir(
-                $targetDirectory,
+                $historyBaseDir,
                 0777,
                 true
             )
@@ -375,54 +458,17 @@ function saveFile(
 
             return [
                 'success' => false,
-                'error' =>
-                    '保存先ディレクトリを作成できませんでした。'
+                'message' =>
+                    '履歴ディレクトリを作成できませんでした。'
             ];
         }
     }
 
 
-    $filePath =
-        getTargetFile(
-            $baseDir,
-            $normalized
-        );
-
-
-    /*
-     * 本体保存
-     */
-    $written =
-        file_put_contents(
-            $filePath,
-            $content,
-            LOCK_EX
-        );
-
-
-    if ($written === false) {
-
-        return [
-            'success' => false,
-            'error' =>
-                'index.phpを書き込めませんでした。'
-        ];
-    }
-
-
-    /*
-     * 履歴
-     */
-    $appName =
-        basename(
-            $normalized
-        );
-
-
     $historyDirectory =
         $historyBaseDir .
         DIRECTORY_SEPARATOR .
-        $appName;
+        $normalized;
 
 
     if (!is_dir($historyDirectory)) {
@@ -435,66 +481,96 @@ function saveFile(
             )
         ) {
 
-            /*
-             * 本体保存は成功。
-             */
             return [
-                'success' => true,
-                'warning' =>
-                    '本体は保存されましたが履歴ディレクトリを作成できませんでした。',
-                'path' =>
-                    $normalized
+                'success' => false,
+                'message' =>
+                    'アプリ履歴ディレクトリを作成できませんでした。'
             ];
         }
     }
 
 
-    $timestamp =
-        date('YmdHis') .
-        '_' .
-        bin2hex(
-            random_bytes(4)
+    /*
+     * 保存前の内容を履歴へ退避
+     */
+    $oldContent =
+        file_get_contents(
+            $file
         );
 
 
-    $historyFile =
-        $historyDirectory .
-        DIRECTORY_SEPARATOR .
-        $timestamp .
-        '_draft.txt';
+    if ($oldContent !== false) {
+
+        $historyFile =
+            $historyDirectory .
+            DIRECTORY_SEPARATOR .
+            date('YmdHis') .
+            '_' .
+            bin2hex(
+                random_bytes(4)
+            ) .
+            '_before.txt';
 
 
-    file_put_contents(
-        $historyFile,
-        $content,
-        LOCK_EX
-    );
+        file_put_contents(
+            $historyFile,
+            $oldContent,
+            LOCK_EX
+        );
+    }
+
+
+    /*
+     * 本体保存
+     */
+    $result =
+        file_put_contents(
+            $file,
+            $content,
+            LOCK_EX
+        );
+
+
+    if ($result === false) {
+
+        return [
+            'success' => false,
+            'message' =>
+                'index.phpの保存に失敗しました。'
+        ];
+    }
 
 
     return [
         'success' => true,
+        'message' =>
+            '保存しました。',
         'path' =>
-            $normalized,
-        'file' =>
-            $filePath
+            $normalized
     ];
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| POST処理
+| 状態
 |--------------------------------------------------------------------------
 */
 
 $message = '';
+
 $error = '';
 
-$currentPath = '';
-$currentContent = '';
+$selectedPath = '';
 
-$loadedPath = '';
+$editorContent = '';
 
+
+/*
+|--------------------------------------------------------------------------
+| POST
+|--------------------------------------------------------------------------
+*/
 
 if (
     ($_SERVER['REQUEST_METHOD'] ?? 'GET')
@@ -508,12 +584,9 @@ if (
 
 
     /*
-    |--------------------------------------------------------------------------
-    | ファイル読み込み
-    |--------------------------------------------------------------------------
-    */
-
-    if ($action === 'load_file') {
+     * 読み込み
+     */
+    if ($action === 'load') {
 
         $path =
             isset($_POST['path'])
@@ -521,64 +594,36 @@ if (
                 : '';
 
 
-        try {
-
-            $result =
-                loadFile(
-                    $baseDir,
-                    $path
-                );
-
-        } catch (Throwable $e) {
-
-            error_log(
-                'load_file error: ' .
-                $e->getMessage()
+        $result =
+            readApplication(
+                $baseDir,
+                $path
             );
 
-            $result = [
-                'success' => false,
-                'error' =>
-                    'ファイル読み込み中にサーバーエラーが発生しました。'
-            ];
-        }
 
+        if ($result['success']) {
 
-        if ($result['success'] === true) {
-
-            $currentPath =
+            $selectedPath =
                 (string)$result['path'];
 
-            $currentContent =
+            $editorContent =
                 (string)$result['content'];
 
-            $loadedPath =
-                $currentPath;
-
             $message =
-                'ファイルを読み込みました。';
+                '読み込みました。';
 
         } else {
 
             $error =
-                (string)(
-                    $result['error']
-                    ?? 'ファイルを読み込めませんでした。'
-                );
-
-            $currentPath =
-                $path;
+                (string)$result['message'];
         }
     }
 
 
     /*
-    |--------------------------------------------------------------------------
-    | ファイル保存
-    |--------------------------------------------------------------------------
-    */
-
-    elseif ($action === 'save_file') {
+     * 保存
+     */
+    elseif ($action === 'save') {
 
         $path =
             isset($_POST['path'])
@@ -592,78 +637,38 @@ if (
                 : '';
 
 
-        try {
-
-            $result =
-                saveFile(
-                    $baseDir,
-                    $historyBaseDir,
-                    $path,
-                    $content
-                );
-
-        } catch (Throwable $e) {
-
-            error_log(
-                'save_file error: ' .
-                $e->getMessage()
+        $result =
+            writeApplication(
+                $baseDir,
+                $historyBaseDir,
+                $path,
+                $content
             );
 
-            $result = [
-                'success' => false,
-                'error' =>
-                    'ファイル保存中にサーバーエラーが発生しました。'
-            ];
-        }
+
+        $selectedPath =
+            $path;
+
+        $editorContent =
+            $content;
 
 
-        if ($result['success'] === true) {
+        if ($result['success']) {
 
-            $currentPath =
-                (string)$result['path'];
-
-            $currentContent =
-                $content;
-
-
-            if (
-                isset(
-                    $result['warning']
-                )
-            ) {
-
-                $message =
-                    (string)$result['warning'];
-
-            } else {
-
-                $message =
-                    '保存しました。';
-            }
+            $message =
+                (string)$result['message'];
 
         } else {
 
             $error =
-                (string)(
-                    $result['error']
-                    ?? '保存に失敗しました。'
-                );
-
-            $currentPath =
-                $path;
-
-            $currentContent =
-                $content;
+                (string)$result['message'];
         }
     }
 
 
     /*
-    |--------------------------------------------------------------------------
-    | 不明なaction
-    |--------------------------------------------------------------------------
-    */
-
+     * 不明な操作
+     */
     else {
 
         $error =
@@ -674,72 +679,55 @@ if (
 
 /*
 |--------------------------------------------------------------------------
-| GET
-|--------------------------------------------------------------------------
-|
-| URLに ?path=xxx を付けて直接ファイルを開ける。
-|
-| 例：
-|
-| index.php?path=sample-app
-|
+| GET ?app=sample-app
 |--------------------------------------------------------------------------
 */
 
 elseif (
-    isset($_GET['path'])
+    isset($_GET['app'])
 ) {
 
     $path =
-        (string)$_GET['path'];
+        (string)$_GET['app'];
 
 
-    try {
-
-        $result =
-            loadFile(
-                $baseDir,
-                $path
-            );
-
-    } catch (Throwable $e) {
-
-        error_log(
-            'GET load error: ' .
-            $e->getMessage()
+    $result =
+        readApplication(
+            $baseDir,
+            $path
         );
 
-        $result = [
-            'success' => false,
-            'error' =>
-                'ファイル読み込み中にサーバーエラーが発生しました。'
-        ];
-    }
 
+    if ($result['success']) {
 
-    if ($result['success'] === true) {
-
-        $currentPath =
+        $selectedPath =
             (string)$result['path'];
 
-        $currentContent =
+        $editorContent =
             (string)$result['content'];
 
     } else {
 
         $error =
-            (string)(
-                $result['error']
-                ?? 'ファイルを読み込めませんでした。'
-            );
-
-        $currentPath =
-            $path;
+            (string)$result['message'];
     }
 }
 
+
+/*
+|--------------------------------------------------------------------------
+| アプリ一覧
+|--------------------------------------------------------------------------
+*/
+
+$applications =
+    getApplications(
+        $baseDir
+    );
+
 ?>
 <!DOCTYPE html>
+
 <html lang="ja">
 
 <head>
@@ -752,7 +740,7 @@ elseif (
 >
 
 <title>
-PHPファイルエディタ
+PHPファイル管理
 </title>
 
 
@@ -762,23 +750,25 @@ PHPファイルエディタ
     box-sizing: border-box;
 }
 
+
 html,
 body {
     margin: 0;
     padding: 0;
 }
 
+
 body {
-
-    background: #f3f5f7;
-
-    color: #202124;
 
     font-family:
         -apple-system,
         BlinkMacSystemFont,
         "Segoe UI",
         sans-serif;
+
+    background: #f3f5f7;
+
+    color: #202124;
 }
 
 
@@ -786,9 +776,10 @@ header {
 
     background: #17202a;
 
-    color: white;
+    color: #fff;
 
-    padding: 16px 24px;
+    padding:
+        16px 24px;
 }
 
 
@@ -802,18 +793,20 @@ header h1 {
 
 main {
 
-    width: min(
-        1200px,
-        calc(100% - 30px)
-    );
+    width:
+        min(
+            1300px,
+            calc(100% - 30px)
+        );
 
-    margin: 25px auto;
+    margin:
+        20px auto;
 }
 
 
 .panel {
 
-    background: white;
+    background: #fff;
 
     border-radius: 8px;
 
@@ -822,7 +815,8 @@ main {
     margin-bottom: 20px;
 
     box-shadow:
-        0 2px 8px rgba(
+        0 2px 8px
+        rgba(
             0,
             0,
             0,
@@ -831,19 +825,72 @@ main {
 }
 
 
-.field {
+.application-list {
 
-    margin-bottom: 18px;
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            auto-fill,
+            minmax(
+                220px,
+                1fr
+            )
+        );
+
+    gap: 10px;
 }
 
 
-label {
+.application {
+
+    border:
+        1px solid #d5d9dd;
+
+    border-radius: 6px;
+
+    padding: 12px;
+
+    background: #fafafa;
+}
+
+
+.application strong {
 
     display: block;
 
-    font-weight: 600;
+    margin-bottom: 8px;
+}
 
-    margin-bottom: 7px;
+
+button {
+
+    border: 0;
+
+    border-radius: 5px;
+
+    padding:
+        9px 16px;
+
+    background: #1976d2;
+
+    color: #fff;
+
+    cursor: pointer;
+
+    font-size: 14px;
+}
+
+
+button:hover {
+
+    background: #125da7;
+}
+
+
+button.gray {
+
+    background: #607d8b;
 }
 
 
@@ -865,7 +912,7 @@ textarea {
 
 textarea {
 
-    min-height: 550px;
+    min-height: 600px;
 
     resize: vertical;
 
@@ -880,89 +927,52 @@ textarea {
 }
 
 
-button {
-
-    border: 0;
-
-    border-radius: 5px;
-
-    padding:
-        10px 18px;
-
-    background: #1976d2;
-
-    color: white;
-
-    cursor: pointer;
-
-    font-size: 14px;
-}
-
-
-button:hover {
-
-    background: #125da7;
-}
-
-
-button.secondary {
-
-    background: #546e7a;
-}
-
-
-button.secondary:hover {
-
-    background: #37474f;
-}
-
-
 .success {
 
-    background: #e8f5e9;
+    padding: 12px;
 
-    color: #256029;
+    margin-bottom: 20px;
 
     border:
         1px solid #81c784;
 
     border-radius: 5px;
 
-    padding: 12px;
+    background: #e8f5e9;
 
-    margin-bottom: 20px;
+    color: #256029;
 }
 
 
 .error {
 
-    background: #ffebee;
+    padding: 12px;
 
-    color: #a51c30;
+    margin-bottom: 20px;
 
     border:
         1px solid #e57373;
 
     border-radius: 5px;
 
-    padding: 12px;
+    background: #ffebee;
 
-    margin-bottom: 20px;
+    color: #a51c30;
 }
 
 
 .info {
 
-    background: #eef4ff;
+    padding: 12px;
+
+    margin-bottom: 15px;
 
     border:
         1px solid #b8c9ed;
 
     border-radius: 5px;
 
-    padding: 12px;
-
-    margin-bottom: 18px;
+    background: #eef4ff;
 
     line-height: 1.6;
 }
@@ -975,12 +985,8 @@ button.secondary:hover {
     gap: 10px;
 
     flex-wrap: wrap;
-}
 
-
-small {
-
-    color: #666;
+    margin-top: 10px;
 }
 
 
@@ -992,9 +998,6 @@ small {
 
         width:
             calc(100% - 20px);
-
-        margin:
-            10px auto;
     }
 
 
@@ -1006,7 +1009,7 @@ small {
 
     textarea {
 
-        min-height: 400px;
+        min-height: 450px;
     }
 
 }
@@ -1022,7 +1025,7 @@ small {
 <header>
 
 <h1>
-PHPファイルエディタ
+PHPファイル管理・編集
 </h1>
 
 </header>
@@ -1056,39 +1059,50 @@ PHPファイルエディタ
 <div class="panel">
 
 <h2>
-サーバー上のPHPファイル
+既存アプリ
 </h2>
 
 
 <div class="info">
 
-この画面では、
+この一覧はPHPが
+
+<code>scandir()</code>
+
+でサーバー側から取得しています。
 
 <br>
 
-<strong>
-サーバー上の index.php
-</strong>
-
-を直接読み込み、
-
-編集し、
-
-通常のPOSTで保存します。
-
-<br><br>
-
-<code>fetch()</code> は使用していません。
-
-<br>
-
-<code>apiCall()</code> も使用していません。
-
-<br>
-
-JavaScript APIも使用していません。
+ブラウザからAPIを呼び出しているわけではありません。
 
 </div>
+
+
+<?php if (count($applications) === 0): ?>
+
+<p>
+index.phpを持つアプリがありません。
+</p>
+
+<?php else: ?>
+
+
+<div class="application-list">
+
+
+<?php foreach (
+    $applications
+    as $application
+): ?>
+
+
+<div class="application">
+
+<strong>
+
+<?= h($application['name']) ?>
+
+</strong>
 
 
 <form
@@ -1099,42 +1113,22 @@ JavaScript APIも使用していません。
 <input
     type="hidden"
     name="action"
-    value="load_file"
+    value="load"
 >
-
-
-<div class="field">
-
-<label for="load-path">
-
-読み込むディレクトリ
-
-</label>
 
 
 <input
-    id="load-path"
+    type="hidden"
     name="path"
-    type="text"
-    value="<?= h($currentPath) ?>"
-    placeholder="例：sample-app"
+    value="<?= h($application['path']) ?>"
 >
-
-
-<small>
-
-このindex.phpからの相対パスです。
-
-</small>
-
-</div>
 
 
 <button
     type="submit"
 >
 
-読み込む
+編集
 
 </button>
 
@@ -1143,75 +1137,67 @@ JavaScript APIも使用していません。
 </div>
 
 
+<?php endforeach; ?>
+
+
+</div>
+
+<?php endif; ?>
+
+</div>
+
+
+<?php if ($selectedPath !== ''): ?>
+
+
 <div class="panel">
+
+<h2>
+編集中
+</h2>
+
+
+<div class="info">
+
+<strong>
+<?= h($selectedPath) ?>/index.php
+</strong>
+
+<br>
+
+保存すると、サーバー上のこのファイルが直接更新されます。
+
+</div>
+
 
 <form
     method="post"
     action=""
 >
 
+
 <input
     type="hidden"
     name="action"
-    value="save_file"
+    value="save"
 >
-
-
-<div class="field">
-
-<label for="save-path">
-
-保存先ディレクトリ
-
-</label>
 
 
 <input
-    id="save-path"
+    type="hidden"
     name="path"
-    type="text"
-    value="<?= h($currentPath) ?>"
-    placeholder="例：sample-app"
-    required
+    value="<?= h($selectedPath) ?>"
 >
 
 
-<small>
-
-保存すると、
-
-<br>
-
-指定ディレクトリの
-
-<code>index.php</code>
-
-が更新されます。
-
-</small>
-
-</div>
-
-
-<div class="field">
-
-<label for="editor-content">
-
-ファイル内容
-
-</label>
-
-
 <textarea
-    id="editor-content"
     name="content"
     spellcheck="false"
-><?= h($currentContent) ?></textarea>
-
-</div>
+><?= h($editorContent) ?></textarea>
 
 
 <div class="actions">
+
 
 <button
     type="submit"
@@ -1224,63 +1210,37 @@ JavaScript APIも使用していません。
 
 <button
     type="button"
-    class="secondary"
+    class="gray"
     onclick="location.reload()"
 >
 
-再読み込み
+破棄して再読み込み
 
 </button>
 
+
 </div>
+
 
 </form>
 
 </div>
 
 
+<?php endif; ?>
+
+
 <div class="panel">
 
 <h2>
-現在の構造
+現在の通信構造
 </h2>
 
 
 <div class="info">
 
 <strong>
-読み込み：
-</strong>
-
-<br>
-
-ブラウザ
-
-→
-
-GET/POST
-
-→
-
-Apache
-
-→
-
-index.php
-
-→
-
-PHP
-
-→
-
-file_get_contents()
-
-<br><br>
-
-
-<strong>
-保存：
+読み込み
 </strong>
 
 <br>
@@ -1297,7 +1257,7 @@ Apache
 
 →
 
-index.php
+この index.php
 
 →
 
@@ -1305,13 +1265,46 @@ PHP
 
 →
 
-file_put_contents()
+<code>file_get_contents()</code>
+
 
 <br><br>
 
 
 <strong>
-使用していないもの：
+保存
+</strong>
+
+<br>
+
+ブラウザ
+
+→
+
+POST
+
+→
+
+Apache
+
+→
+
+この index.php
+
+→
+
+PHP
+
+→
+
+<code>file_put_contents()</code>
+
+
+<br><br>
+
+
+<strong>
+使用していないもの
 </strong>
 
 <br>
@@ -1324,11 +1317,11 @@ apiCall()
 
 <br>
 
-JSON API
+XMLHttpRequest
 
 <br>
 
-XMLHttpRequest
+JSON API
 
 <br>
 
