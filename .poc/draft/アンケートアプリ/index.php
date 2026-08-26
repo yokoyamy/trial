@@ -5,23 +5,19 @@ declare(strict_types=1);
 /*
 |--------------------------------------------------------------------------
 | アンケート管理システム
-| 最小構造・通信基盤テスト版
+| 基本構造確認用・単一ファイル版
 |--------------------------------------------------------------------------
 |
 | このファイルだけで動作する。
 |
-| GET:
-|   index.php?action=health
+| GET
+|   → 画面表示
 |
-| POST:
-|   index.php
-|   {
-|       "action": "health"
-|   }
+| POST
+|   → save_file
+|   → サーバー上のファイルを直接保存
 |
-| ブラウザ側通信:
-|   fetch() は使用しない。
-|   XMLHttpRequest を使用する。
+| fetch / apiCall / JSON API は使用しない。
 |
 |--------------------------------------------------------------------------
 */
@@ -29,315 +25,484 @@ declare(strict_types=1);
 
 /*
 |--------------------------------------------------------------------------
-| PHP 基本設定
+| 基本設定
 |--------------------------------------------------------------------------
 */
 
-ini_set('display_errors', '0');
-ini_set('log_errors', '1');
-
-header_remove('X-Powered-By');
+const APP_TITLE = 'アンケート管理システム 基本構造';
 
 
 /*
 |--------------------------------------------------------------------------
-| 共通JSONレスポンス
+| 保存基準ディレクトリ
 |--------------------------------------------------------------------------
+|
+| この index.php が置かれている場所を基準とする。
+|
+| 例：
+|
+| /gojacic/.poc/draft/アンケートアプリ/index.php
+|
+| の場合、
+|
+| /gojacic/.poc/draft/アンケートアプリ/
+|
+| が基準になる。
+|
 */
 
-function successResponse(
-    array $data = [],
-    string $message = '',
-    int $status = 200
-): never {
-    http_response_code($status);
-
-    header('Content-Type: application/json; charset=UTF-8');
-
-    echo json_encode(
-        [
-            'success' => true,
-            'data' => $data,
-            'message' => $message,
-        ],
-        JSON_UNESCAPED_UNICODE |
-        JSON_UNESCAPED_SLASHES
-    );
-
-    exit;
-}
-
-
-function errorResponse(
-    string $code,
-    string $message,
-    int $status = 400,
-    array $extra = []
-): never {
-    http_response_code($status);
-
-    header('Content-Type: application/json; charset=UTF-8');
-
-    $error = [
-        'code' => $code,
-        'message' => $message,
-    ];
-
-    if ($extra !== []) {
-        $error['detail'] = $extra;
-    }
-
-    echo json_encode(
-        [
-            'success' => false,
-            'error' => $error,
-        ],
-        JSON_UNESCAPED_UNICODE |
-        JSON_UNESCAPED_SLASHES
-    );
-
-    exit;
-}
+$baseDir = __DIR__;
 
 
 /*
 |--------------------------------------------------------------------------
-| POST JSON取得
+| 共通関数
 |--------------------------------------------------------------------------
 */
 
-function getJsonBody(): array
+
+/**
+ * HTMLエスケープ
+ */
+function h(mixed $value): string
 {
-    $raw = file_get_contents('php://input');
-
-    if ($raw === false || trim($raw) === '') {
-        return [];
-    }
-
-    try {
-        $data = json_decode(
-            $raw,
-            true,
-            512,
-            JSON_THROW_ON_ERROR
-        );
-    } catch (Throwable $e) {
-        error_log(
-            'JSON decode error: ' . $e->getMessage()
-        );
-
-        errorResponse(
-            'INVALID_JSON',
-            'リクエストJSONが不正です。',
-            400
-        );
-    }
-
-    if (!is_array($data)) {
-        errorResponse(
-            'INVALID_JSON',
-            'JSONオブジェクトを指定してください。',
-            400
-        );
-    }
-
-    return $data;
+    return htmlspecialchars(
+        (string)$value,
+        ENT_QUOTES | ENT_SUBSTITUTE,
+        'UTF-8'
+    );
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| API判定
-|--------------------------------------------------------------------------
-|
-| action が存在する場合はAPIとして処理する。
-|
-*/
-
-$action = isset($_GET['action'])
-    ? (string) $_GET['action']
-    : '';
-
-$method = strtoupper(
-    (string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')
-);
-
-
-/*
-|--------------------------------------------------------------------------
-| API処理
-|--------------------------------------------------------------------------
-*/
-
-if ($action !== '') {
+/**
+ * 現在URL
+ */
+function currentUrl(): string
+{
+    $uri = $_SERVER['REQUEST_URI'] ?? '/';
 
     /*
-    |--------------------------------------------------------------------------
-    | GET
-    |--------------------------------------------------------------------------
-    */
-
-    if ($method === 'GET') {
-
-        switch ($action) {
-
-            /*
-            |--------------------------------------------------------------------------
-            | health
-            |--------------------------------------------------------------------------
-            */
-
-            case 'health':
-
-                successResponse(
-                    [
-                        'status' => 'ok',
-                        'phpVersion' => PHP_VERSION,
-                        'method' => $method,
-                        'timestamp' => date('c'),
-                    ],
-                    ''
-                );
+     * POST後のLocation用。
+     * 攻撃用のCRLFを除去。
+     */
+    return str_replace(
+        ["\r", "\n"],
+        '',
+        $uri
+    );
+}
 
 
-            /*
-            |--------------------------------------------------------------------------
-            | 未定義GET action
-            |--------------------------------------------------------------------------
-            */
+/**
+ * 保存対象パスを検証・正規化する
+ *
+ * 例：
+ *
+ *   demo
+ *   projects/demo
+ *
+ * は許可。
+ *
+ *   ../demo
+ *   ./demo
+ *   ../../etc
+ *
+ * は拒否。
+ */
+function normalizeRelativePath(string $path): ?string
+{
+    /*
+     * Windows / Linux の区別をなくす
+     */
+    $path = str_replace('\\', '/', $path);
 
-            default:
+    /*
+     * 前後空白を除去
+     */
+    $path = trim($path);
 
-                errorResponse(
-                    'INVALID_ACTION',
-                    '指定されたactionは存在しません。',
-                    400
-                );
-        }
+    /*
+     * 先頭・末尾の / を除去
+     */
+    $path = trim($path, '/');
+
+    if ($path === '') {
+        return null;
     }
 
+    /*
+     * URLエンコードされた .. などを考慮
+     */
+    $decoded = rawurldecode($path);
+
+    if ($decoded !== $path) {
+        $path = str_replace('\\', '/', $decoded);
+        $path = trim($path, '/');
+    }
 
     /*
-    |--------------------------------------------------------------------------
-    | POST
-    |--------------------------------------------------------------------------
-    */
+     * パーツごとに検証
+     */
+    $parts = explode('/', $path);
 
-    if ($method === 'POST') {
+    foreach ($parts as $part) {
 
-        $body = getJsonBody();
+        if ($part === '') {
+            return null;
+        }
+
+        if ($part === '.') {
+            return null;
+        }
+
+        if ($part === '..') {
+            return null;
+        }
 
         /*
-        |--------------------------------------------------------------------------
-        | POST action
-        |--------------------------------------------------------------------------
-        |
-        | 要件上は
-        |
-        | POST index.php
-        | {
-        |     "action": "xxx"
-        | }
-        |
-        | だが、現在はGETのaction指定にも対応しておく。
-        |
-        */
-
-        $postAction = isset($body['action'])
-            ? (string) $body['action']
-            : '';
-
-        if ($postAction === '') {
-            errorResponse(
-                'INVALID_ACTION',
-                'POSTのactionが指定されていません。',
-                400
-            );
+         * Windowsのドライブ指定禁止
+         */
+        if (preg_match('/^[A-Za-z]:$/', $part)) {
+            return null;
         }
+    }
+
+    return implode('/', $parts);
+}
 
 
-        switch ($postAction) {
+/**
+ * 実際の保存先ディレクトリを取得
+ */
+function buildTargetDirectory(
+    string $baseDir,
+    string $relativePath
+): string {
 
-            /*
-            |--------------------------------------------------------------------------
-            | POST health
-            |--------------------------------------------------------------------------
-            |
-            | 本番業務では使用しない。
-            | 通信基盤確認用。
-            |
-            */
+    $parts = explode('/', $relativePath);
 
-            case 'health':
+    $target = $baseDir;
 
-                successResponse(
-                    [
-                        'status' => 'ok',
-                        'phpVersion' => PHP_VERSION,
-                        'method' => $method,
-                        'receivedAction' => $postAction,
-                        'receivedBody' => $body,
-                        'timestamp' => date('c'),
-                    ],
-                    ''
-                );
+    foreach ($parts as $part) {
+
+        $target .= DIRECTORY_SEPARATOR . $part;
+    }
+
+    return $target;
+}
 
 
-            /*
-            |--------------------------------------------------------------------------
-            | 未定義POST action
-            |--------------------------------------------------------------------------
-            */
+/**
+ * index.phpを保存する
+ */
+function saveFile(
+    string $baseDir,
+    string $historyBaseDir,
+    string $path,
+    string $content
+): array {
 
-            default:
+    /*
+     * パス検証
+     */
+    $normalizedPath =
+        normalizeRelativePath($path);
 
-                errorResponse(
-                    'INVALID_ACTION',
-                    '指定されたPOST actionは存在しません。',
-                    400
-                );
+    if ($normalizedPath === null) {
+
+        return [
+            'success' => false,
+            'error' => '保存先パスが不正です。'
+        ];
+    }
+
+
+    /*
+     * 保存先
+     */
+    $targetDirectory =
+        buildTargetDirectory(
+            $baseDir,
+            $normalizedPath
+        );
+
+
+    /*
+     * ディレクトリ作成
+     */
+    if (!is_dir($targetDirectory)) {
+
+        if (!mkdir(
+            $targetDirectory,
+            0777,
+            true
+        )) {
+
+            return [
+                'success' => false,
+                'error' =>
+                    '保存先ディレクトリを作成できませんでした。'
+            ];
         }
     }
 
 
     /*
-    |--------------------------------------------------------------------------
-    | その他HTTPメソッド
-    |--------------------------------------------------------------------------
-    */
+     * 保存対象ファイル
+     */
+    $filePath =
+        $targetDirectory .
+        DIRECTORY_SEPARATOR .
+        'index.php';
 
-    errorResponse(
-        'METHOD_NOT_ALLOWED',
-        '許可されていないHTTPメソッドです。',
-        405
-    );
+
+    /*
+     * ファイル保存
+     *
+     * LOCK_EX：
+     * 同時書き込みによる破損を防ぐ。
+     */
+    $written =
+        file_put_contents(
+            $filePath,
+            $content,
+            LOCK_EX
+        );
+
+
+    if ($written === false) {
+
+        return [
+            'success' => false,
+            'error' =>
+                'index.phpの書き込みに失敗しました。'
+        ];
+    }
+
+
+    /*
+     * 履歴保存
+     *
+     * 基準：
+     *
+     * .history/
+     *     アプリ名/
+     *         YYYYmmddHHMMSS_draft.txt
+     */
+    $appName =
+        basename($normalizedPath);
+
+
+    $historyDirectory =
+        $historyBaseDir .
+        DIRECTORY_SEPARATOR .
+        $appName;
+
+
+    if (!is_dir($historyDirectory)) {
+
+        if (!mkdir(
+            $historyDirectory,
+            0777,
+            true
+        )) {
+
+            /*
+             * 本体保存は成功しているので
+             * 全体失敗にはしない。
+             */
+            return [
+                'success' => true,
+                'warning' =>
+                    'ファイルは保存されましたが、履歴ディレクトリを作成できませんでした。'
+            ];
+        }
+    }
+
+
+    /*
+     * 同一秒の履歴衝突を避ける
+     */
+    $timestamp =
+        date('YmdHis') .
+        '_' .
+        substr(
+            bin2hex(random_bytes(4)),
+            0,
+            8
+        );
+
+
+    $historyFile =
+        $historyDirectory .
+        DIRECTORY_SEPARATOR .
+        $timestamp .
+        '_draft.txt';
+
+
+    $historyWritten =
+        file_put_contents(
+            $historyFile,
+            $content,
+            LOCK_EX
+        );
+
+
+    if ($historyWritten === false) {
+
+        return [
+            'success' => true,
+            'warning' =>
+                'ファイル本体は保存されましたが、履歴保存に失敗しました。'
+        ];
+    }
+
+
+    return [
+        'success' => true,
+        'path' => $normalizedPath,
+        'file' => $filePath
+    ];
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| ここから通常画面
+| POST処理
 |--------------------------------------------------------------------------
 |
-| action が無い場合だけHTMLを返す。
+| ブラウザから通常のHTMLフォームPOSTを受ける。
 |
 */
 
-$baseUrl = (function (): string {
+$message = '';
+$error = '';
+
+$postedPath = '';
+$postedContent = '';
+
+
+if (
+    ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST'
+) {
 
     /*
-     * 現在のindex.php自身を基準にする。
-     *
-     * 物理ディレクトリをハードコードしない。
+     * action
      */
+    $action =
+        isset($_POST['action'])
+            ? (string)$_POST['action']
+            : '';
 
-    $scriptName = (string) (
-        $_SERVER['SCRIPT_NAME'] ?? '/index.php'
-    );
 
-    return $scriptName;
+    /*
+     * save_file
+     */
+    if ($action === 'save_file') {
 
-})();
+        $postedPath =
+            isset($_POST['path'])
+                ? (string)$_POST['path']
+                : '';
+
+        $postedContent =
+            isset($_POST['content'])
+                ? (string)$_POST['content']
+                : '';
+
+
+        /*
+         * 履歴基準ディレクトリ
+         */
+        $historyBaseDir =
+            $baseDir .
+            DIRECTORY_SEPARATOR .
+            '.history';
+
+
+        /*
+         * 保存
+         */
+        try {
+
+            $result =
+                saveFile(
+                    $baseDir,
+                    $historyBaseDir,
+                    $postedPath,
+                    $postedContent
+                );
+
+        } catch (Throwable $e) {
+
+            /*
+             * 本番では詳細を画面へ出さない。
+             * Apache/PHPログには記録する。
+             */
+            error_log(
+                'save_file error: ' .
+                $e->getMessage()
+            );
+
+            $result = [
+                'success' => false,
+                'error' =>
+                    'サーバー内部で保存処理に失敗しました。'
+            ];
+        }
+
+
+        /*
+         * 成功
+         */
+        if ($result['success'] === true) {
+
+            /*
+             * PRG
+             *
+             * POST後にリロードしても
+             * 二重POSTされない。
+             */
+            header(
+                'Location: ' .
+                currentUrl()
+            );
+
+            exit;
+        }
+
+
+        /*
+         * 失敗
+         */
+        $error =
+            (string)(
+                $result['error']
+                ?? '保存に失敗しました。'
+            );
+    }
+
+
+    /*
+     * 未知のaction
+     */
+    elseif ($action !== '') {
+
+        $error =
+            '不明な操作です。';
+    }
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| GET表示用の初期値
+|--------------------------------------------------------------------------
+*/
+
+if ($postedPath === '') {
+    $postedPath = 'sample-app';
+}
 
 ?>
 <!DOCTYPE html>
@@ -345,845 +510,327 @@ $baseUrl = (function (): string {
 
 <head>
 
-    <meta charset="UTF-8">
+<meta charset="UTF-8">
 
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
 
-    <title>アンケート管理システム - 通信基盤テスト</title>
+<title><?= h(APP_TITLE) ?></title>
 
-    <style>
+<style>
 
-        * {
-            box-sizing: border-box;
-        }
+* {
+    box-sizing: border-box;
+}
 
-        body {
-            margin: 0;
-            padding: 24px;
-            font-family:
-                -apple-system,
-                BlinkMacSystemFont,
-                "Segoe UI",
-                sans-serif;
-            background: #f5f6f8;
-            color: #222;
-        }
+html,
+body {
+    margin: 0;
+    padding: 0;
+}
 
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-        }
+body {
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
 
-        h1 {
-            margin-top: 0;
-        }
+    background: #f4f6f8;
+    color: #222;
+}
 
-        .card {
-            background: #fff;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
-        }
+header {
+    background: #17202a;
+    color: #fff;
+    padding: 18px 24px;
+}
 
-        button {
-            appearance: none;
-            border: 0;
-            border-radius: 6px;
-            padding: 10px 16px;
-            background: #1565c0;
-            color: #fff;
-            font-size: 14px;
-            cursor: pointer;
-            margin-right: 8px;
-            margin-bottom: 8px;
-        }
+header h1 {
+    margin: 0;
+    font-size: 20px;
+}
 
-        button:hover {
-            background: #0d47a1;
-        }
+main {
+    max-width: 1100px;
+    margin: 30px auto;
+    padding: 0 20px;
+}
 
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
+.panel {
+    background: #fff;
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 20px;
+    box-shadow:
+        0 2px 8px rgba(0,0,0,.08);
+}
 
-        pre {
-            white-space: pre-wrap;
-            word-break: break-word;
-            background: #111;
-            color: #eee;
-            padding: 16px;
-            border-radius: 6px;
-            min-height: 100px;
-            overflow: auto;
-        }
+h2 {
+    margin-top: 0;
+    font-size: 18px;
+}
 
-        .status {
-            padding: 12px;
-            border-radius: 6px;
-            background: #eee;
-            margin-bottom: 12px;
-        }
+label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
 
-        .success {
-            background: #e8f5e9;
-            color: #1b5e20;
-        }
+input,
+textarea {
+    width: 100%;
+    border: 1px solid #c8ced4;
+    border-radius: 5px;
+    padding: 10px;
+    font-size: 14px;
+}
 
-        .error {
-            background: #ffebee;
-            color: #b71c1c;
-        }
+textarea {
+    min-height: 420px;
+    font-family:
+        Consolas,
+        "Courier New",
+        monospace;
 
-        .loading {
-            background: #fff8e1;
-            color: #795548;
-        }
+    resize: vertical;
+}
 
-        code {
-            background: #eee;
-            padding: 2px 5px;
-            border-radius: 3px;
-        }
+.field {
+    margin-bottom: 20px;
+}
 
-    </style>
+button {
+    border: 0;
+    border-radius: 5px;
+    padding: 11px 20px;
+    background: #1976d2;
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+button:hover {
+    background: #125da7;
+}
+
+.success {
+    background: #e8f5e9;
+    border: 1px solid #81c784;
+    color: #256029;
+    padding: 12px;
+    border-radius: 5px;
+    margin-bottom: 20px;
+}
+
+.error {
+    background: #ffebee;
+    border: 1px solid #e57373;
+    color: #a51c30;
+    padding: 12px;
+    border-radius: 5px;
+    margin-bottom: 20px;
+}
+
+.info {
+    background: #eef4ff;
+    border: 1px solid #b6c9ee;
+    padding: 14px;
+    border-radius: 5px;
+    line-height: 1.7;
+}
+
+code {
+    background: #f0f0f0;
+    padding: 2px 5px;
+    border-radius: 3px;
+}
+
+@media (max-width: 600px) {
+
+    main {
+        margin: 15px auto;
+        padding: 0 10px;
+    }
+
+    .panel {
+        padding: 16px;
+    }
+
+    textarea {
+        min-height: 300px;
+    }
+}
+
+</style>
 
 </head>
 
-
 <body>
 
-<div class="container">
+<header>
 
-    <h1>アンケート管理システム</h1>
+    <h1>
+        <?= h(APP_TITLE) ?>
+    </h1>
 
-    <div class="card">
+</header>
 
-        <h2>通信基盤テスト</h2>
 
-        <p>
-            この画面では業務処理を行わず、
-            Apache → PHP → index.php → HTTP通信
-            の成立だけを確認します。
-        </p>
+<main>
 
-        <p>
-            ブラウザ通信には
-            <strong>fetch()を使用しません。</strong>
-        </p>
 
-        <button
-            type="button"
-            id="getHealthButton"
-        >
-            GET API テスト
-        </button>
+<?php if ($error !== ''): ?>
 
-        <button
-            type="button"
-            id="postHealthButton"
-        >
-            POST API テスト
-        </button>
-
+    <div class="error">
+        <?= h($error) ?>
     </div>
 
-
-    <div class="card">
-
-        <h2>通信状態</h2>
-
-        <div
-            id="status"
-            class="status"
-        >
-            未実行
-        </div>
-
-        <pre id="result">未実行</pre>
-
-    </div>
+<?php endif; ?>
 
 
-    <div class="card">
+<div class="panel">
 
-        <h2>接続先</h2>
+    <h2>
+        ファイル保存テスト
+    </h2>
 
-        <pre id="connectionInfo"></pre>
+    <div class="info">
+
+        この画面は
+        <strong>index.php 1ファイル</strong>
+        だけで動作します。
+
+        <br>
+
+        保存処理は
+        JavaScriptの
+        <code>fetch()</code>
+        を使用せず、
+
+        <br>
+
+        HTMLフォームの
+        <code>POST</code>
+        → PHP
+        → <code>file_put_contents()</code>
+
+        で実行します。
 
     </div>
 
 </div>
 
 
-<script>
-
-/*
-|--------------------------------------------------------------------------
-| ブラウザ側通信
-|--------------------------------------------------------------------------
-|
-| fetch() は使わない。
-|
-| XMLHttpRequestだけを使用する。
-|
-*/
+<div class="panel">
 
+<form
+    method="post"
+    action=""
+>
 
-(function () {
+    <input
+        type="hidden"
+        name="action"
+        value="save_file"
+    >
 
-    'use strict';
-
 
-    /*
-    |--------------------------------------------------------------------------
-    | DOM
-    |--------------------------------------------------------------------------
-    */
+    <div class="field">
 
-    const getButton =
-        document.getElementById('getHealthButton');
+        <label for="path">
+            保存先ディレクトリ
+        </label>
 
-    const postButton =
-        document.getElementById('postHealthButton');
+        <input
+            id="path"
+            name="path"
+            type="text"
+            value="<?= h($postedPath) ?>"
+            placeholder="例: sample-app"
+            required
+        >
 
-    const statusElement =
-        document.getElementById('status');
+        <small>
+            このindex.phpからの相対パスです。
+        </small>
 
-    const resultElement =
-        document.getElementById('result');
+    </div>
 
-    const connectionInfoElement =
-        document.getElementById('connectionInfo');
 
+    <div class="field">
 
-    /*
-    |--------------------------------------------------------------------------
-    | 現在のindex.php URL
-    |--------------------------------------------------------------------------
-    |
-    | PHPから渡されたSCRIPT_NAMEを使用。
-    |
-    | 例:
-    |
-    | /gojacic/.poc/draft/アンケートアプリ/index.php
-    |
-    */
+        <label for="editor-content">
+            保存内容
+        </label>
 
-    const INDEX_URL =
-        <?= json_encode(
-            $baseUrl,
-            JSON_UNESCAPED_UNICODE |
-            JSON_UNESCAPED_SLASHES |
-            JSON_HEX_TAG |
-            JSON_HEX_AMP |
-            JSON_HEX_APOS |
-            JSON_HEX_QUOT
-        ) ?>;
+        <textarea
+            id="editor-content"
+            name="content"
+            spellcheck="false"
+        ><?= h($postedContent) ?></textarea>
 
+    </div>
 
-    /*
-    |--------------------------------------------------------------------------
-    | API URL生成
-    |--------------------------------------------------------------------------
-    */
 
-    function createApiUrl(action) {
+    <button type="submit">
+        保存
+    </button>
 
-        const url = new URL(
-            INDEX_URL,
-            window.location.origin
-        );
+</form>
 
-        url.search = '';
+</div>
 
-        url.searchParams.set(
-            'action',
-            action
-        );
 
-        return url.href;
-    }
+<div class="panel">
 
+    <h2>
+        処理経路
+    </h2>
 
-    /*
-    |--------------------------------------------------------------------------
-    | 画面表示
-    |--------------------------------------------------------------------------
-    */
+    <div class="info">
 
-    function setStatus(
-        message,
-        type = ''
-    ) {
+        ブラウザ
 
-        statusElement.textContent = message;
+        →
+        Apache
 
-        statusElement.className =
-            'status ' + type;
-    }
+        →
+        index.php
 
+        →
+        saveFile()
 
-    function showResult(data) {
+        →
+        file_put_contents()
 
-        resultElement.textContent =
-            JSON.stringify(
-                data,
-                null,
-                2
-            );
-    }
+        <br><br>
 
+        JavaScript
+        →
+        <strong>fetchなし</strong>
 
-    /*
-    |--------------------------------------------------------------------------
-    | 通信中UI
-    |--------------------------------------------------------------------------
-    */
+        <br>
 
-    function setLoading(isLoading) {
+        API
+        →
+        <strong>なし</strong>
 
-        getButton.disabled = isLoading;
+        <br>
 
-        postButton.disabled = isLoading;
+        データベース
+        →
+        <strong>なし</strong>
 
-        if (isLoading) {
+    </div>
 
-            setStatus(
-                '通信中...',
-                'loading'
-            );
+</div>
 
-        }
 
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | 共通API通信
-    |--------------------------------------------------------------------------
-    |
-    | fetchではなくXMLHttpRequest。
-    |
-    */
-
-    function callApi(
-        method,
-        action,
-        body = null
-    ) {
-
-        return new Promise(
-            function (resolve, reject) {
-
-                const url =
-                    createApiUrl(action);
-
-                const xhr =
-                    new XMLHttpRequest();
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | 接続
-                |--------------------------------------------------------------------------
-                */
-
-                try {
-
-                    xhr.open(
-                        method,
-                        url,
-                        true
-                    );
-
-                } catch (error) {
-
-                    reject({
-                        code: 'OPEN_ERROR',
-                        message:
-                            error.message,
-                        url: url,
-                        method: method,
-                        status: null,
-                        contentType: null,
-                        response: null
-                    });
-
-                    return;
-                }
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | タイムアウト
-                |--------------------------------------------------------------------------
-                */
-
-                xhr.timeout = 10000;
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | Request Header
-                |--------------------------------------------------------------------------
-                */
-
-                xhr.setRequestHeader(
-                    'Accept',
-                    'application/json'
-                );
-
-
-                if (method !== 'GET') {
-
-                    xhr.setRequestHeader(
-                        'Content-Type',
-                        'application/json; charset=UTF-8'
-                    );
-
-                }
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | 正常完了
-                |--------------------------------------------------------------------------
-                */
-
-                xhr.onload =
-                    function () {
-
-                        const status =
-                            xhr.status;
-
-                        const contentType =
-                            xhr.getResponseHeader(
-                                'Content-Type'
-                            );
-
-                        const responseText =
-                            xhr.responseText;
-
-
-                        let responseJson = null;
-
-
-                        if (responseText !== '') {
-
-                            try {
-
-                                responseJson =
-                                    JSON.parse(
-                                        responseText
-                                    );
-
-                            } catch (error) {
-
-                                responseJson = null;
-
-                            }
-
-                        }
-
-
-                        resolve({
-
-                            code:
-                                status >= 200 &&
-                                status < 300
-                                    ? 'OK'
-                                    : 'HTTP_ERROR',
-
-                            message:
-                                status >= 200 &&
-                                status < 300
-                                    ? 'HTTP通信成功'
-                                    : 'HTTPエラー',
-
-                            url: url,
-
-                            method: method,
-
-                            status: status,
-
-                            contentType:
-                                contentType,
-
-                            response:
-                                responseText,
-
-                            json:
-                                responseJson
-
-                        });
-
-                    };
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | ネットワークエラー
-                |--------------------------------------------------------------------------
-                */
-
-                xhr.onerror =
-                    function () {
-
-                        reject({
-
-                            code:
-                                'NETWORK_ERROR',
-
-                            message:
-                                'XMLHttpRequestによるネットワーク通信に失敗しました。',
-
-                            detail:
-                                'status=0 の場合、HTTPレスポンスを取得する前に通信が失敗しています。',
-
-                            url: url,
-
-                            method: method,
-
-                            status:
-                                xhr.status,
-
-                            contentType:
-                                null,
-
-                            response:
-                                null
-
-                        });
-
-                    };
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | タイムアウト
-                |--------------------------------------------------------------------------
-                */
-
-                xhr.ontimeout =
-                    function () {
-
-                        reject({
-
-                            code:
-                                'TIMEOUT',
-
-                            message:
-                                'HTTP通信がタイムアウトしました。',
-
-                            url: url,
-
-                            method: method,
-
-                            status:
-                                xhr.status,
-
-                            contentType:
-                                null,
-
-                            response:
-                                null
-
-                        });
-
-                    };
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | 中断
-                |--------------------------------------------------------------------------
-                */
-
-                xhr.onabort =
-                    function () {
-
-                        reject({
-
-                            code:
-                                'ABORTED',
-
-                            message:
-                                'HTTP通信が中断されました。',
-
-                            url: url,
-
-                            method: method,
-
-                            status:
-                                xhr.status,
-
-                            contentType:
-                                null,
-
-                            response:
-                                null
-
-                        });
-
-                    };
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | 送信
-                |--------------------------------------------------------------------------
-                */
-
-                try {
-
-                    if (body === null) {
-
-                        xhr.send();
-
-                    } else {
-
-                        xhr.send(
-                            JSON.stringify(body)
-                        );
-
-                    }
-
-                } catch (error) {
-
-                    reject({
-
-                        code:
-                            'SEND_ERROR',
-
-                        message:
-                            error.message,
-
-                        url: url,
-
-                        method: method,
-
-                        status:
-                            xhr.status,
-
-                        contentType:
-                            null,
-
-                        response:
-                            null
-
-                    });
-
-                }
-
-            }
-        );
-
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | GET
-    |--------------------------------------------------------------------------
-    */
-
-    async function testGet() {
-
-        setLoading(true);
-
-        showResult({
-            status: '通信開始'
-        });
-
-
-        const url =
-            createApiUrl('health');
-
-
-        try {
-
-            const result =
-                await callApi(
-                    'GET',
-                    'health'
-                );
-
-
-            if (
-                result.code === 'OK' &&
-                result.json !== null
-            ) {
-
-                setStatus(
-                    'GET API 成功',
-                    'success'
-                );
-
-            } else {
-
-                setStatus(
-                    'GET API HTTPエラー',
-                    'error'
-                );
-
-            }
-
-
-            showResult(result);
-
-
-        } catch (error) {
-
-            setStatus(
-                'GET API 通信失敗',
-                'error'
-            );
-
-            showResult(error);
-
-        } finally {
-
-            setLoading(false);
-
-        }
-
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | POST
-    |--------------------------------------------------------------------------
-    */
-
-    async function testPost() {
-
-        setLoading(true);
-
-        showResult({
-            status: '通信開始'
-        });
-
-
-        try {
-
-            const result =
-                await callApi(
-                    'POST',
-                    'health',
-                    {
-                        action: 'health'
-                    }
-                );
-
-
-            if (
-                result.code === 'OK' &&
-                result.json !== null
-            ) {
-
-                setStatus(
-                    'POST API 成功',
-                    'success'
-                );
-
-            } else {
-
-                setStatus(
-                    'POST API HTTPエラー',
-                    'error'
-                );
-
-            }
-
-
-            showResult(result);
-
-
-        } catch (error) {
-
-            setStatus(
-                'POST API 通信失敗',
-                'error'
-            );
-
-            showResult(error);
-
-        } finally {
-
-            setLoading(false);
-
-        }
-
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | ボタンイベント
-    |--------------------------------------------------------------------------
-    */
-
-    getButton.addEventListener(
-        'click',
-        testGet
-    );
-
-
-    postButton.addEventListener(
-        'click',
-        testPost
-    );
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | 接続情報表示
-    |--------------------------------------------------------------------------
-    */
-
-    connectionInfoElement.textContent =
-        JSON.stringify(
-            {
-                browserOrigin:
-                    window.location.origin,
-
-                currentUrl:
-                    window.location.href,
-
-                currentPath:
-                    window.location.pathname,
-
-                indexUrl:
-                    new URL(
-                        INDEX_URL,
-                        window.location.origin
-                    ).href,
-
-                getHealthUrl:
-                    createApiUrl('health'),
-
-                communication:
-                    'XMLHttpRequest',
-
-                fetch:
-                    false
-
-            },
-            null,
-            2
-        );
-
-
-})();
-
-</script>
+</main>
 
 </body>
+
 </html>
