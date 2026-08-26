@@ -4,286 +4,56 @@ declare(strict_types=1);
 /**
  * ============================================================
  * アンケート管理システム
- * 共通エントリーポイント
+ * index.php
+ *
+ * 第1実装：
+ * - 同居アプリとのセッション分離
+ * - 単一入口
+ * - S01～S14
+ * - A01～A06
+ * - query stringによる画面状態
+ * - pushState
+ * - replaceState
+ * - popstate
+ * - 直接URLアクセス
+ * - 再読み込み
+ * - 画面遷移
+ *
+ * ※業務APIは次段階で実装する。
  * ============================================================
- *
- * 同居アプリとのセッション衝突を防止する。
- *
- * 重要：
- * - session_name() を専用名にする
- * - session cookie 名も専用にする
- * - 他アプリの $_SESSION を前提にしない
- * - HTML出力より前に初期化する
- * - Fatal Error / Exception を画面に直接吐かない
  */
 
-/* ------------------------------------------------------------
- * 1. アプリケーション定数
- * ------------------------------------------------------------ */
 
-const APP_NAME = 'survey_manager';
+/* ============================================================
+ * 1. PHP基本設定
+ * ============================================================ */
 
-/*
- * 同居アプリと絶対に重複しないセッション名
- */
-const SESSION_NAME = 'SURVEY_MANAGER_SESSION';
-
-
-/* ------------------------------------------------------------
- * 2. PHPエラー設定
- * ------------------------------------------------------------ */
-
-/*
- * 開発時はログへ記録する。
- *
- * display_errors を ON にすると、
- * PHP Warning / Fatal Error によって
- * JSONレスポンスや画面HTMLが壊れる可能性がある。
- */
 ini_set('display_errors', '0');
 ini_set('display_startup_errors', '0');
 ini_set('log_errors', '1');
 
 error_reporting(E_ALL);
 
-
-/* ------------------------------------------------------------
- * 3. 出力バッファ
- * ------------------------------------------------------------ */
-
 ob_start();
 
 
-/* ------------------------------------------------------------
- * 4. 共通例外ハンドラ
- * ------------------------------------------------------------ */
+/* ============================================================
+ * 2. アプリ専用セッション
+ * ============================================================ */
 
-set_exception_handler(
-    function (Throwable $e): void {
+const APP_SESSION_NAME = 'SURVEY_MANAGER_SESSION';
 
-        error_log(
-            sprintf(
-                '[%s] Uncaught exception: %s in %s:%d',
-                APP_NAME,
-                $e->getMessage(),
-                $e->getFile(),
-                $e->getLine()
-            )
-        );
+if (session_status() === PHP_SESSION_NONE) {
 
-        /*
-         * すでにHTTPレスポンスを開始している場合は、
-         * 可能な範囲で出力を破棄する。
-         */
-        while (ob_get_level() > 0) {
-            ob_end_clean();
-        }
+    session_name(APP_SESSION_NAME);
 
-        http_response_code(500);
-
-        /*
-         * API要求ならJSON。
-         */
-        $isApi = isset($_GET['action'])
-            || (
-                isset($_SERVER['CONTENT_TYPE'])
-                && str_contains(
-                    strtolower((string)$_SERVER['CONTENT_TYPE']),
-                    'application/json'
-                )
-            );
-
-        if ($isApi) {
-            header('Content-Type: application/json; charset=utf-8');
-
-            echo json_encode(
-                [
-                    'success' => false,
-                    'error' => [
-                        'code' => 'INTERNAL_ERROR',
-                        'message' => 'サーバー内部エラーが発生しました。'
-                    ]
-                ],
-                JSON_UNESCAPED_UNICODE
-                | JSON_UNESCAPED_SLASHES
-            );
-
-            exit;
-        }
-
-        /*
-         * 通常画面。
-         */
-        header('Content-Type: text/html; charset=utf-8');
-
-        echo '<!doctype html>';
-        echo '<html lang="ja">';
-        echo '<head>';
-        echo '<meta charset="utf-8">';
-        echo '<title>システムエラー</title>';
-        echo '</head>';
-        echo '<body>';
-        echo '<h1>システムエラー</h1>';
-        echo '<p>処理中にエラーが発生しました。</p>';
-        echo '</body>';
-        echo '</html>';
-
-        exit;
-    }
-);
-
-
-/* ------------------------------------------------------------
- * 5. PHP Fatal Error 対策
- * ------------------------------------------------------------ */
-
-register_shutdown_function(
-    function (): void {
-
-        $error = error_get_last();
-
-        if ($error === null) {
-            return;
-        }
-
-        $fatalTypes = [
-            E_ERROR,
-            E_PARSE,
-            E_CORE_ERROR,
-            E_COMPILE_ERROR,
-            E_USER_ERROR,
-        ];
-
-        if (!in_array($error['type'], $fatalTypes, true)) {
-            return;
-        }
-
-        error_log(
-            sprintf(
-                '[%s] Fatal Error: %s in %s:%d',
-                APP_NAME,
-                $error['message'],
-                $error['file'],
-                $error['line']
-            )
-        );
-
-        /*
-         * 既に出力されている内容を破棄。
-         */
-        while (ob_get_level() > 0) {
-            ob_end_clean();
-        }
-
-        http_response_code(500);
-
-        /*
-         * ここではJSONを要求しているかを
-         * 簡易判定する。
-         */
-        $isApi = isset($_GET['action']);
-
-        if ($isApi) {
-
-            header(
-                'Content-Type: application/json; charset=utf-8'
-            );
-
-            echo json_encode(
-                [
-                    'success' => false,
-                    'error' => [
-                        'code' => 'FATAL_ERROR',
-                        'message' => 'サーバー内部エラーが発生しました。'
-                    ]
-                ],
-                JSON_UNESCAPED_UNICODE
-                | JSON_UNESCAPED_SLASHES
-            );
-
-            return;
-        }
-
-        header('Content-Type: text/html; charset=utf-8');
-
-        echo '<!doctype html>';
-        echo '<html lang="ja">';
-        echo '<head>';
-        echo '<meta charset="utf-8">';
-        echo '<title>システムエラー</title>';
-        echo '</head>';
-        echo '<body>';
-        echo '<h1>システムエラー</h1>';
-        echo '<p>サーバー内部でエラーが発生しました。</p>';
-        echo '</body>';
-        echo '</html>';
-    }
-);
-
-
-/* ------------------------------------------------------------
- * 6. セッション衝突防止
- * ------------------------------------------------------------ */
-
-/*
- * 既に別アプリが session_start() している場合、
- * session_name() を変更してから session_start() することはできない。
- *
- * したがって、まず現在のセッション状態を確認する。
- */
-
-if (session_status() === PHP_SESSION_ACTIVE) {
-
-    /*
-     * ここで別アプリのセッションをそのまま
-     * アンケートシステムとして使用してはいけない。
-     *
-     * 同居アプリと共通セッションになっている場合、
-     * 原則としてWebサーバー側のCookie構成を分離する。
-     *
-     * 開発中に検知できるようログへ記録。
-     */
-    if (session_name() !== SESSION_NAME) {
-
-        error_log(
-            sprintf(
-                '[%s] Session collision detected. Current session name: %s',
-                APP_NAME,
-                session_name()
-            )
-        );
-
-        /*
-         * ここでは勝手に他アプリのセッションを
-         * 破棄しない。
-         *
-         * 他アプリの動作を壊すため。
-         */
-    }
-
-} else {
-
-    /*
-     * このアプリ専用セッション名。
-     */
-    session_name(SESSION_NAME);
-
-    /*
-     * Cookieも専用化する。
-     *
-     * path="/" にすると同一ドメイン上の別アプリにも
-     * Cookieが送られる可能性がある。
-     *
-     * 可能なら、このアプリの公開ディレクトリに合わせる。
-     *
-     * 例：
-     * /survey/
-     */
     session_set_cookie_params([
         'lifetime' => 0,
         'path' => '/',
-        'secure' => !empty($_SERVER['HTTPS'])
-            && $_SERVER['HTTPS'] !== 'off',
+        'secure' => (
+            isset($_SERVER['HTTPS'])
+            && $_SERVER['HTTPS'] !== 'off'
+        ),
         'httponly' => true,
         'samesite' => 'Lax',
     ]);
@@ -292,244 +62,114 @@ if (session_status() === PHP_SESSION_ACTIVE) {
 }
 
 
-/* ------------------------------------------------------------
- * 7. アプリ専用セッション領域
- * ------------------------------------------------------------ */
-
-/*
- * 他アプリと同じ $_SESSION を直接使わない。
- *
- * 必ず survey_manager 配下に入れる。
- */
+/* ============================================================
+ * 3. アプリ専用セッション領域
+ * ============================================================ */
 
 if (!isset($_SESSION['survey_manager'])) {
     $_SESSION['survey_manager'] = [];
 }
 
 
-/* ------------------------------------------------------------
- * 8. CSRF
- * ------------------------------------------------------------ */
+/* ============================================================
+ * 4. CSRFトークン
+ * ============================================================ */
 
 if (
     !isset($_SESSION['survey_manager']['csrf_token'])
     || !is_string($_SESSION['survey_manager']['csrf_token'])
-    || $_SESSION['survey_manager']['csrf_token'] === ''
 ) {
     $_SESSION['survey_manager']['csrf_token'] =
         bin2hex(random_bytes(32));
 }
 
 
-/* ------------------------------------------------------------
- * 9. 共通レスポンス
- * ------------------------------------------------------------ */
+/* ============================================================
+ * 5. 例外処理
+ * ============================================================ */
 
-function successResponse(
-    mixed $data = [],
-    string $message = ''
-): never {
+set_exception_handler(
+    function (Throwable $e): void {
 
-    while (ob_get_level() > 0) {
-        ob_end_clean();
-    }
-
-    header(
-        'Content-Type: application/json; charset=utf-8'
-    );
-
-    echo json_encode(
-        [
-            'success' => true,
-            'data' => $data,
-            'message' => $message,
-        ],
-        JSON_UNESCAPED_UNICODE
-        | JSON_UNESCAPED_SLASHES
-    );
-
-    exit;
-}
-
-
-function errorResponse(
-    string $code,
-    string $message,
-    int $status = 400
-): never {
-
-    while (ob_get_level() > 0) {
-        ob_end_clean();
-    }
-
-    http_response_code($status);
-
-    header(
-        'Content-Type: application/json; charset=utf-8'
-    );
-
-    echo json_encode(
-        [
-            'success' => false,
-            'error' => [
-                'code' => $code,
-                'message' => $message,
-            ],
-        ],
-        JSON_UNESCAPED_UNICODE
-        | JSON_UNESCAPED_SLASHES
-    );
-
-    exit;
-}
-
-
-/* ------------------------------------------------------------
- * 10. POST時CSRF確認
- * ------------------------------------------------------------ */
-
-function verifyCsrf(): void
-{
-    $token = $_POST['csrf_token']
-        ?? null;
-
-    if (
-        !is_string($token)
-        || $token === ''
-    ) {
-        errorResponse(
-            'CSRF_TOKEN_REQUIRED',
-            'CSRFトークンがありません。',
-            403
+        error_log(
+            '[survey_manager] '
+            . $e->getMessage()
+            . ' '
+            . $e->getFile()
+            . ':'
+            . $e->getLine()
         );
-    }
 
-    $sessionToken =
-        $_SESSION['survey_manager']['csrf_token']
-        ?? '';
-
-    if (
-        !is_string($sessionToken)
-        || !hash_equals(
-            $sessionToken,
-            $token
-        )
-    ) {
-        errorResponse(
-            'CSRF_TOKEN_INVALID',
-            'CSRFトークンが不正です。',
-            403
-        );
-    }
-}
-
-
-/* ------------------------------------------------------------
- * 11. action取得
- * ------------------------------------------------------------ */
-
-$action = $_POST['action']
-    ?? $_GET['action']
-    ?? null;
-
-
-/* ------------------------------------------------------------
- * 12. API処理
- * ------------------------------------------------------------ */
-
-if ($action !== null) {
-
-    if (!is_string($action) || $action === '') {
-        errorResponse(
-            'INVALID_ACTION',
-            'actionが指定されていません。',
-            400
-        );
-    }
-
-    /*
-     * POST業務処理。
-     */
-    $postActions = [
-        'save_survey',
-        'delete_survey',
-        'duplicate_survey',
-        'publish_survey',
-        'stop_survey',
-        'resume_survey',
-        'save_question',
-        'delete_question',
-        'save_condition',
-        'send_mail',
-        'resend_mail',
-        'sync_customers',
-        'test_kintone',
-        'get_kintone_fields',
-        'save_kintone',
-        'save_smtp',
-        'test_smtp',
-        'save_settings',
-        'submit_answer',
-    ];
-
-    if (in_array($action, $postActions, true)) {
-
-        if (
-            ($_SERVER['REQUEST_METHOD'] ?? 'GET')
-            !== 'POST'
-        ) {
-            errorResponse(
-                'METHOD_NOT_ALLOWED',
-                'この操作にはPOSTが必要です。',
-                405
-            );
+        while (ob_get_level() > 0) {
+            ob_end_clean();
         }
 
-        verifyCsrf();
+        http_response_code(500);
+
+        header(
+            'Content-Type: text/html; charset=utf-8'
+        );
+
+        echo '<!doctype html>';
+        echo '<html lang="ja">';
+        echo '<head>';
+        echo '<meta charset="utf-8">';
+        echo '<title>システムエラー</title>';
+        echo '</head>';
+        echo '<body>';
+        echo '<h1>システムエラー</h1>';
+        echo '<p>サーバー内部エラーが発生しました。</p>';
+        echo '</body>';
+        echo '</html>';
+
+        exit;
     }
+);
 
 
-    /*
-     * APIルーティング。
-     *
-     * 実際の業務処理はここから
-     * 各サービス・業務クラスへ分離する。
-     */
-    switch ($action) {
+/* ============================================================
+ * 6. 共通関数
+ * ============================================================ */
 
-        case 'health':
-            successResponse(
-                [
-                    'app' => APP_NAME,
-                    'session_name' => session_name(),
-                    'php_version' => PHP_VERSION,
-                ],
-                '正常に動作しています。'
-            );
-
-
-        default:
-            errorResponse(
-                'UNKNOWN_ACTION',
-                '未定義のactionです。',
-                400
-            );
-    }
+function h(mixed $value): string
+{
+    return htmlspecialchars(
+        (string)$value,
+        ENT_QUOTES | ENT_SUBSTITUTE,
+        'UTF-8'
+    );
 }
 
 
-/* ------------------------------------------------------------
- * 13. 画面表示
- * ------------------------------------------------------------ */
+function url(
+    string $screen,
+    array $params = []
+): string {
 
-$screen = $_GET['screen']
-    ?? 'admin';
+    $query = [
+        'screen' => $screen,
+    ];
+
+    foreach ($params as $key => $value) {
+
+        if ($value !== null && $value !== '') {
+            $query[$key] = $value;
+        }
+    }
+
+    return 'index.php?' . http_build_query($query);
+}
 
 
-/*
- * 画面IDを許可リストで管理する。
- */
+/* ============================================================
+ * 7. 画面ID
+ * ============================================================ */
+
+$screen = $_GET['screen'] ?? 'admin';
+
 $allowedScreens = [
+
+    // 管理者
     'admin',
     'surveys',
     'survey',
@@ -545,6 +185,7 @@ $allowedScreens = [
     'smtp',
     'settings',
 
+    // 回答者
     'start',
     'answer',
     'confirm',
@@ -558,22 +199,30 @@ if (
     !is_string($screen)
     || !in_array($screen, $allowedScreens, true)
 ) {
-    http_response_code(404);
-
-    header(
-        'Content-Type: text/html; charset=utf-8'
-    );
-
-    echo '<h1>404</h1>';
-    echo '<p>指定された画面は存在しません。</p>';
-
-    exit;
+    $screen = 'admin';
 }
 
 
-/* ------------------------------------------------------------
- * 14. 最低限の画面表示
- * ------------------------------------------------------------ */
+/* ============================================================
+ * 8. URLパラメータ
+ * ============================================================ */
+
+$surveyId = isset($_GET['surveyId'])
+    ? (string)$_GET['surveyId']
+    : '';
+
+$customerId = isset($_GET['customerId'])
+    ? (string)$_GET['customerId']
+    : '';
+
+$questionId = isset($_GET['questionId'])
+    ? (string)$_GET['questionId']
+    : '';
+
+
+/* ============================================================
+ * 9. HTML開始
+ * ============================================================ */
 
 header(
     'Content-Type: text/html; charset=utf-8'
@@ -581,96 +230,2317 @@ header(
 
 ?>
 <!doctype html>
+
 <html lang="ja">
+
 <head>
-    <meta charset="utf-8">
 
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1"
-    >
+<meta charset="utf-8">
 
-    <title>アンケート管理システム</title>
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+>
 
-    <style>
-        body {
-            font-family:
-                system-ui,
-                -apple-system,
-                BlinkMacSystemFont,
-                "Segoe UI",
-                sans-serif;
+<title>
+    アンケート管理システム
+</title>
 
-            margin: 0;
-            padding: 40px;
+<style>
 
-            background: #f5f6f8;
-            color: #222;
-        }
+* {
+    box-sizing: border-box;
+}
 
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
+body {
+    margin: 0;
+    background: #f3f5f8;
+    color: #222;
+    font-family:
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+}
 
-            background: #fff;
-            padding: 30px;
+.app {
+    min-height: 100vh;
+}
 
-            border-radius: 10px;
-            box-shadow:
-                0 2px 10px rgba(0,0,0,.08);
-        }
+.header {
+    height: 64px;
+    background: #1f2937;
+    color: #fff;
 
-        h1 {
-            margin-top: 0;
-        }
+    display: flex;
+    align-items: center;
 
-        .status {
-            padding: 15px;
-            background: #eef6ff;
-            border-left: 4px solid #1976d2;
-        }
-    </style>
+    padding: 0 24px;
+}
+
+.header-title {
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.layout {
+    display: flex;
+    min-height: calc(100vh - 64px);
+}
+
+.sidebar {
+    width: 240px;
+    background: #111827;
+    color: #fff;
+    padding: 20px 12px;
+}
+
+.sidebar-title {
+    padding: 10px 12px;
+    font-weight: 700;
+    color: #9ca3af;
+    font-size: 13px;
+}
+
+.nav-button {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: #e5e7eb;
+
+    padding: 11px 12px;
+
+    text-align: left;
+    border-radius: 6px;
+
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.nav-button:hover {
+    background: #374151;
+}
+
+.content {
+    flex: 1;
+    padding: 28px;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+
+    margin-bottom: 24px;
+}
+
+.page-title {
+    margin: 0;
+    font-size: 28px;
+}
+
+.card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 22px;
+    margin-bottom: 20px;
+
+    box-shadow:
+        0 1px 3px rgba(0,0,0,.08);
+}
+
+.button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    min-height: 40px;
+
+    padding: 0 16px;
+
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+
+    background: #fff;
+    color: #111827;
+
+    cursor: pointer;
+    text-decoration: none;
+
+    font-size: 14px;
+    font-weight: 600;
+
+    margin-right: 8px;
+    margin-bottom: 8px;
+}
+
+.button:hover {
+    background: #f3f4f6;
+}
+
+.button-primary {
+    background: #2563eb;
+    color: #fff;
+    border-color: #2563eb;
+}
+
+.button-primary:hover {
+    background: #1d4ed8;
+}
+
+.button-danger {
+    background: #dc2626;
+    color: #fff;
+    border-color: #dc2626;
+}
+
+.button-success {
+    background: #16a34a;
+    color: #fff;
+    border-color: #16a34a;
+}
+
+.button-warning {
+    background: #d97706;
+    color: #fff;
+    border-color: #d97706;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns:
+        repeat(auto-fit, minmax(220px, 1fr));
+
+    gap: 16px;
+}
+
+.menu-card {
+    background: #fff;
+
+    border-radius: 10px;
+    padding: 20px;
+
+    box-shadow:
+        0 1px 3px rgba(0,0,0,.08);
+}
+
+.menu-card h3 {
+    margin-top: 0;
+}
+
+.menu-card p {
+    color: #6b7280;
+    font-size: 14px;
+}
+
+input,
+textarea,
+select {
+    width: 100%;
+    padding: 10px;
+
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+
+    font: inherit;
+}
+
+.form-row {
+    margin-bottom: 16px;
+}
+
+.form-row label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.status {
+    display: inline-block;
+
+    padding: 5px 10px;
+
+    border-radius: 999px;
+
+    background: #e5e7eb;
+
+    font-size: 13px;
+}
+
+.info {
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+
+    padding: 14px;
+    margin-bottom: 20px;
+}
+
+.warning {
+    background: #fff7ed;
+    border-left: 4px solid #f97316;
+
+    padding: 14px;
+    margin-bottom: 20px;
+}
+
+.mobile-menu {
+    display: none;
+}
+
+@media (max-width: 800px) {
+
+    .sidebar {
+        display: none;
+    }
+
+    .mobile-menu {
+        display: block;
+        margin-bottom: 15px;
+    }
+
+    .content {
+        padding: 16px;
+    }
+
+    .page-header {
+        display: block;
+    }
+
+    .page-title {
+        margin-bottom: 15px;
+    }
+}
+
+</style>
+
 </head>
+
 
 <body>
 
-<div class="container">
 
-    <h1>アンケート管理システム</h1>
+<div class="app">
 
-    <div class="status">
+
+<header class="header">
+
+    <div class="header-title">
+        アンケート管理システム
+    </div>
+
+</header>
+
+
+<div class="layout">
+
+
+<!-- ========================================================
+     サイドメニュー
+     ======================================================== -->
+
+<aside class="sidebar">
+
+    <div class="sidebar-title">
+        管理者メニュー
+    </div>
+
+    <button
+        class="nav-button"
+        data-screen="admin"
+    >
+        管理者トップ
+    </button>
+
+    <button
+        class="nav-button"
+        data-screen="surveys"
+    >
+        アンケート管理
+    </button>
+
+    <button
+        class="nav-button"
+        data-screen="customers"
+    >
+        顧客管理
+    </button>
+
+    <button
+        class="nav-button"
+        data-screen="send-history"
+    >
+        送信履歴
+    </button>
+
+    <button
+        class="nav-button"
+        data-screen="summary"
+    >
+        集計
+    </button>
+
+    <button
+        class="nav-button"
+        data-screen="kintone"
+    >
+        kintone設定
+    </button>
+
+    <button
+        class="nav-button"
+        data-screen="smtp"
+    >
+        SMTP設定
+    </button>
+
+    <button
+        class="nav-button"
+        data-screen="settings"
+    >
+        システム設定
+    </button>
+
+</aside>
+
+
+<!-- ========================================================
+     メイン
+     ======================================================== -->
+
+<main class="content">
+
+<div
+    id="app"
+    class="container"
+>
+
+<?php
+
+
+/* ============================================================
+ * S01 管理者トップ
+ * ============================================================ */
+
+if ($screen === 'admin'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        管理者トップ
+    </h1>
+
+</div>
+
+
+<div class="grid">
+
+    <div class="menu-card">
+
+        <h3>アンケート管理</h3>
+
         <p>
-            画面：
-            <?= htmlspecialchars(
-                $screen,
-                ENT_QUOTES,
-                'UTF-8'
-            ) ?>
+            アンケートの作成・編集・公開・停止を行います。
         </p>
 
-        <p>
-            Session：
-            <?= htmlspecialchars(
-                session_name(),
-                ENT_QUOTES,
-                'UTF-8'
-            ) ?>
-        </p>
+        <button
+            class="button button-primary"
+            data-screen="surveys"
+        >
+            アンケート管理
+        </button>
+
+    </div>
+
+
+    <div class="menu-card">
+
+        <h3>顧客管理</h3>
 
         <p>
-            PHP：
-            <?= htmlspecialchars(
-                PHP_VERSION,
-                ENT_QUOTES,
-                'UTF-8'
-            ) ?>
+            顧客確認・同期・送信対象選択を行います。
         </p>
+
+        <button
+            class="button"
+            data-screen="customers"
+        >
+            顧客管理
+        </button>
+
+    </div>
+
+
+    <div class="menu-card">
+
+        <h3>送信履歴</h3>
+
+        <p>
+            メール送信結果と再送を確認します。
+        </p>
+
+        <button
+            class="button"
+            data-screen="send-history"
+        >
+            送信履歴
+        </button>
+
+    </div>
+
+
+    <div class="menu-card">
+
+        <h3>集計</h3>
+
+        <p>
+            アンケート回答結果を確認します。
+        </p>
+
+        <button
+            class="button"
+            data-screen="summary"
+        >
+            集計
+        </button>
+
+    </div>
+
+
+    <div class="menu-card">
+
+        <h3>kintone設定</h3>
+
+        <p>
+            接続設定・項目取得・顧客同期を管理します。
+        </p>
+
+        <button
+            class="button"
+            data-screen="kintone"
+        >
+            kintone設定
+        </button>
+
+    </div>
+
+
+    <div class="menu-card">
+
+        <h3>SMTP設定</h3>
+
+        <p>
+            メールサーバー設定とテストメールを管理します。
+        </p>
+
+        <button
+            class="button"
+            data-screen="smtp"
+        >
+            SMTP設定
+        </button>
+
     </div>
 
 </div>
 
+
+<?php
+
+
+/* ============================================================
+ * S02 アンケート一覧
+ * ============================================================ */
+
+elseif ($screen === 'surveys'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        アンケート一覧
+    </h1>
+
+    <div>
+
+        <button
+            class="button button-primary"
+            data-screen="survey"
+            data-survey-id="survey_new"
+        >
+            新規作成
+        </button>
+
+        <button
+            class="button"
+            data-screen="admin"
+        >
+            トップへ戻る
+        </button>
+
+    </div>
+
+</div>
+
+
+<div class="card">
+
+    <h2>アンケート</h2>
+
+    <div class="info">
+        現在は画面フロー確認用のサンプルデータを表示しています。
+    </div>
+
+
+    <table
+        style="width:100%; border-collapse:collapse;"
+    >
+
+        <thead>
+
+        <tr>
+
+            <th style="text-align:left;padding:10px;">
+                アンケート
+            </th>
+
+            <th style="text-align:left;padding:10px;">
+                状態
+            </th>
+
+            <th style="text-align:left;padding:10px;">
+                操作
+            </th>
+
+        </tr>
+
+        </thead>
+
+        <tbody>
+
+        <tr>
+
+            <td style="padding:10px;">
+                顧客満足度アンケート
+            </td>
+
+            <td style="padding:10px;">
+                <span class="status">
+                    draft
+                </span>
+            </td>
+
+            <td style="padding:10px;">
+
+                <button
+                    class="button"
+                    data-screen="survey"
+                    data-survey-id="survey_001"
+                >
+                    編集
+                </button>
+
+                <button
+                    class="button"
+                    data-screen="survey"
+                    data-survey-id="survey_001"
+                >
+                    複製
+                </button>
+
+                <button
+                    class="button"
+                    data-screen="summary"
+                    data-survey-id="survey_001"
+                >
+                    集計
+                </button>
+
+                <button
+                    class="button"
+                    data-screen="send"
+                    data-survey-id="survey_001"
+                >
+                    送信
+                </button>
+
+                <button
+                    class="button button-success"
+                    type="button"
+                    data-demo-action="publish"
+                >
+                    公開
+                </button>
+
+                <button
+                    class="button button-danger"
+                    type="button"
+                    data-demo-action="delete"
+                >
+                    削除
+                </button>
+
+            </td>
+
+        </tr>
+
+        </tbody>
+
+    </table>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * S03 アンケート編集
+ * ============================================================ */
+
+elseif ($screen === 'survey'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        アンケート編集
+    </h1>
+
+</div>
+
+
+<div class="info">
+
+    対象 surveyId：
+    <strong><?= h($surveyId) ?></strong>
+
+</div>
+
+
+<div class="card">
+
+    <div class="form-row">
+
+        <label>
+            アンケート名称
+        </label>
+
+        <input
+            type="text"
+            value="顧客満足度アンケート"
+        >
+
+    </div>
+
+
+    <div class="form-row">
+
+        <label>
+            説明
+        </label>
+
+        <textarea rows="4">アンケートへのご協力をお願いします。</textarea>
+
+    </div>
+
+
+    <div class="form-row">
+
+        <label>
+            状態
+        </label>
+
+        <select>
+
+            <option>draft</option>
+            <option>published</option>
+            <option>stopped</option>
+            <option>ended</option>
+
+        </select>
+
+    </div>
+
+
+    <button
+        class="button button-primary"
+        type="button"
+        data-demo-action="save"
+    >
+        保存
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="questions"
+        data-survey-id="<?= h($surveyId ?: 'survey_001') ?>"
+    >
+        質問管理
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="conditions"
+        data-survey-id="<?= h($surveyId ?: 'survey_001') ?>"
+    >
+        条件分岐設定
+    </button>
+
+
+    <button
+        class="button button-success"
+        type="button"
+        data-demo-action="publish"
+    >
+        公開
+    </button>
+
+
+    <button
+        class="button button-warning"
+        type="button"
+        data-demo-action="stop"
+    >
+        停止
+    </button>
+
+
+    <button
+        class="button"
+        type="button"
+        data-demo-action="resume"
+    >
+        再開
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="surveys"
+    >
+        戻る
+    </button>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * S04 質問管理
+ * ============================================================ */
+
+elseif ($screen === 'questions'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        質問管理
+    </h1>
+
+</div>
+
+
+<div class="info">
+
+    対象 surveyId：
+    <strong><?= h($surveyId) ?></strong>
+
+</div>
+
+
+<div class="card">
+
+    <button
+        class="button button-primary"
+        data-screen="question-edit"
+        data-survey-id="<?= h($surveyId) ?>"
+    >
+        質問追加
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="conditions"
+        data-survey-id="<?= h($surveyId) ?>"
+    >
+        条件分岐設定
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="survey"
+        data-survey-id="<?= h($surveyId) ?>"
+    >
+        戻る
+    </button>
+
+</div>
+
+
+<div class="card">
+
+    <h2>質問一覧</h2>
+
+    <div style="margin-bottom:15px;">
+
+        <strong>Q1.</strong>
+        サービスに満足していますか？
+
+        <button
+            class="button"
+            data-screen="question-edit"
+            data-survey-id="<?= h($surveyId) ?>"
+            data-question-id="question_001"
+        >
+            編集
+        </button>
+
+        <button
+            class="button button-danger"
+            type="button"
+            data-demo-action="delete"
+        >
+            削除
+        </button>
+
+    </div>
+
+
+    <div>
+
+        <strong>Q2.</strong>
+        改善点を教えてください。
+
+        <button
+            class="button"
+            data-screen="question-edit"
+            data-survey-id="<?= h($surveyId) ?>"
+            data-question-id="question_002"
+        >
+            編集
+        </button>
+
+        <button
+            class="button button-danger"
+            type="button"
+            data-demo-action="delete"
+        >
+            削除
+        </button>
+
+    </div>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * S05 質問編集
+ * ============================================================ */
+
+elseif ($screen === 'question-edit'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        質問編集
+    </h1>
+
+</div>
+
+
+<div class="info">
+
+    surveyId：
+    <strong><?= h($surveyId) ?></strong>
+
+    <br>
+
+    questionId：
+    <strong>
+        <?= h($questionId ?: '新規質問') ?>
+    </strong>
+
+</div>
+
+
+<div class="card">
+
+    <div class="form-row">
+
+        <label>
+            質問文
+        </label>
+
+        <textarea rows="4">質問内容を入力してください。</textarea>
+
+    </div>
+
+
+    <div class="form-row">
+
+        <label>
+            回答形式
+        </label>
+
+        <select>
+
+            <option>text</option>
+            <option>textarea</option>
+            <option>radio</option>
+            <option>checkbox</option>
+            <option>select</option>
+
+        </select>
+
+    </div>
+
+
+    <div class="form-row">
+
+        <label>
+            必須
+        </label>
+
+        <select>
+
+            <option>必須</option>
+            <option>任意</option>
+
+        </select>
+
+    </div>
+
+
+    <button
+        class="button button-primary"
+        type="button"
+        data-screen="questions"
+        data-survey-id="<?= h($surveyId) ?>"
+    >
+        保存
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="questions"
+        data-survey-id="<?= h($surveyId) ?>"
+    >
+        キャンセル
+    </button>
+
+
+    <?php if ($questionId !== ''): ?>
+
+    <button
+        class="button button-danger"
+        type="button"
+        data-demo-action="delete"
+    >
+        削除
+    </button>
+
+    <?php endif; ?>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * S06 条件分岐
+ * ============================================================ */
+
+elseif ($screen === 'conditions'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        条件分岐設定
+    </h1>
+
+</div>
+
+
+<div class="info">
+
+    対象 surveyId：
+    <strong><?= h($surveyId) ?></strong>
+
+</div>
+
+
+<div class="card">
+
+    <button
+        class="button button-primary"
+        type="button"
+        data-demo-action="add-condition"
+    >
+        条件追加
+    </button>
+
+
+    <button
+        class="button"
+        type="button"
+        data-demo-action="save"
+    >
+        保存
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="questions"
+        data-survey-id="<?= h($surveyId) ?>"
+    >
+        戻る
+    </button>
+
+</div>
+
+
+<div class="card">
+
+    <h2>条件一覧</h2>
+
+    <p>
+        Q1の回答が「はい」の場合 → Q2へ
+    </p>
+
+    <button
+        class="button"
+        type="button"
+        data-demo-action="edit"
+    >
+        編集
+    </button>
+
+    <button
+        class="button button-danger"
+        type="button"
+        data-demo-action="delete"
+    >
+        削除
+    </button>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * S07 顧客一覧
+ * ============================================================ */
+
+elseif ($screen === 'customers'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        顧客一覧
+    </h1>
+
+</div>
+
+
+<div class="card">
+
+    <div class="form-row">
+
+        <label>
+            顧客検索
+        </label>
+
+        <input
+            type="text"
+            placeholder="顧客名・メールアドレス"
+        >
+
+    </div>
+
+
+    <button
+        class="button"
+        type="button"
+        data-demo-action="search"
+    >
+        検索
+    </button>
+
+
+    <button
+        class="button button-primary"
+        type="button"
+        data-demo-action="sync"
+    >
+        kintone同期
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="send"
+        data-survey-id="survey_001"
+    >
+        送信対象選択
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="admin"
+    >
+        戻る
+    </button>
+
+</div>
+
+
+<div class="card">
+
+    <h2>顧客</h2>
+
+    <label>
+        <input type="checkbox">
+        株式会社サンプル
+        customer_001
+        sample@example.com
+    </label>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * S08 メール送信
+ * ============================================================ */
+
+elseif ($screen === 'send'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        メール送信
+    </h1>
+
+</div>
+
+
+<div class="info">
+
+    対象 surveyId：
+    <strong><?= h($surveyId) ?></strong>
+
+</div>
+
+
+<div class="card">
+
+    <div class="form-row">
+
+        <label>
+            メール件名
+        </label>
+
+        <input
+            type="text"
+            value="アンケートご協力のお願い"
+        >
+
+    </div>
+
+
+    <div class="form-row">
+
+        <label>
+            メール本文
+        </label>
+
+        <textarea rows="10">アンケートへのご協力をお願いします。</textarea>
+
+    </div>
+
+
+    <div class="form-row">
+
+        <strong>
+            送信対象：1名
+        </strong>
+    </div>
+
+
+    <button
+        class="button button-primary"
+        data-screen="send-confirm"
+        data-survey-id="<?= h($surveyId) ?>"
+    >
+        送信確認
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="customers"
+    >
+        戻る
+    </button>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * S09 送信確認
+ * ============================================================ */
+
+elseif ($screen === 'send-confirm'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        送信確認
+    </h1>
+
+</div>
+
+
+<div class="card">
+
+    <p>
+        対象アンケート：
+        <?= h($surveyId) ?>
+    </p>
+
+    <p>
+        送信対象人数：1名
+    </p>
+
+    <p>
+        件名：アンケートご協力のお願い
+    </p>
+
+    <p>
+        本文：アンケートへのご協力をお願いします。
+    </p>
+
+
+    <button
+        class="button button-primary"
+        data-screen="send"
+        data-survey-id="<?= h($surveyId) ?>"
+        data-demo-action="send"
+    >
+        送信実行
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="send"
+        data-survey-id="<?= h($surveyId) ?>"
+    >
+        修正
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="send"
+        data-survey-id="<?= h($surveyId) ?>"
+    >
+        キャンセル
+    </button>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * S10 送信履歴
+ * ============================================================ */
+
+elseif ($screen === 'send-history'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        送信履歴
+    </h1>
+
+</div>
+
+
+<div class="card">
+
+    <table style="width:100%;">
+
+        <tr>
+
+            <th>送信日時</th>
+            <th>surveyId</th>
+            <th>customerId</th>
+            <th>結果</th>
+            <th>操作</th>
+
+        </tr>
+
+        <tr>
+
+            <td>2026-08-26 10:00</td>
+
+            <td>survey_001</td>
+
+            <td>customer_001</td>
+
+            <td>
+                <span class="status">
+                    成功
+                </span>
+            </td>
+
+            <td>
+
+                <button
+                    class="button"
+                    type="button"
+                    data-demo-action="resend"
+                >
+                    再送
+                </button>
+
+                <button
+                    class="button"
+                    type="button"
+                    data-demo-action="detail"
+                >
+                    詳細
+                </button>
+
+            </td>
+
+        </tr>
+
+    </table>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * S11 集計
+ * ============================================================ */
+
+elseif ($screen === 'summary'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        集計
+    </h1>
+
+</div>
+
+
+<div class="info">
+
+    対象 surveyId：
+    <strong><?= h($surveyId) ?></strong>
+
+</div>
+
+
+<div class="grid">
+
+    <div class="menu-card">
+
+        <h3>送信対象者数</h3>
+
+        <strong style="font-size:30px;">
+            100
+        </strong>
+
+    </div>
+
+
+    <div class="menu-card">
+
+        <h3>回答数</h3>
+
+        <strong style="font-size:30px;">
+            72
+        </strong>
+
+    </div>
+
+
+    <div class="menu-card">
+
+        <h3>回答率</h3>
+
+        <strong style="font-size:30px;">
+            72%
+        </strong>
+
+    </div>
+
+</div>
+
+
+<div class="card">
+
+    <button
+        class="button"
+        type="button"
+        data-demo-action="csv"
+    >
+        CSV出力
+    </button>
+
+
+    <button
+        class="button"
+        type="button"
+        data-demo-action="pdf"
+    >
+        PDF出力
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="surveys"
+    >
+        戻る
+    </button>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * S12 kintone設定
+ * ============================================================ */
+
+elseif ($screen === 'kintone'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        kintone設定
+    </h1>
+
+</div>
+
+
+<div class="card">
+
+    <div class="form-row">
+
+        <label>subdomain</label>
+
+        <input
+            type="text"
+            placeholder="xxxx.cybozu.com"
+        >
+
+    </div>
+
+
+    <div class="form-row">
+
+        <label>appId</label>
+
+        <input type="text">
+    </div>
+
+
+    <div class="form-row">
+
+        <label>loginName</label>
+
+        <input type="text">
+    </div>
+
+
+    <div class="form-row">
+
+        <label>password</label>
+
+        <input
+            type="password"
+        >
+    </div>
+
+
+    <div class="form-row">
+
+        <label>sslVerify</label>
+
+        <select>
+
+            <option value="false">
+                false
+            </option>
+
+            <option value="true">
+                true
+            </option>
+
+        </select>
+
+    </div>
+
+
+    <div class="form-row">
+
+        <label>proxy</label>
+
+        <input
+            type="text"
+            placeholder="host:port"
+        >
+
+    </div>
+
+
+    <button
+        class="button button-primary"
+        type="button"
+        data-demo-action="save"
+    >
+        保存
+    </button>
+
+
+    <button
+        class="button"
+        type="button"
+        data-demo-action="test-kintone"
+    >
+        接続テスト
+    </button>
+
+
+    <button
+        class="button"
+        type="button"
+        data-demo-action="fields"
+    >
+        項目一覧取得
+    </button>
+
+
+    <button
+        class="button"
+        type="button"
+        data-demo-action="sync"
+    >
+        顧客同期
+    </button>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * S13 SMTP設定
+ * ============================================================ */
+
+elseif ($screen === 'smtp'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        SMTP設定
+    </h1>
+
+</div>
+
+
+<div class="card">
+
+<?php
+
+$smtpFields = [
+    'smtpHost',
+    'smtpPort',
+    'encryption',
+    'auth',
+    'username',
+    'password',
+    'fromAddress',
+    'fromName',
+    'replyTo',
+];
+
+foreach ($smtpFields as $field):
+
+?>
+
+<div class="form-row">
+
+    <label>
+        <?= h($field) ?>
+    </label>
+
+    <input
+        type="<?= $field === 'password'
+            ? 'password'
+            : 'text' ?>"
+    >
+
+</div>
+
+<?php endforeach; ?>
+
+
+<button
+    class="button button-primary"
+    type="button"
+    data-demo-action="save"
+>
+    保存
+</button>
+
+
+<button
+    class="button"
+    type="button"
+    data-demo-action="smtp-test"
+>
+    テストメール
+</button>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * S14 システム設定
+ * ============================================================ */
+
+elseif ($screen === 'settings'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        システム設定
+    </h1>
+
+</div>
+
+
+<div class="card">
+
+    <div class="form-row">
+
+        <label>
+            システム名
+        </label>
+
+        <input
+            type="text"
+            value="アンケート管理システム"
+        >
+
+    </div>
+
+
+    <button
+        class="button button-primary"
+        type="button"
+        data-demo-action="save"
+    >
+        保存
+    </button>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * A01 回答開始
+ * ============================================================ */
+
+elseif ($screen === 'start'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        アンケート回答開始
+    </h1>
+
+</div>
+
+
+<div class="card">
+
+    <p>
+        アンケートへの回答を開始します。
+    </p>
+
+    <p>
+        surveyId：
+        <?= h($surveyId) ?>
+    </p>
+
+    <p>
+        customerId：
+        <?= h($customerId) ?>
+    </p>
+
+
+    <button
+        class="button button-primary"
+        data-screen="answer"
+        data-survey-id="<?= h($surveyId) ?>"
+        data-customer-id="<?= h($customerId) ?>"
+    >
+        回答開始
+    </button>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * A02 回答
+ * ============================================================ */
+
+elseif ($screen === 'answer'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        アンケート回答
+    </h1>
+
+</div>
+
+
+<div class="card">
+
+    <div class="info">
+
+        surveyId：
+        <?= h($surveyId) ?>
+
+        <br>
+
+        customerId：
+        <?= h($customerId) ?>
+
+    </div>
+
+
+    <div class="form-row">
+
+        <label>
+            Q1. サービスに満足していますか？
+        </label>
+
+        <select>
+
+            <option>選択してください</option>
+            <option>はい</option>
+            <option>いいえ</option>
+
+        </select>
+
+    </div>
+
+
+    <button
+        class="button"
+        data-screen="answer"
+        data-survey-id="<?= h($surveyId) ?>"
+        data-customer-id="<?= h($customerId) ?>"
+    >
+        次へ
+    </button>
+
+
+    <button
+        class="button"
+        data-screen="answer"
+        data-survey-id="<?= h($surveyId) ?>"
+        data-customer-id="<?= h($customerId) ?>"
+    >
+        戻る
+    </button>
+
+
+    <button
+        class="button button-primary"
+        data-screen="confirm"
+        data-survey-id="<?= h($surveyId) ?>"
+        data-customer-id="<?= h($customerId) ?>"
+    >
+        確認
+    </button>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * A03 回答確認
+ * ============================================================ */
+
+elseif ($screen === 'confirm'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        回答内容確認
+    </h1>
+
+</div>
+
+
+<div class="card">
+
+    <p>
+        Q1：
+        はい
+    </p>
+
+
+    <button
+        class="button"
+        data-screen="answer"
+        data-survey-id="<?= h($surveyId) ?>"
+        data-customer-id="<?= h($customerId) ?>"
+    >
+        修正
+    </button>
+
+
+    <button
+        class="button button-primary"
+        data-screen="complete"
+        data-survey-id="<?= h($surveyId) ?>"
+        data-customer-id="<?= h($customerId) ?>"
+        data-demo-action="submit-answer"
+    >
+        送信
+    </button>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * A04 回答完了
+ * ============================================================ */
+
+elseif ($screen === 'complete'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        回答完了
+    </h1>
+
+</div>
+
+
+<div class="card">
+
+    <div class="info">
+
+        回答を正常に受け付けました。
+
+    </div>
+
+    <p>
+        ご回答ありがとうございました。
+    </p>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * A05 回答済み
+ * ============================================================ */
+
+elseif ($screen === 'already-answered'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        回答済み
+    </h1>
+
+</div>
+
+
+<div class="card">
+
+    <div class="warning">
+
+        このアンケートはすでに回答済みです。
+
+    </div>
+
+</div>
+
+
+<?php
+
+
+/* ============================================================
+ * A06 回答不可
+ * ============================================================ */
+
+elseif ($screen === 'unavailable'):
+
+?>
+
+<div class="page-header">
+
+    <h1 class="page-title">
+        回答不可
+    </h1>
+
+</div>
+
+
+<div class="card">
+
+    <div class="warning">
+
+        現在、このアンケートには回答できません。
+
+    </div>
+
+</div>
+
+
+<?php endif; ?>
+
+
+</div>
+
+</main>
+
+</div>
+
+</div>
+
+
+<script>
+
+/* ============================================================
+ * JavaScript
+ * URLを画面状態の正規情報として扱う
+ * ============================================================ */
+
+(function () {
+
+    'use strict';
+
+
+    /* --------------------------------------------------------
+     * 現在のアプリケーション入口
+     * -------------------------------------------------------- */
+
+    const APP_ENTRY =
+        window.location.pathname;
+
+
+    /* --------------------------------------------------------
+     * URL生成
+     * -------------------------------------------------------- */
+
+    function buildUrl(screen, params = {}) {
+
+        const url =
+            new URL(
+                window.location.href
+            );
+
+        url.search = '';
+
+        url.searchParams.set(
+            'screen',
+            screen
+        );
+
+
+        Object.keys(params).forEach(function (key) {
+
+            const value = params[key];
+
+            if (
+                value !== undefined
+                && value !== null
+                && value !== ''
+            ) {
+
+                url.searchParams.set(
+                    key,
+                    value
+                );
+            }
+
+        });
+
+
+        return (
+            url.pathname
+            + url.search
+        );
+    }
+
+
+    /* --------------------------------------------------------
+     * 画面遷移
+     *
+     * 業務上別画面へ移動する場合はpushState
+     * -------------------------------------------------------- */
+
+    function navigate(
+        screen,
+        params = {}
+    ) {
+
+        const target =
+            buildUrl(
+                screen,
+                params
+            );
+
+
+        window.history.pushState(
+            {
+                screen: screen,
+                params: params
+            },
+            '',
+            target
+        );
+
+
+        /*
+         * URLを変更しただけではPHP画面は再描画されない。
+         *
+         * 今回は安全側として、
+         * pushState後にURLへ再アクセスする。
+         *
+         * 次段階ではrenderScreen()へ置き換える。
+         */
+        window.location.href =
+            target;
+    }
+
+
+    /* --------------------------------------------------------
+     * data-screenボタン
+     * -------------------------------------------------------- */
+
+    document.addEventListener(
+        'click',
+        function (event) {
+
+            const target =
+                event.target.closest(
+                    '[data-screen]'
+                );
+
+
+            if (!target) {
+                return;
+            }
+
+
+            event.preventDefault();
+
+
+            const screen =
+                target.dataset.screen;
+
+
+            const params = {};
+
+
+            if (target.dataset.surveyId) {
+
+                params.surveyId =
+                    target.dataset.surveyId;
+            }
+
+
+            if (target.dataset.customerId) {
+
+                params.customerId =
+                    target.dataset.customerId;
+            }
+
+
+            if (target.dataset.questionId) {
+
+                params.questionId =
+                    target.dataset.questionId;
+            }
+
+
+            navigate(
+                screen,
+                params
+            );
+
+        }
+    );
+
+
+    /* --------------------------------------------------------
+     * デモ操作
+     *
+     * 現段階では業務API未実装。
+     * 勝手に「実装済み」と扱わない。
+     * -------------------------------------------------------- */
+
+    document.addEventListener(
+        'click',
+        function (event) {
+
+            const target =
+                event.target.closest(
+                    '[data-demo-action]'
+                );
+
+
+            if (!target) {
+                return;
+            }
+
+
+            event.preventDefault();
+
+
+            const action =
+                target.dataset.demoAction;
+
+
+            alert(
+                'この操作の業務APIは次段階で実装します。\n\n'
+                + 'action: '
+                + action
+            );
+
+        }
+    );
+
+
+    /* --------------------------------------------------------
+     * popstate
+     * -------------------------------------------------------- */
+
+    window.addEventListener(
+        'popstate',
+        function () {
+
+            /*
+             * JavaScript内部状態を正としない。
+             *
+             * 現在URLから画面を再構築する。
+             */
+            window.location.reload();
+
+        }
+    );
+
+
+})();
+
+</script>
+
+
 </body>
+
 </html>
+
 <?php
 
 ob_end_flush();
