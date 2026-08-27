@@ -1020,7 +1020,7 @@ X-Cybozu-Authorizationおよびkintoneパスワードを
 
 kintone REST APIは、
 
-https://{subdomain}.cybozu.com/k/v1/app.json
+https://{subdomain}.cybozu.com/k/v1/app.json?id=123
 
 ## 9.2 SMTP
 
