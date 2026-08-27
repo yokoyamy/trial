@@ -1198,6 +1198,7 @@ index.php 1ファイルに以下を含める。
 UI上の挙動およびデザインは確定したモックhttps://github.com/yokoyamy/trial/blob/main/.poc/draft/%E3%82%A2%E3%83%B3%E3%82%B1%E3%83%BC%E3%83%88%E3%82%A2%E3%83%97%E3%83%AA/%E3%83%A2%E3%83%83%E3%82%AF
 を維持する。
 
+結果はコードブロックに全文表示する。
 
 
 
