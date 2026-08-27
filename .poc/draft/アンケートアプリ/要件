@@ -1,27 +1,25 @@
-# アンケート管理システム 要件定義書（実装版・簡約）
+# アンケートアプリ 要件定義書（実装版）
 
-## 1. 目的・対象
+============================================================
+1. 目的・対象
+============================================================
 
 Web上でアンケートの作成・公開・送信・回答・集計を一元管理する。
+
 対象者は「管理者」と「回答者」に分離する。
 
 管理者：
 - アンケート運用担当者
-- システム管理者
 
 回答者：
 - 個別URLまたは公開URLからアンケートへ回答する利用者
-
-本書では、業務上必要な仕様と、それを実現するための実装仕様を分離する。
 
 
 ============================================================
 2. 業務要件
 ============================================================
 
-## 2.1 業務要件 ― 操作者の使い勝手
-
-### アンケート管理
+## 2.1 アンケート管理
 
 アンケート一覧を管理業務の起点とする。
 
@@ -59,7 +57,7 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 一覧上では状態変更を行わない。
 
 
-### アンケート作成・編集
+## 2.2 アンケート作成・編集
 
 画面上部に以下を配置する。
 
@@ -74,7 +72,7 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 - 質問番号の採番方式
 
 保存：
-- 「保存して一覧へ」のみ
+- 保存操作は「保存して一覧へ」のみとする
 - 新規作成時は下書き
 - 既存編集時は現在状態を維持
 - 保存後は一覧へ戻る
@@ -91,7 +89,7 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 - 終了状態では状態変更不可
 
 
-### アンケート状態
+## 2.3 アンケート状態
 
 状態は以下の4種類。
 
@@ -110,7 +108,7 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 終了状態では状態変更不可。
 
 
-### 質問・グループ
+## 2.4 質問・グループ
 
 グループ：
 - タイトル編集
@@ -128,15 +126,16 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 - ドラッグ＆ドロップによる並び替え
 - グループ間移動
 
-回答形式は3種類だけとする。
+回答形式は以下の3種類だけとする。
 
 - 単一選択
 - 複数選択
 - 自由記述
 
-「1行テキスト」「複数行テキスト」は設けない。
+「1行テキスト」「複数行テキスト」は個別の回答形式として設けない。
 
 「質問を追加」は各グループ末尾のみ。
+
 「グループを追加」はグループ一覧末尾のみ。
 
 質問番号は自動採番し、手動編集させない。
@@ -145,10 +144,19 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 - アンケート全体で通番：Q1、Q2、Q3...
 - グループ毎に採番：Q1-1、Q1-2、Q2-1...
 
-質問・グループの追加、削除、並び替え、移動、採番方式変更時に再計算する。
+以下の操作時に質問番号を再計算する。
+
+- 質問追加
+- 質問削除
+- 質問並び替え
+- 質問のグループ間移動
+- グループ追加
+- グループ削除
+- グループ並び替え
+- 採番方式変更
 
 
-### 条件分岐・プレビュー
+## 2.5 条件分岐・プレビュー
 
 単一選択質問について、選択肢ごとに次に表示する質問を指定できる。
 
@@ -165,7 +173,7 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 プレビューから実際のメール送信等は行わない。
 
 
-### 回答者
+## 2.6 回答者
 
 回答者画面は管理者画面から完全に分離する。
 
@@ -177,7 +185,14 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
   ↓
 回答完了
 
-回答者画面には管理者向けメニュー・一覧・設定・集計・送信等を表示しない。
+回答者画面には以下を表示しない。
+
+- 管理者向けメニュー
+- アンケート一覧
+- 設定
+- 集計
+- 送信
+- その他管理者向け機能
 
 回答形式：
 - 単一選択
@@ -189,10 +204,11 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 条件分岐に応じて表示質問を変更する。
 
 回答確認画面では回答を修正できる。
+
 送信確認後、回答完了画面へ進む。
 
 
-### 顧客選択・メール送信
+## 2.7 顧客選択・メール送信
 
 送信画面は必ず対象アンケートを特定した状態で表示する。
 
@@ -216,14 +232,16 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 送信後は別画面へ遷移せず、同画面に結果を表示する。
 
 送信履歴も同画面内で表示する。
+
 「送信履歴」専用画面は存在しない。
 
 
-### 回答集計・分析
+## 2.8 回答集計・分析
 
 集計画面は必ず対象アンケートを特定した状態で表示する。
 
 表示：
+
 - 対象アンケート
 - 送信対象者数
 - 回答数
@@ -234,23 +252,52 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 - 個別回答
 
 出力：
+
 - CSV
 - PDF
 
 回答0件の場合：
+
 「現在、回答データはありません」
 
+と表示する。
 
-### kintone
+
+## 2.9 kintone連携
+
+kintoneを顧客情報の取得元として利用する。
 
 設定項目：
+
 - サブドメイン
 - 顧客管理アプリID
 - ログイン名
 - パスワード
-- SSL検証設定
+- Proxyサーバ
+- SSL証明書検証設定
 
 ログイン情報にメールアドレス入力欄は設けない。
+
+認証方式：
+
+- ログイン名・パスワードによるパスワード認証を使用する
+- kintone REST APIへの認証にはX-Cybozu-Authorizationヘッダーを使用する
+- X-Cybozu-Authorization等の認証情報をブラウザへ公開しない
+- 認証情報をログへ出力しない
+
+Proxyサーバ：
+
+- 「host:port」形式で入力する
+- サーバとポート番号は別々の入力欄にしない
+- 未入力の場合はProxyを使用せず直接接続する
+- 入力されたhost:portはサーバ側で検証する
+
+例：
+
+proxy.example.local:8080
+192.168.1.100:3128
+
+Proxyの具体的な接続方式は実装環境に合わせて実装する。
 
 以下は独立操作とする。
 
@@ -259,13 +306,13 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 3. 項目一覧を再取得
 4. 顧客情報を同期
 
+接続テストは実際のkintoneへ接続して行う。
+
 接続テスト結果：
 - 接続成功
 - 接続失敗
 
-住所マッピングは複数選択可能なチェックボックスとする。
-
-顧客情報には以下を扱う。
+顧客情報の取得対象：
 
 - 組織名
 - 氏名
@@ -274,12 +321,15 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 - 電話番号
 - 住所
 
+住所マッピングは複数選択可能なチェックボックスとする。
+
 未登録回答者には「未登録」を表示する。
 
 
-### メールサーバ
+## 2.10 メールサーバ
 
 設定：
+
 - SMTPサーバ
 - SMTPポート
 - 暗号化方式（SSL / TLS / なし）
@@ -291,20 +341,24 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 - 返信先メールアドレス
 
 接続状態：
+
 - 未設定
 - 接続確認済み
 - 接続できません
 
 テストメール送信を行える。
 
+メール送信は実際のSMTPサーバへ接続して行う。
+
 
 ============================================================
 3. 業務要件 ― 全体整合性
 ============================================================
 
-### 管理者と回答者の分離
+## 3.1 管理者と回答者の分離
 
 管理者画面：
+
 - アンケート一覧
 - 作成・編集
 - プレビュー
@@ -314,6 +368,7 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 - メールサーバ設定
 
 回答者画面：
+
 - アンケート回答
 - 回答確認
 - 回答完了
@@ -321,7 +376,7 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 回答者から管理者画面への遷移は存在しない。
 
 
-### 対象アンケートの固定
+## 3.2 対象アンケートの固定
 
 一覧上の「集計」「送信」は行単位の操作とする。
 
@@ -338,12 +393,14 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 対象アンケート未特定では両画面を表示しない。
 
 
-### 状態整合性
+## 3.3 状態整合性
 
 状態は4種類だが、手動状態変更対象は下書き・公開中・停止のみ。
 
 終了は、
+
 「公開中」かつ「終了日時経過」
+
 の場合だけ自動設定する。
 
 したがって、
@@ -357,12 +414,15 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 終了状態から他状態への変更は禁止。
 
 
-### 送信履歴の整合性
+## 3.4 送信履歴の整合性
 
 送信履歴は業務上必要だが、独立画面とはしない。
 
 送信画面内で、
-「顧客選択・送信」と「送信履歴」を切り替えて利用する。
+
+「顧客選択・送信」と「送信履歴」
+
+を切り替えて利用する。
 
 送信後も同じ画面に留まる。
 
@@ -396,8 +456,8 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
    └─ 削除 → 確認 → 削除
 
 [一覧]
-  ├─ kintone連携設定
-  └─ メールサーバ設定
+   ├─ kintone連携設定
+   └─ メールサーバ設定
 
 
 【回答者】
@@ -417,9 +477,7 @@ Web上でアンケートの作成・公開・送信・回答・集計を一元�
 5. 実装要件
 ============================================================
 
-## 5.1 業務要件を実現するための実装
-
-### 画面制御
+## 5.1 画面制御
 
 index.phpを単一エントリーポイントとする。
 
@@ -443,27 +501,25 @@ index.php?screen=complete&id=survey-001
 集計・送信ではidを必須とし、対象アンケートを固定する。
 
 
-### データ保持
+## 5.2 データ保持
 
 データベースは使用しない。
 
-モック段階ではJavaScriptの状態管理を使用して、
-以下をブラウザ上で再現する。
+アンケート、グループ、質問、回答、顧客、
+送信履歴、各種設定等の必要なデータは
+サーバー側に永続化する。
 
-- アンケート
-- グループ
-- 質問
-- 回答
-- 顧客
-- 送信履歴
-- kintone接続状態
-- メール接続状態
+ブラウザのlocalStorageのみを主要データの保存先として
+使用してはならない。
 
-ページ再読み込み後の永続化が必要なモックデータについては
-localStorageを使用してよい。
+保存データはWebブラウザから直接アクセスできない場所に配置する。
+
+サーバー側でデータを読み書きする。
+
+ページ再読み込み後も保存済みデータを利用できる。
 
 
-### 状態自動判定
+## 5.3 状態自動判定
 
 画面表示時に以下を実行する。
 
@@ -479,7 +535,7 @@ draft / stopped は自動終了させない。
 endedの場合は状態変更UIを無効化する。
 
 
-### 対象アンケート引き継ぎ
+## 5.4 対象アンケート引き継ぎ
 
 一覧から集計・送信へ遷移するとき、
 対象アンケートIDをクエリー文字列に含める。
@@ -496,7 +552,7 @@ IDが存在しない場合は集計・送信画面を表示せず、
 一覧へ戻す。
 
 
-### 確認ダイアログ
+## 5.5 確認ダイアログ
 
 以下は共通確認ダイアログで実装する。
 
@@ -515,7 +571,7 @@ IDが存在しない場合は集計・送信画面を表示せず、
 終了への自動遷移には確認ダイアログを表示しない。
 
 
-### ドラッグ＆ドロップ
+## 5.6 ドラッグ＆ドロップ
 
 HTML5 Drag and Drop等を使用して以下を実現する。
 
@@ -526,29 +582,126 @@ HTML5 Drag and Drop等を使用して以下を実現する。
 変更後に質問番号を再計算する。
 
 
-### 出力
+## 5.7 出力
 
-モックでは実データによるPDF生成を必須としない。
+CSV：
+- 実データをCSVとして出力する。
 
-CSV / PDFボタン押下時に、
-「出力しました」等の操作結果を表示すればよい。
+PDF：
+- 実データをPDFとして出力する。
+
+出力失敗時はユーザーにエラーを表示する。
 
 
-### 外部接続モック
+## 5.8 外部サービス接続
 
-モックでは実際のkintone接続・メール送信を行わない。
+kintoneおよびSMTPは実際のサービスへ接続する。
 
-以下を画面上で再現する。
+モックによる接続成功・失敗の再現は行わない。
 
-- kintone接続成功 / 失敗
-- kintone項目取得
-- 顧客同期
-- SMTP接続成功 / 失敗
-- メール送信成功 / 失敗
+外部サービスとの通信には適切なタイムアウトを設定する。
+
+外部サービスの通信エラーが発生した場合、
+原因を可能な範囲でユーザーへ通知する。
+
+外部サービスの認証情報等の機密情報を
+画面やログに不用意に出力しない。
 
 
 ============================================================
-6. 実装要件 ― 実行環境による制約
+6. 実装要件 ― 共通仕様
+============================================================
+
+## 6.1 入力値
+
+ユーザーから入力された値はサーバー側でも検証する。
+
+以下について適切に検証する。
+
+- 必須項目
+- 文字数
+- 形式
+- 数値範囲
+- 日時
+- メールアドレス
+- Proxyのhost:port
+- その他各設定値
+
+画面側のJavaScriptによるチェックだけに依存しない。
+
+HTMLへ出力する値は適切にエスケープする。
+
+
+## 6.2 エラー処理
+
+処理に失敗した場合は、ユーザーに処理が失敗したことと
+可能な範囲で原因を表示する。
+
+以下を区別して扱う。
+
+- 入力エラー
+- 設定エラー
+- データエラー
+- 通信エラー
+- 認証エラー
+- タイムアウト
+- 外部サービスエラー
+- システムエラー
+
+システム内部のエラー情報や機密情報を
+そのまま画面に表示しない。
+
+
+## 6.3 セキュリティ
+
+管理画面には認証を設ける。
+
+管理画面の状態変更・データ更新等のPOST処理には
+CSRF対策を行う。
+
+CSRFトークンはサーバー側のセッションに保持し、
+POST時に検証する。
+
+CSRFトークンには推測困難なランダム値を使用する。
+
+CSRFトークンをURLクエリー文字列に含めない。
+
+管理者ログイン成功時にはセッションIDを再生成する。
+
+パスワード等の機密情報をURLや画面上に平文で表示しない。
+
+認証情報等の機密情報をログへ不用意に出力しない。
+
+サーバー上の設定ファイルや保存データへ、
+Webブラウザから直接アクセスできないようにする。
+
+HTML出力時は適切なエスケープを行う。
+
+ユーザーから受け取った入力値を信頼して処理しない。
+
+
+## 6.4 データ保存
+
+サーバー側に保存するデータは、
+Web公開ディレクトリ外または直接アクセスできない場所に保存する。
+
+保存処理では同時更新によるデータ破損を防止する。
+
+書き込み途中のファイルが利用されないよう、
+必要に応じて一時ファイル等を使用する。
+
+
+## 6.5 外部通信
+
+外部サービスとの通信には適切な接続・読み取りタイムアウトを設定する。
+
+通信失敗時に無期限に処理を待機してはならない。
+
+外部サービスの認証情報はURLクエリー文字列に含めない。
+
+
+============================================================
+7. 実装要件 ― 実行環境による制約
 ============================================================
 
 実行環境：
@@ -558,7 +711,7 @@ CSV / PDFボタン押下時に、
 - データベースなし
 - PHP cURLなし
 
-### Webアクセス
+## 7.1 Webアクセス
 
 Apacheの物理パスによる画面分割を行わない。
 
@@ -568,53 +721,78 @@ $_GET['screen']等で画面を切り替える。
 ApacheのRewrite設定を前提としない。
 
 
-### PHP
+## 7.2 PHP
 
-PHPは画面生成・必要最小限のサーバー処理に使用する。
+PHPは画面生成およびサーバー側処理に使用する。
 
 外部HTTP通信にPHP cURLを使用しない。
 
-将来kintone接続を実装する場合は、
-現在のPHP環境で利用可能なHTTP通信方式を別途採用する。
+外部通信は現在のPHP環境で利用可能な
+標準機能等を使用して実装する。
 
 
-### kintone接続
+## 7.3 kintone接続
 
-本番実装時の認証方式は以下とする。
+kintoneの認証方式は以下とする。
 
 - ログイン名
 - パスワード
 
 APIトークン認証は使用しない。
 
-kintone接続はProxy経由とする。
+kintone REST APIへの認証には
+X-Cybozu-Authorizationヘッダーを使用する。
 
-Proxy接続時のSSL証明書検証は、
-環境仕様としてデフォルト無効とする。
-ただし本番運用ではセキュリティ上、検証有効化を推奨する。
+X-Cybozu-Authorizationの生成・設定は
+サーバー側で行う。
 
-Proxyホスト・ポート等の具体値は環境設定として外部化する。
+X-Cybozu-Authorizationをブラウザ側JavaScriptへ渡さない。
+
+X-Cybozu-Authorizationおよびkintoneパスワードを
+ログやエラー画面へ出力しない。
+
+kintoneへの接続はProxy設定に対応する。
+
+Proxy設定：
+
+- host:port形式
+- サーバとポート番号を1つの入力欄で設定
+- 未入力時は直接接続
+
+Proxyの具体的な接続情報はアプリケーション設定として保持する。
+
+SSL証明書検証を設定できる。
+
+本番運用ではSSL証明書検証を有効にすることを推奨する。
 
 
-### メール
+## 7.4 メール
 
 PHP mail()は使用しない。
 
-本番ではSMTP接続によってメール送信する。
+メール送信はSMTP接続によって行う。
 
-SMTPサーバ、ポート、暗号化、認証情報等は設定値として扱う。
-
-
-### 認証
-
-モックでは認証処理を実装しない。
-
-本番実装時には管理者認証と回答者アクセスを分離する。
+SMTPサーバ、ポート、暗号化、
+認証情報等は設定値として扱う。
 
 
-### 1ファイル構成
+## 7.5 認証
 
-モックの実装対象はindex.php 1ファイル。
+管理者画面と回答者アクセスを分離する。
+
+管理者画面には管理者認証を必要とする。
+
+管理者ログイン成功時にセッションIDを再生成する。
+
+回答者はアンケート回答に必要なURLから
+回答画面へアクセスできる。
+
+回答者画面から管理者画面へ遷移できない。
+
+
+## 7.6 1ファイル構成
+
+実装対象はindex.php 1ファイルとする。
 
 index.php内に以下を含める。
 
@@ -625,18 +803,23 @@ index.php内に以下を含める。
 
 外部CSS・JSファイルを必須としない。
 
+データ保存領域や設定ファイル等は
+index.phpとは別に配置できる。
+
 
 ============================================================
-7. レスポンシブ
+8. レスポンシブ
 ============================================================
 
 管理者：
+
 - PCを主対象
 - タブレット対応
 - スマートフォン対応
 - 一覧は横スクロール可能
 
 回答者：
+
 - スマートフォンを最優先
 - 入力欄を大きくする
 - 選択肢をタップしやすくする
@@ -644,7 +827,7 @@ index.php内に以下を含める。
 
 
 ============================================================
-8. 画面構成
+9. 画面構成
 ============================================================
 
 1. アンケート一覧
@@ -658,11 +841,11 @@ index.php内に以下を含める。
 9. 回答確認
 10. 回答完了
 
-「送信履歴」は画面11として作らない。
+「送信履歴」は独立した画面として作らない。
 
 
 ============================================================
-9. 実装禁止事項
+10. 実装禁止事項
 ============================================================
 
 - DB依存
@@ -686,859 +869,85 @@ index.php内に以下を含める。
 - 集計画面内のアンケート選択
 - 送信画面内のアンケート選択
 - 接続テストと顧客同期の一体化
+- ブラウザlocalStorageのみを主要データ保存先とする実装
+- 機密情報をURLクエリー文字列に保存する実装
+- CSRFトークンをURLクエリー文字列に含める実装
+- CSRFトークンの検証を行わないPOST処理
+- X-Cybozu-Authorizationをブラウザ側へ公開する実装
+- X-Cybozu-Authorizationをログへ出力する実装
 
 
 ============================================================
-10. 現行モックのデザイン維持用CSS
+11. 現行モックのデザイン維持
 ============================================================
 
-以下をindex.phpの<style>に組み込む。
-現行モックの基本色、余白、カード、ボタン、一覧、編集画面、
-プレビュー、送信、集計、設定、回答者画面のデザインを維持する。
+現行モックの基本デザインを維持する。
 
-:root{
-  --primary:#2563eb;
-  --primary-dark:#1d4ed8;
-  --success:#16a34a;
-  --warning:#d97706;
-  --danger:#dc2626;
-  --gray:#64748b;
-  --gray-light:#f1f5f9;
-  --border:#dbe2ea;
-  --text:#1e293b;
-  --white:#fff;
-  --shadow:0 4px 18px rgba(15,23,42,.08);
-}
+以下の画面で共通デザインを使用する。
 
-*{box-sizing:border-box}
+- アンケート一覧
+- アンケート作成・編集
+- プレビュー
+- 顧客選択・メール送信
+- 集計
+- kintone設定
+- メール設定
+- 回答者画面
 
-html,body{
-  margin:0;
-  padding:0;
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",
-    "Noto Sans JP","Hiragino Kaku Gothic ProN",Meiryo,sans-serif;
-  color:var(--text);
-  background:#f8fafc;
-}
+基本色：
 
-button,input,textarea,select{font:inherit}
-button{cursor:pointer}
-.hidden{display:none!important}
+--primary:#2563eb;
+--primary-dark:#1d4ed8;
+--success:#16a34a;
+--warning:#d97706;
+--danger:#dc2626;
+--gray:#64748b;
+--gray-light:#f1f5f9;
+--border:#dbe2ea;
+--text:#1e293b;
+--white:#fff;
+--shadow:0 4px 18px rgba(15,23,42,.08);
 
-/* 管理者ヘッダー */
-.admin-header{
-  position:sticky;
-  top:0;
-  z-index:50;
-  min-height:64px;
-  background:#0f172a;
-  color:#fff;
-  display:flex;
-  align-items:center;
-  padding:0 24px;
-  gap:28px;
-  box-shadow:0 2px 10px rgba(0,0,0,.12);
-}
+基本フォント：
 
-.admin-logo{
-  font-weight:700;
-  white-space:nowrap;
-  font-size:18px;
-}
+- -apple-system
+- BlinkMacSystemFont
+- Segoe UI
+- Noto Sans JP
+- Hiragino Kaku Gothic ProN
+- Meiryo
 
-.admin-nav{
-  display:flex;
-  gap:4px;
-  height:100%;
-  align-items:center;
-}
+基本背景色：
 
-.admin-nav button{
-  height:40px;
-  padding:0 14px;
-  border:0;
-  border-radius:7px;
-  color:#cbd5e1;
-  background:transparent;
-}
+#f8fafc
 
-.admin-nav button:hover,
-.admin-nav button.active{
-  background:#1e293b;
-  color:#fff;
-}
+管理者ヘッダー：
 
-.admin-spacer{flex:1}
+#0f172a
 
-.page{
-  max-width:1500px;
-  margin:0 auto;
-  padding:28px;
-}
+カード、ボタン、一覧、編集画面、
+プレビュー、送信、集計、設定、回答者画面の
+基本的な余白・境界線・角丸・シャドウ等は
+現行モックのデザインを維持する。
 
-.page-title{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:16px;
-  margin-bottom:24px;
-}
+管理者一覧は横スクロール可能とする。
 
-.page-title h1{
-  margin:0;
-  font-size:26px;
-}
+レスポンシブ時は、
+現行モックと同等のレイアウト変更を行う。
 
-.page-title p{
-  margin:5px 0 0;
-  color:var(--gray);
-  font-size:13px;
-}
-
-/* 共通カード */
-.card{
-  background:#fff;
-  border:1px solid var(--border);
-  border-radius:12px;
-  box-shadow:var(--shadow);
-}
-
-.card-header{
-  padding:18px 20px;
-  border-bottom:1px solid var(--border);
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  gap:12px;
-}
-
-.card-body{padding:20px}
-
-/* ボタン */
-.btn{
-  border:1px solid var(--border);
-  background:#fff;
-  color:var(--text);
-  border-radius:7px;
-  padding:9px 14px;
-  min-height:40px;
-}
-
-.btn:hover{background:#f8fafc}
-
-.btn-primary{
-  background:var(--primary);
-  color:#fff;
-  border-color:var(--primary);
-}
-
-.btn-primary:hover{background:var(--primary-dark)}
-
-.btn-success{
-  background:var(--success);
-  color:#fff;
-  border-color:var(--success);
-}
-
-.btn-danger{
-  background:var(--danger);
-  color:#fff;
-  border-color:var(--danger);
-}
-
-.btn-warning{
-  background:var(--warning);
-  color:#fff;
-  border-color:var(--warning);
-}
-
-.btn-sm{
-  min-height:32px;
-  padding:5px 9px;
-  font-size:12px;
-}
-
-.btn:disabled{
-  opacity:.45;
-  cursor:not-allowed;
-}
-
-/* ステータス */
-.badge{
-  display:inline-flex;
-  align-items:center;
-  padding:4px 9px;
-  border-radius:999px;
-  font-size:12px;
-  font-weight:600;
-  white-space:nowrap;
-}
-
-.badge-draft{background:#e2e8f0;color:#475569}
-.badge-published{background:#dcfce7;color:#166534}
-.badge-stopped{background:#fef3c7;color:#92400e}
-.badge-ended{background:#fee2e2;color:#991b1b}
-.badge-success{background:#dcfce7;color:#166534}
-.badge-danger{background:#fee2e2;color:#991b1b}
-.badge-info{background:#dbeafe;color:#1d4ed8}
-
-/* フォーム */
-.form-grid{
-  display:grid;
-  grid-template-columns:repeat(2,minmax(0,1fr));
-  gap:18px;
-}
-
-.form-group{
-  display:flex;
-  flex-direction:column;
-  gap:7px;
-}
-
-.form-group.full{grid-column:1/-1}
-
-label{
-  font-weight:600;
-  font-size:13px;
-}
-
-input[type=text],
-input[type=email],
-input[type=password],
-input[type=datetime-local],
-input[type=number],
-textarea,
-select{
-  width:100%;
-  border:1px solid #cbd5e1;
-  border-radius:7px;
-  padding:10px 12px;
-  background:#fff;
-  color:var(--text);
-}
-
-textarea{
-  resize:vertical;
-  min-height:100px;
-}
-
-.help{
-  color:var(--gray);
-  font-size:12px;
-}
-
-.actions{
-  display:flex;
-  align-items:center;
-  gap:8px;
-  flex-wrap:wrap;
-}
-
-/* 一覧 */
-.toolbar{
-  display:flex;
-  gap:10px;
-  flex-wrap:wrap;
-  align-items:center;
-  margin-bottom:16px;
-}
-
-.search-box{
-  display:flex;
-  flex:1;
-  min-width:260px;
-}
-
-.search-box input{
-  border-radius:7px 0 0 7px;
-}
-
-.search-box button{
-  border:1px solid #cbd5e1;
-  border-left:0;
-  background:#f8fafc;
-  border-radius:0 7px 7px 0;
-  padding:0 16px;
-}
-
-.table-wrap{overflow-x:auto}
-
-table{
-  width:100%;
-  border-collapse:collapse;
-  min-width:1100px;
-}
-
-th,td{
-  padding:13px 12px;
-  border-bottom:1px solid #e2e8f0;
-  text-align:left;
-  vertical-align:middle;
-  font-size:13px;
-}
-
-th{
-  background:#f8fafc;
-  font-weight:700;
-  color:#475569;
-}
-
-tbody tr:hover{background:#f8fafc}
-
-.actions-cell{min-width:340px}
-
-.action-grid{
-  display:flex;
-  flex-wrap:wrap;
-  gap:5px;
-}
-
-.empty{
-  padding:45px 20px;
-  text-align:center;
-  color:var(--gray);
-}
-
-/* 編集 */
-.editor-topbar{
-  position:sticky;
-  top:64px;
-  z-index:20;
-  background:#fff;
-  border:1px solid var(--border);
-  border-radius:10px;
-  padding:14px 16px;
-  margin-bottom:20px;
-  display:flex;
-  align-items:center;
-  gap:12px;
-  box-shadow:var(--shadow);
-}
-
-.editor-topbar .state-area{
-  margin-left:auto;
-  display:flex;
-  align-items:center;
-  gap:8px;
-}
-
-.editor-topbar select{
-  width:auto;
-  min-width:145px;
-}
-
-.section{margin-bottom:20px}
-
-.section-title{
-  margin:0 0 15px;
-  font-size:18px;
-}
-
-.radio-row{
-  display:flex;
-  gap:18px;
-  flex-wrap:wrap;
-}
-
-.radio-row label{
-  font-weight:400;
-  display:flex;
-  gap:7px;
-  align-items:center;
-}
-
-.group{
-  margin-bottom:18px;
-  border:1px solid #cbd5e1;
-  border-radius:12px;
-  background:#f8fafc;
-}
-
-.group.drag-over{
-  border:2px dashed var(--primary);
-}
-
-.group-header{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  padding:12px;
-  background:#f1f5f9;
-  border-radius:12px 12px 0 0;
-}
-
-.drag-handle{
-  cursor:grab;
-  color:#64748b;
-  font-size:18px;
-}
-
-.group-title-input{
-  flex:1;
-  font-weight:700;
-}
-
-.question-list{
-  padding:12px;
-  display:flex;
-  flex-direction:column;
-  gap:10px;
-}
-
-.question{
-  background:#fff;
-  border:1px solid var(--border);
-  border-radius:9px;
-  padding:13px;
-}
-
-.question.dragging{opacity:.45}
-
-.question-header{
-  display:flex;
-  align-items:center;
-  gap:8px;
-  margin-bottom:10px;
-}
-
-.question-number{
-  font-weight:700;
-  color:var(--primary);
-  min-width:55px;
-}
-
-.question-text{flex:1}
-
-.question-body{
-  display:grid;
-  grid-template-columns:1fr 180px 110px;
-  gap:10px;
-  align-items:start;
-}
-
-.question-options{
-  margin-top:10px;
-  padding-left:63px;
-}
-
-.option-row{
-  display:flex;
-  gap:7px;
-  margin-bottom:7px;
-}
-
-.option-row input{flex:1}
-
-.branch-box{
-  margin-top:10px;
-  margin-left:63px;
-  padding:10px;
-  background:#eff6ff;
-  border:1px solid #bfdbfe;
-  border-radius:7px;
-}
-
-.add-area{padding:0 12px 12px}
-.group-add{margin-top:10px}
-.dnd-note{color:#64748b;font-size:11px}
-
-/* 対象アンケート */
-.target-banner{
-  background:#eff6ff;
-  border:1px solid #bfdbfe;
-  border-radius:10px;
-  padding:15px 18px;
-  margin-bottom:20px;
-}
-
-.target-banner .label{
-  color:#1d4ed8;
-  font-size:12px;
-  font-weight:700;
-}
-
-.target-banner .title{
-  font-size:18px;
-  font-weight:700;
-  margin-top:4px;
-}
-
-/* 送信 */
-.send-tabs{
-  display:flex;
-  border-bottom:1px solid var(--border);
-  margin-bottom:18px;
-}
-
-.send-tab{
-  border:0;
-  background:none;
-  padding:12px 18px;
-  border-bottom:3px solid transparent;
-  color:#64748b;
-}
-
-.send-tab.active{
-  color:var(--primary);
-  border-bottom-color:var(--primary);
-  font-weight:700;
-}
-
-.customer-table{min-width:1200px}
-
-.template-grid{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:18px;
-}
-
-.mail-preview{
-  white-space:pre-wrap;
-  background:#f8fafc;
-  border:1px solid var(--border);
-  border-radius:8px;
-  padding:15px;
-  min-height:170px;
-}
-
-.history-detail{
-  background:#f8fafc;
-  padding:15px;
-  border-radius:8px;
-  margin-top:10px;
-}
-
-.result-grid{
-  display:grid;
-  grid-template-columns:repeat(4,1fr);
-  gap:12px;
-}
-
-.result-card{
-  padding:16px;
-  background:#f8fafc;
-  border:1px solid var(--border);
-  border-radius:9px;
-}
-
-.result-card .value{
-  font-size:25px;
-  font-weight:700;
-}
-
-/* 集計 */
-.summary-grid{
-  display:grid;
-  grid-template-columns:repeat(5,1fr);
-  gap:12px;
-  margin-bottom:20px;
-}
-
-.summary-card{
-  background:#fff;
-  border:1px solid var(--border);
-  border-radius:10px;
-  padding:16px;
-}
-
-.summary-card .number{
-  font-size:27px;
-  font-weight:700;
-  margin-top:5px;
-}
-
-.bar{
-  height:22px;
-  border-radius:5px;
-  background:#e2e8f0;
-  overflow:hidden;
-}
-
-.bar>span{
-  display:block;
-  height:100%;
-  background:var(--primary);
-}
-
-.answer-list{
-  display:flex;
-  flex-direction:column;
-  gap:10px;
-}
-
-.answer-item{
-  border:1px solid var(--border);
-  border-radius:8px;
-  padding:12px;
-}
-
-/* 設定 */
-.settings-grid{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:20px;
-}
-
-.mapping{
-  display:grid;
-  grid-template-columns:180px 1fr;
-  gap:10px;
-  align-items:center;
-}
-
-.address-checks{
-  display:grid;
-  grid-template-columns:repeat(2,1fr);
-  gap:8px;
-}
-
-.address-checks label{
-  font-weight:400;
-  display:flex;
-  gap:7px;
-}
-
-.status-box{
-  margin-top:15px;
-  padding:14px;
-  border-radius:8px;
-  background:#f8fafc;
-  border:1px solid var(--border);
-}
-
-/* プレビュー */
-.preview-switch{
-  display:flex;
-  gap:5px;
-}
-
-.preview-device{
-  max-width:900px;
-  margin:0 auto;
-  background:#fff;
-  border:1px solid var(--border);
-  border-radius:12px;
-  box-shadow:var(--shadow);
-  padding:30px;
-}
-
-.preview-device.mobile{max-width:390px}
-
-.preview-question{margin:25px 0}
-
-.preview-question h3{
-  font-size:16px;
-  margin:0 0 10px;
-}
-
-.preview-option{
-  display:block;
-  padding:12px;
-  border:1px solid #cbd5e1;
-  border-radius:8px;
-  margin-bottom:8px;
-}
-
-/* 回答者 */
-.respondent{
-  min-height:100vh;
-  background:#f8fafc;
-}
-
-.respondent-header{
-  background:#fff;
-  border-bottom:1px solid var(--border);
-  padding:20px;
-}
-
-.respondent-header-inner{
-  max-width:760px;
-  margin:auto;
-}
-
-.respondent-main{
-  max-width:760px;
-  margin:25px auto;
-  padding:0 16px 50px;
-}
-
-.respondent-card{
-  background:#fff;
-  border:1px solid var(--border);
-  border-radius:12px;
-  padding:25px;
-  box-shadow:var(--shadow);
-}
-
-.progress{
-  height:7px;
-  background:#e2e8f0;
-  border-radius:5px;
-  overflow:hidden;
-  margin:15px 0 25px;
-}
-
-.progress span{
-  display:block;
-  height:100%;
-  background:var(--primary);
-}
-
-.respondent-question{margin:0 0 28px}
-
-.required{
-  color:var(--danger);
-  font-size:12px;
-  margin-left:5px;
-}
-
-.respondent-option{
-  display:block;
-  padding:13px;
-  border:1px solid #cbd5e1;
-  border-radius:8px;
-  margin:8px 0;
-}
-
-.respondent-actions{
-  display:flex;
-  justify-content:space-between;
-  gap:10px;
-  margin-top:25px;
-}
-
-/* モーダル */
-.modal-backdrop{
-  position:fixed;
-  inset:0;
-  background:rgba(15,23,42,.52);
-  z-index:100;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding:20px;
-}
-
-.modal{
-  width:min(520px,100%);
-  background:#fff;
-  border-radius:12px;
-  box-shadow:0 20px 50px rgba(0,0,0,.25);
-  overflow:hidden;
-}
-
-.modal-header{
-  padding:17px 20px;
-  border-bottom:1px solid var(--border);
-  font-weight:700;
-}
-
-.modal-body{padding:20px}
-
-.modal-footer{
-  padding:15px 20px;
-  border-top:1px solid var(--border);
-  display:flex;
-  justify-content:flex-end;
-  gap:8px;
-}
-
-/* 通知 */
-.toast-container{
-  position:fixed;
-  right:20px;
-  bottom:20px;
-  z-index:200;
-  display:flex;
-  flex-direction:column;
-  gap:8px;
-}
-
-.toast{
-  min-width:280px;
-  max-width:420px;
-  padding:13px 16px;
-  color:#fff;
-  background:#0f172a;
-  border-radius:8px;
-  box-shadow:var(--shadow);
-}
-
-/* レスポンシブ */
-@media(max-width:1000px){
-  .summary-grid{
-    grid-template-columns:repeat(2,1fr);
-  }
-
-  .settings-grid,
-  .template-grid,
-  .form-grid{
-    grid-template-columns:1fr;
-  }
-
-  .question-body{
-    grid-template-columns:1fr;
-  }
-
-  .question-options,
-  .branch-box{
-    margin-left:0;
-    padding-left:0;
-  }
-}
-
-@media(max-width:700px){
-  .admin-header{
-    min-height:60px;
-    padding:10px 14px;
-    flex-wrap:wrap;
-    gap:7px;
-  }
-
-  .admin-nav{
-    order:3;
-    width:100%;
-    overflow-x:auto;
-  }
-
-  .admin-nav button{white-space:nowrap}
-
-  .page{padding:16px}
-
-  .editor-topbar{
-    top:0;
-    flex-wrap:wrap;
-  }
-
-  .editor-topbar .state-area{
-    margin-left:0;
-    width:100%;
-  }
-
-  .editor-topbar select{
-    flex:1;
-  }
-
-  .summary-grid{
-    grid-template-columns:1fr 1fr;
-  }
-
-  .preview-device{padding:18px}
-
-  .result-grid{
-    grid-template-columns:1fr 1fr;
-  }
-
-  .respondent-card{padding:18px}
-}
+個別画面で独自の配色や大幅に異なるデザインを追加しない。
 
 
 ============================================================
-11. 実装時の優先順位
+12. 実装時の優先順位
 ============================================================
 
 第1優先：
+
 - クエリー文字列による画面制御
+- 管理者認証
+- セッション管理
+- CSRF対策
 - 一覧
 - 作成・編集
 - 状態管理
@@ -1546,8 +955,10 @@ tbody tr:hover{background:#f8fafc}
 - 回答者フロー
 - 送信画面
 - 集計画面
+- サーバー側データ保存
 
 第2優先：
+
 - グループ・質問編集
 - 自動採番
 - 条件分岐
@@ -1555,30 +966,46 @@ tbody tr:hover{background:#f8fafc}
 - プレビュー
 - 送信履歴
 - kintone設定
+- kintone実接続
+- X-Cybozu-Authorizationによる認証
+- kintone顧客同期
 - メール設定
+- SMTP実接続
+- メール送信
 
 第3優先：
-- CSV / PDF操作
-- 各種モック状態の詳細再現
+
+- CSV出力
+- PDF出力
 - レスポンシブの細部調整
+- UI上の細部改善
 
 実装判断に迷った場合は、
-「業務要件 → 実装要件 → 実行環境制約」
-の順に優先し、UI上の挙動は現行モックのデザインを維持する。
+
+「業務要件 → 共通実装要件 → 実行環境制約」
+
+の順に優先する。
+
+UI上の挙動およびデザインは現行モックを維持する。
 
 
 ============================================================
-12. 完成条件
+13. 完成条件
 ============================================================
 
 以下を満たせば実装版の基本要件を満たす。
 
-- index.php 1ファイルで動作する
+- index.php 1ファイルを中心に動作する
 - Apache 2.4 / PHP 8.5で動作する
 - DBを必要としない
 - PHP cURLを必要としない
 - 画面遷移をクエリー文字列で制御する
 - 管理者と回答者を分離する
+- 管理者画面に認証を設ける
+- 管理者ログイン成功時にセッションIDを再生成する
+- 管理画面のPOST処理にCSRF対策を行う
+- CSRFトークンをセッションに保持する
+- POST時にCSRFトークンを検証する
 - 一覧を管理者業務の起点とする
 - 集計・送信には対象アンケートIDを必ず引き継ぐ
 - 状態自動終了ルールを守る
@@ -1586,12 +1013,96 @@ tbody tr:hover{background:#f8fafc}
 - 質問番号を自動採番する
 - 回答形式を3種類に限定する
 - 送信履歴を独立画面にしない
+- データをサーバー側に永続化する
+- localStorageのみを主要データ保存先としない
+- 入力値をサーバー側でも検証する
+- 機密情報を画面・URL・ログへ不用意に出力しない
 - kintone接続テストと同期を分離する
 - kintone認証はログイン名・パスワード方式とする
-- メール送信はSMTP方式とする
+- kintone REST API認証にX-Cybozu-Authorizationを使用する
+- X-Cybozu-Authorizationをブラウザへ公開しない
+- X-Cybozu-Authorizationをログへ出力しない
+- kintoneのProxy設定をhost:port形式で行える
+- Proxyサーバとポート番号を別々の入力欄にしない
+- kintone接続を実際のkintone APIで行う
+- メール送信をSMTP方式で行う
+- PHP mail()を使用しない
+- 外部通信に適切なタイムアウトを設定する
 - 現行モックの色・カード・ボタン・余白・レスポンシブ配置を維持する
 
-なお、現行モックでは全体の基本配色として
-「#2563eb（青）」「#0f172a（濃紺）」「#f8fafc（背景）」
-を中心に、カード・境界線・ステータスバッジ等を構成しているため、
-上記CSSを共通CSSとして固定し、個別画面で独自の色・余白を追加しない。
+
+============================================================
+14. 実装上の基本方針
+============================================================
+
+本書は、業務上必要な仕様と実装上の制約を定義する。
+
+個々のPHP関数、データファイルの内部形式、
+HTTP通信の詳細手順、SMTP通信の詳細手順等は
+本要件書では固定しない。
+
+ただし、以下は必須とする。
+
+- 本番機能をモックで代替しない
+- kintoneは実際に接続する
+- SMTPは実際に接続する
+- データはサーバー側に保存する
+- 要件で禁止された機能・方式を使用しない
+- 管理画面のPOST処理にはCSRF対策を実装する
+- kintone REST API認証にはX-Cybozu-Authorizationを使用する
+- kintone認証情報をブラウザへ公開しない
+
+実装方式は上記条件を満たす範囲で、
+Apache 2.4 / PHP 8.5 / DBなしという環境に適した方法を選択する。
+
+
+============================================================
+15. 変更点の要約
+============================================================
+
+今回の実装版では、元のモック向け要件から以下を変更する。
+
+1. モック専用仕様を削除
+   - kintone接続モックを使用しない
+   - SMTP接続モックを使用しない
+   - localStorage中心のデータ管理を行わない
+   - CSV/PDFの「出力しました」だけの疑似処理を行わない
+
+2. kintone Proxy設定を追加
+   - Proxyサーバ入力欄を追加
+   - 入力形式はhost:port
+   - hostとportは別欄にしない
+   - 未入力時は直接接続
+
+3. kintone認証方式を明確化
+   - ログイン名・パスワード方式を使用
+   - X-Cybozu-Authorizationヘッダーを使用
+   - 認証情報はサーバー側だけで扱う
+   - 認証情報をログやブラウザへ公開しない
+
+4. 共通セキュリティ要件を追加
+   - 管理者認証
+   - セッションID再生成
+   - CSRFトークン
+   - セッションへのCSRFトークン保持
+   - POST時のCSRFトークン検証
+   - サーバー側入力検証
+   - 機密情報保護
+
+5. 共通仕様を追加
+   - サーバー側データ永続化
+   - エラー処理
+   - タイムアウト
+   - 機密情報保護
+
+6. 実装要件を実装版へ変更
+   - kintone実接続
+   - 顧客情報実同期
+   - SMTP実送信
+   - CSV実出力
+   - PDF実出力
+
+7. 要件書の粒度を統一
+   - kintoneだけ通信プロトコル等の詳細設計を要求しない
+   - PHPの具体的な内部実装は実装時に決定する
+   - 業務上必要な動作と禁止事項を要件として明確化する
