@@ -1014,7 +1014,9 @@ X-Cybozu-Authorizationを
 X-Cybozu-Authorizationおよびkintoneパスワードを
 ログやエラー画面へ出力しない。
 
+kintone REST APIは、
 
+https://{subdomain}.cybozu.com/k/v1/app.json
 
 ## 9.2 SMTP
 
