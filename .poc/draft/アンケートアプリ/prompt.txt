@@ -908,8 +908,7 @@ kintoneおよびSMTPは実際のサービスへ接続する。
 - Apache 2.4
 - PHP 8.5
 - データベースなし
-- PHP cURLなし
-
+- PHP cURLあり
 上記環境で動作すること。
 
 これらは業務要件ではなく、
@@ -930,7 +929,7 @@ Apacheの物理パスによる画面分割を行わない。
 
 PHPは画面生成およびサーバー側処理に使用する。
 
-PHP cURLは使用しない。
+PHP cURLは使用できる。
 
 外部通信は、
 現在のPHP環境で利用可能な標準機能等を使用する。
@@ -1093,7 +1092,6 @@ SMTP認証情報をURLやログへ出力しない。
 - 接続タイムアウトと読み取りタイムアウトが分離されない通信制御
 - DB依存
 - PHP mail()の使用
-- PHP cURLの使用
 - APIトークンによるkintone認証
 - kintoneログイン用メールアドレス欄
 - 物理パスによる画面遷移
@@ -1219,66 +1217,6 @@ function kintone_build_url(string $domain, string $endpoint): string {
     return 'https://' . $domain . '.cybozu.com' . $endpoint;
 }
 
-/**
- * kintone REST API リクエスト共通関数 (cURL非依存, stream_context版)
- */
-function kintone_api_request(string $method, string $url, array $headers, $payload = null, array $config = []): array {
-    $method = strtoupper($method);
-    $http_options = [
-        'method' => $method,
-        'header' => implode("\r\n", $headers),
-        'ignore_errors' => true,
-        'timeout' => 15
-    ];
-
-    // POST/PUT等の場合は body (content) を設定
-    if ($method !== 'GET' && $payload !== null) {
-        $http_options['content'] = is_array($payload) ? json_encode($payload, JSON_UNESCAPED_UNICODE) : $payload;
-    }
-
-    $context_options = ['http' => $http_options];
-
-    // SSL証明書検証スキップ設定
-    $context_options['ssl'] = [
-        'verify_peer' => false,
-        'verify_peer_name' => false
-    ];
-
-    // プロキシ設定の適用
-    $proxy_host_port = trim($config['proxy_host_port'] ?? '');
-    if ($proxy_host_port !== '') {
-        $proxy_address = 'tcp://' . $proxy_host_port;
-        $context_options['http']['proxy'] = $proxy_address;
-        $context_options['http']['request_fulluri'] = true;
-    }
-
-    $context = stream_context_create($context_options);
-    $response_body = @file_get_contents($url, false, $context);
-    $response_headers = get_safe_response_headers();
-
-    $status_code = 500;
-    if (!empty($response_headers)) {
-        if (preg_match('/HTTP\/\d\.\d\s+(\d+)/i', $response_headers[0], $matches)) {
-            $status_code = (int)$matches[1];
-        }
-    }
-
-    $result_data = json_decode($response_body ?? '', true);
-
-    if ($status_code >= 200 && $status_code < 300) {
-        return ['success' => true, 'status' => $status_code, 'data' => $result_data];
-    } else {
-        $error_msg = $result_data['message'] ?? 'kintone API 通信エラーが発生しました。';
-        if (isset($result_data['errors']) && is_array($result_data['errors'])) {
-            $err_details = [];
-            foreach ($result_data['errors'] as $k => $v) {
-                $err_details[] = $k . ': ' . ($v['messages'][0] ?? json_encode($v));
-            }
-            $error_msg .= ' (' . implode(', ', $err_details) . ')';
-        }
-        return ['success' => false, 'status' => $status_code, 'message' => $error_msg, 'raw' => $result_data];
-    }
-}
 
 /**
  * X-Cybozu-Authorization ヘッダー生成関数
