@@ -1084,6 +1084,7 @@ SMTP認証情報をURLやログへ出力しない。
 以下を禁止する。
 
 -CSRF対策（verify_csrf()やcsrf_token）
+- 設定保存を「POST → 303 → GET → flash」に依存させる行為
 - DB依存
 - PHP mail()の使用
 - PHP cURLの使用
