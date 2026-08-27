@@ -1,3 +1,4 @@
+
 GitHubにコピー4.回目
 以下の要件に基づいて作成した以下のモックについて
 https://raw.githubusercontent.com/yokoyamy/trial/refs/heads/main/.poc/draft/%E3%82%A2%E3%83%B3%E3%82%B1%E3%83%BC%E3%83%88%E3%82%A2%E3%83%97%E3%83%AA/index.php
