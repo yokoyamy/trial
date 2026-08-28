@@ -3,89 +3,58 @@ declare(strict_types=1);
 
 /**
  * アンケートアプリ
+ *
  * Apache 2.4 / PHP 8.5
+ * DBなし / PHP cURLなし / PHP mail()なし
  *
- * - 単一エントリーポイント
- * - DBなし
- * - PHP cURLなし
- * - PHP mail()なし
- * - 管理者認証なし（POC）
- * - Canvasなし
- * - サーバー側JSON永続化
- *
- * 画面:
- *   list
- *   edit
- *   preview
- *   send
- *   analytics
- *   kintone
- *   mail
- *   answer
- *   confirm
- *   complete
- *
- * 外部サービス:
- *   kintone REST API
- *   SMTP
+ * 単一エントリーポイント:
+ *   index.php?screen=list
+ *   index.php?screen=edit&id=survey-001
+ *   index.php?screen=preview&id=survey-001
+ *   index.php?screen=send&id=survey-001
+ *   index.php?screen=analytics&id=survey-001
+ *   index.php?screen=kintone
+ *   index.php?screen=mail
+ *   index.php?screen=answer&id=survey-001
+ *   index.php?screen=confirm&id=survey-001
+ *   index.php?screen=complete&id=survey-001
  *
  * kintone:
- *   ログイン名 + パスワード
+ *   パスワード認証
  *   X-Cybozu-Authorization
  *
  * 重要:
- *   kintoneの設定保存・接続テスト・項目取得・同期を分離する。
- *   APIエラーを画面で確認可能にする。
- *   API通信そのものを画面遷移用リダイレクトと混同しない。
+ *   - kintone API仕様をAPI単位で固定
+ *   - app.json は id
+ *   - records.json は app
+ *   - form/fields.json は app
+ *   - API通信と画面リダイレクトを分離
+ *   - APIエラー本文を必ず取得
+ *   - APIリダイレクトは追従しない
+ *   - 認証情報をHTML/URL/ログへ出さない
  */
 
 date_default_timezone_set('Asia/Tokyo');
 
-const APP_TITLE = 'アンケート管理システム';
-const DATA_DIR_NAME = 'data';
+const APP_TITLE = 'アンケート管理';
+const DATA_DIR = __DIR__ . DIRECTORY_SEPARATOR . 'data';
+const DATA_FILE = DATA_DIR . DIRECTORY_SEPARATOR . 'data.json';
+const SETTINGS_FILE = DATA_DIR . DIRECTORY_SEPARATOR . 'settings.json';
 
-$APP_DIR  = __DIR__;
-$DATA_DIR = $APP_DIR . DIRECTORY_SEPARATOR . DATA_DIR_NAME;
+const KINTONE_CONNECT_TIMEOUT = 10;
+const KINTONE_READ_TIMEOUT = 30;
+const SESSION_NAME = 'survey_app_session';
 
-if (!is_dir($DATA_DIR)) {
-    if (!@mkdir($DATA_DIR, 0770, true) && !is_dir($DATA_DIR)) {
+/* ============================================================
+ * 初期化
+ * ============================================================ */
+
+if (!is_dir(DATA_DIR)) {
+    if (!@mkdir(DATA_DIR, 0770, true) && !is_dir(DATA_DIR)) {
         http_response_code(500);
         exit('データ保存領域を作成できません。');
     }
 }
-
-/* ============================================================
- * セッション
- * ============================================================ */
-
-if (session_status() !== PHP_SESSION_ACTIVE) {
-    $https =
-        (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-        || (int)($_SERVER['SERVER_PORT'] ?? 0) === 443;
-
-    $path = dirname($_SERVER['SCRIPT_NAME'] ?? '/');
-    $path = rtrim($path, '/');
-    if ($path === '') {
-        $path = '/';
-    }
-
-    session_set_cookie_params([
-        'lifetime' => 0,
-        'path' => $path,
-        'secure' => $https,
-        'httponly' => true,
-        'samesite' => 'Lax',
-    ]);
-
-    if (!session_start()) {
-        http_response_code(500);
-        exit('セッションを利用できません。');
-    }
-}
-
-/* ============================================================
- * 共通関数
- * ============================================================ */
 
 function h(mixed $value): string
 {
@@ -96,7 +65,7 @@ function h(mixed $value): string
     );
 }
 
-function now_iso(): string
+function now(): string
 {
     return date('Y-m-d H:i:s');
 }
@@ -130,29 +99,31 @@ function post_array(string $key): array
 
     $result = [];
 
-    foreach ($value as $v) {
-        if (is_scalar($v)) {
-            $result[] = trim((string)$v);
+    foreach ($value as $item) {
+        if (is_scalar($item)) {
+            $result[] = trim((string)$item);
         }
     }
 
     return array_values(array_unique($result));
 }
 
-function app_url(array $params = []): string
+function post_bool(string $key): bool
 {
-    $base = 'index.php';
-
-    if (!$params) {
-        return $base;
-    }
-
-    return $base . '?' . http_build_query($params);
+    return isset($_POST[$key])
+        && in_array(
+            $_POST[$key],
+            ['1', 'on', 'true'],
+            true
+        );
 }
 
 function safe_id(string $id): bool
 {
-    return (bool)preg_match('/^[A-Za-z0-9_-]{1,100}$/', $id);
+    return (bool)preg_match(
+        '/^[A-Za-z0-9_-]{1,100}$/',
+        $id
+    );
 }
 
 function new_id(string $prefix): string
@@ -160,61 +131,103 @@ function new_id(string $prefix): string
     return $prefix . '-' . bin2hex(random_bytes(8));
 }
 
+/* ============================================================
+ * セッション
+ * ============================================================ */
+
+if (session_status() !== PHP_SESSION_ACTIVE) {
+
+    $https =
+        (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (int)($_SERVER['SERVER_PORT'] ?? 0) === 443;
+
+    $path = dirname($_SERVER['SCRIPT_NAME'] ?? '/');
+    $path = rtrim(str_replace('\\', '/', $path), '/');
+
+    if ($path === '') {
+        $path = '/';
+    }
+
+    session_name(SESSION_NAME);
+
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => $path,
+        'secure' => $https,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+
+    if (!session_start()) {
+        http_response_code(500);
+        exit('セッションを利用できません。');
+    }
+}
+
+/* ============================================================
+ * Flash
+ * ============================================================ */
+
 function flash(string $type, string $message): void
 {
-    $_SESSION['flash'] = [
+    $_SESSION['flash'][] = [
         'type' => $type,
         'message' => $message,
     ];
 }
 
-function consume_flash(): ?array
+function take_flash(): array
 {
-    $value = $_SESSION['flash'] ?? null;
+    $items = $_SESSION['flash'] ?? [];
     unset($_SESSION['flash']);
 
-    return is_array($value) ? $value : null;
-}
-
-function data_file(string $name): string
-{
-    global $DATA_DIR;
-    return $DATA_DIR . DIRECTORY_SEPARATOR . $name;
+    return is_array($items) ? $items : [];
 }
 
 /* ============================================================
- * JSON永続化
+ * URL
  * ============================================================ */
 
-function json_read(string $file, mixed $default): mixed
+function app_url(array $params = []): string
 {
-    if (!is_file($file)) {
-        return $default;
+    $base = $_SERVER['SCRIPT_NAME'] ?? 'index.php';
+
+    if (!$params) {
+        return $base;
     }
 
-    $raw = @file_get_contents($file);
-
-    if ($raw === false || trim($raw) === '') {
-        return $default;
-    }
-
-    $decoded = json_decode($raw, true);
-
-    if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
-        return $default;
-    }
-
-    return $decoded;
+    return $base . '?' . http_build_query(
+        $params,
+        '',
+        '&',
+        PHP_QUERY_RFC3986
+    );
 }
 
-function json_write(string $file, mixed $data): bool
+function redirect_screen(
+    string $screen,
+    array $params = []
+): never {
+    $params = array_merge(
+        ['screen' => $screen],
+        $params
+    );
+
+    header(
+        'Location: ' . app_url($params),
+        true,
+        303
+    );
+
+    exit;
+}
+
+/* ============================================================
+ * JSON保存
+ * ============================================================ */
+
+function save_json(string $file, array $data): void
 {
-    $dir = dirname($file);
-
-    if (!is_dir($dir) && !@mkdir($dir, 0770, true)) {
-        return false;
-    }
-
     $json = json_encode(
         $data,
         JSON_UNESCAPED_UNICODE
@@ -223,421 +236,373 @@ function json_write(string $file, mixed $data): bool
     );
 
     if ($json === false) {
-        return false;
-    }
-
-    $tmp = $file . '.tmp.' . bin2hex(random_bytes(6));
-
-    if (@file_put_contents($tmp, $json, LOCK_EX) === false) {
-        @unlink($tmp);
-        return false;
-    }
-
-    if (!@rename($tmp, $file)) {
-        @unlink($tmp);
-        return false;
-    }
-
-    return true;
-}
-
-/* ============================================================
- * データ
- * ============================================================ */
-
-function load_surveys(): array
-{
-    $data = json_read(data_file('surveys.json'), []);
-    return is_array($data) ? $data : [];
-}
-
-function save_surveys(array $surveys): bool
-{
-    return json_write(
-        data_file('surveys.json'),
-        array_values($surveys)
-    );
-}
-
-function load_customers(): array
-{
-    $data = json_read(data_file('customers.json'), []);
-    return is_array($data) ? $data : [];
-}
-
-function save_customers(array $customers): bool
-{
-    return json_write(
-        data_file('customers.json'),
-        array_values($customers)
-    );
-}
-
-function load_answers(): array
-{
-    $data = json_read(data_file('answers.json'), []);
-    return is_array($data) ? $data : [];
-}
-
-function save_answers(array $answers): bool
-{
-    return json_write(
-        data_file('answers.json'),
-        array_values($answers)
-    );
-}
-
-function load_history(): array
-{
-    $data = json_read(data_file('send_history.json'), []);
-    return is_array($data) ? $data : [];
-}
-
-function save_history(array $history): bool
-{
-    return json_write(
-        data_file('send_history.json'),
-        array_values($history)
-    );
-}
-
-function load_kintone(): array
-{
-    $data = json_read(data_file('kintone.json'), []);
-
-    if (!is_array($data)) {
-        $data = [];
-    }
-
-    return array_merge([
-        'subdomain' => '',
-        'app_id' => '',
-        'username' => '',
-        'password_encrypted' => '',
-        'proxy' => '',
-        'verify_ssl' => false,
-        'fields' => [],
-        'mapping' => [
-            'organization' => '',
-            'name' => '',
-            'email' => '',
-            'department' => '',
-            'phone' => '',
-            'address' => [],
-        ],
-        'status' => '未設定',
-        'last_test' => '',
-        'last_sync' => '',
-    ], $data);
-}
-
-function save_kintone(array $config): bool
-{
-    return json_write(data_file('kintone.json'), $config);
-}
-
-function load_mail(): array
-{
-    $data = json_read(data_file('mail.json'), []);
-
-    if (!is_array($data)) {
-        $data = [];
-    }
-
-    return array_merge([
-        'server' => '',
-        'port' => 587,
-        'encryption' => 'tls',
-        'auth' => true,
-        'username' => '',
-        'password_encrypted' => '',
-        'from_email' => '',
-        'from_name' => '',
-        'reply_to' => '',
-        'status' => '未設定',
-        'last_test' => '',
-    ], $data);
-}
-
-function save_mail(array $config): bool
-{
-    return json_write(data_file('mail.json'), $config);
-}
-
-/* ============================================================
- * 秘密情報の保存
- *
- * 平文保存を避ける。
- * APP_ENCRYPTION_KEY環境変数があればそれを使用。
- * なければdata/.keyをサーバー側に生成する。
- * ============================================================ */
-
-function encryption_key(): string
-{
-    global $DATA_DIR;
-
-    $env = getenv('APP_ENCRYPTION_KEY');
-
-    if (is_string($env) && strlen($env) >= 32) {
-        return hash('sha256', $env, true);
-    }
-
-    $file = $DATA_DIR . DIRECTORY_SEPARATOR . '.key';
-
-    if (is_file($file)) {
-        $key = @file_get_contents($file);
-
-        if (is_string($key) && strlen($key) >= 32) {
-            return hash('sha256', $key, true);
-        }
-    }
-
-    $key = bin2hex(random_bytes(32));
-
-    if (@file_put_contents($file, $key, LOCK_EX) === false) {
         throw new RuntimeException(
-            '暗号化キーを保存できません。'
+            'JSONを生成できません。'
         );
     }
 
-    @chmod($file, 0600);
+    $tmp = $file
+        . '.tmp.'
+        . bin2hex(random_bytes(6));
 
-    return hash('sha256', $key, true);
-}
+    $fp = @fopen($tmp, 'wb');
 
-function encrypt_secret(string $plain): string
-{
-    if ($plain === '') {
-        return '';
-    }
-
-    $iv = random_bytes(16);
-    $key = encryption_key();
-
-    $cipher = openssl_encrypt(
-        $plain,
-        'AES-256-CBC',
-        $key,
-        OPENSSL_RAW_DATA,
-        $iv
-    );
-
-    if ($cipher === false) {
+    if ($fp === false) {
         throw new RuntimeException(
-            '秘密情報を暗号化できません。'
+            '一時ファイルを作成できません。'
         );
     }
 
-    $mac = hash_hmac(
-        'sha256',
-        $iv . $cipher,
-        $key,
-        true
-    );
+    try {
 
-    return base64_encode($iv . $mac . $cipher);
+        if (!flock($fp, LOCK_EX)) {
+            throw new RuntimeException(
+                'データファイルをロックできません。'
+            );
+        }
+
+        if (fwrite($fp, $json) === false) {
+            throw new RuntimeException(
+                'データを書き込めません。'
+            );
+        }
+
+        fflush($fp);
+        flock($fp, LOCK_UN);
+        fclose($fp);
+
+        if (!@rename($tmp, $file)) {
+            @unlink($tmp);
+
+            throw new RuntimeException(
+                '保存ファイルを更新できません。'
+            );
+        }
+
+    } catch (Throwable $e) {
+
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+        @unlink($tmp);
+
+        throw $e;
+    }
 }
 
-function decrypt_secret(string $encoded): string
+function load_json(string $file, array $fallback): array
 {
-    if ($encoded === '') {
-        return '';
+    if (!is_file($file)) {
+        return $fallback;
     }
 
-    $raw = base64_decode($encoded, true);
+    $fp = @fopen($file, 'rb');
 
-    if ($raw === false || strlen($raw) < 48) {
-        return '';
+    if ($fp === false) {
+        return $fallback;
     }
 
-    $iv = substr($raw, 0, 16);
-    $mac = substr($raw, 16, 32);
-    $cipher = substr($raw, 48);
-
-    $key = encryption_key();
-
-    $expected = hash_hmac(
-        'sha256',
-        $iv . $cipher,
-        $key,
-        true
-    );
-
-    if (!hash_equals($mac, $expected)) {
-        return '';
+    if (!flock($fp, LOCK_SH)) {
+        fclose($fp);
+        return $fallback;
     }
 
-    $plain = openssl_decrypt(
-        $cipher,
-        'AES-256-CBC',
-        $key,
-        OPENSSL_RAW_DATA,
-        $iv
-    );
+    $contents = stream_get_contents($fp);
 
-    return is_string($plain) ? $plain : '';
+    flock($fp, LOCK_UN);
+    fclose($fp);
+
+    if ($contents === false || trim($contents) === '') {
+        return $fallback;
+    }
+
+    $data = json_decode($contents, true);
+
+    return is_array($data)
+        ? $data
+        : $fallback;
 }
 
 /* ============================================================
- * アンケート
+ * 初期データ
  * ============================================================ */
 
-function status_label(string $status): string
-{
-    return match ($status) {
-        'published' => '公開中',
-        'stopped' => '停止',
-        'ended' => '終了',
-        default => '下書き',
-    };
-}
-
-function status_class(string $status): string
-{
-    return match ($status) {
-        'published' => 'success',
-        'stopped' => 'warning',
-        'ended' => 'gray',
-        default => 'draft',
-    };
-}
-
-function refresh_survey_status(array &$survey): bool
-{
-    if (
-        ($survey['status'] ?? 'draft') === 'published'
-        && !empty($survey['endAt'])
-    ) {
-        $end = strtotime((string)$survey['endAt']);
-
-        if ($end !== false && $end < time()) {
-            $survey['status'] = 'ended';
-            $survey['updatedAt'] = now_iso();
-            return true;
-        }
-    }
-
-    return false;
-}
-
-function refresh_all_statuses(array &$surveys): void
-{
-    $changed = false;
-
-    foreach ($surveys as &$survey) {
-        if (refresh_survey_status($survey)) {
-            $changed = true;
-        }
-    }
-
-    unset($survey);
-
-    if ($changed) {
-        save_surveys($surveys);
-    }
-}
-
-function find_survey(array $surveys, string $id): ?array
-{
-    foreach ($surveys as $survey) {
-        if (($survey['id'] ?? '') === $id) {
-            return $survey;
-        }
-    }
-
-    return null;
-}
-
-function survey_index(array $surveys, string $id): int
-{
-    foreach ($surveys as $index => $survey) {
-        if (($survey['id'] ?? '') === $id) {
-            return $index;
-        }
-    }
-
-    return -1;
-}
-
-function new_question(): array
+function default_data(): array
 {
     return [
-        'id' => new_id('q'),
-        'number' => '',
-        'text' => '',
-        'type' => 'single',
-        'required' => true,
-        'options' => ['選択肢1', '選択肢2'],
-        'branching' => [],
-    ];
-}
-
-function new_group(): array
-{
-    return [
-        'id' => new_id('g'),
-        'title' => '新しいグループ',
-        'questions' => [
-            new_question(),
-        ],
-    ];
-}
-
-function new_survey(): array
-{
-    return [
-        'id' => new_id('survey'),
-        'title' => '新しいアンケート',
-        'description' => '',
-        'startAt' => now_input(),
-        'endAt' => '',
-        'numbering' => 'global',
-        'status' => 'draft',
-        'createdAt' => now_iso(),
-        'updatedAt' => now_iso(),
-        'groups' => [
+        'surveys' => [
             [
-                'id' => new_id('g'),
-                'title' => '基本情報',
-                'questions' => [
-                    new_question(),
+                'id' => 'survey-001',
+                'title' => '顧客満足度アンケート',
+                'description' =>
+                    'サービスについてのご意見をお聞かせください。',
+                'startAt' => now_input(),
+                'endAt' => date(
+                    'Y-m-d\TH:i',
+                    strtotime('+30 days')
+                ),
+                'status' => 'published',
+                'numbering' => 'global',
+                'createdAt' => now(),
+                'updatedAt' => now(),
+                'groups' => [
+                    [
+                        'id' => 'group-001',
+                        'title' => '基本アンケート',
+                        'questions' => [
+                            [
+                                'id' => 'question-001',
+                                'number' => 'Q1',
+                                'text' =>
+                                    'サービスの満足度を教えてください。',
+                                'type' => 'single',
+                                'required' => true,
+                                'options' => [
+                                    [
+                                        'id' => 'option-001',
+                                        'label' => '非常に満足',
+                                        'nextQuestionId' => '',
+                                    ],
+                                    [
+                                        'id' => 'option-002',
+                                        'label' => '満足',
+                                        'nextQuestionId' => '',
+                                    ],
+                                    [
+                                        'id' => 'option-003',
+                                        'label' => '普通',
+                                        'nextQuestionId' => '',
+                                    ],
+                                    [
+                                        'id' => 'option-004',
+                                        'label' => '不満',
+                                        'nextQuestionId' => '',
+                                    ],
+                                ],
+                            ],
+                            [
+                                'id' => 'question-002',
+                                'number' => 'Q2',
+                                'text' =>
+                                    'ご意見・ご要望があれば入力してください。',
+                                'type' => 'text',
+                                'required' => false,
+                                'options' => [],
+                            ],
+                        ],
+                    ],
                 ],
             ],
         ],
+        'answers' => [],
+        'customers' => [],
+        'send_history' => [],
     ];
 }
 
-function recalc_question_numbers(array &$survey): void
+function default_settings(): array
 {
-    $mode = $survey['numbering'] ?? 'global';
-    $global = 1;
-    $groupNo = 1;
+    return [
+        'kintone' => [
+            'subdomain' => '',
+            'app_id' => '',
+            'username' => '',
+            'password_encrypted' => '',
+            'proxy' => '',
+            'verify_ssl' => false,
+            'mapping' => [
+                'organization' => '',
+                'name' => '',
+                'email' => '',
+                'department' => '',
+                'phone' => '',
+                'address' => [],
+            ],
+            'fields' => [],
+            'last_test' => null,
+            'last_sync' => null,
+        ],
+        'mail' => [
+            'server' => '',
+            'port' => '587',
+            'encryption' => 'tls',
+            'auth' => true,
+            'username' => '',
+            'password_encrypted' => '',
+            'from_email' => '',
+            'from_name' => '',
+            'reply_to' => '',
+            'last_test' => null,
+        ],
+    ];
+}
 
-    foreach ($survey['groups'] as &$group) {
-        $questionNo = 1;
+function load_data(): array
+{
+    $data = load_json(
+        DATA_FILE,
+        default_data()
+    );
 
-        foreach ($group['questions'] as &$question) {
-            if ($mode === 'group') {
-                $question['number'] =
-                    'Q' . $groupNo . '-' . $questionNo;
-            } else {
-                $question['number'] =
-                    'Q' . $global;
-            }
-
-            $questionNo++;
-            $global++;
+    foreach ([
+        'surveys',
+        'answers',
+        'customers',
+        'send_history',
+    ] as $key) {
+        if (!isset($data[$key]) || !is_array($data[$key])) {
+            $data[$key] = [];
         }
-
-        unset($question);
-        $groupNo++;
     }
 
-    unset($group);
+    return $data;
+}
+
+function load_settings(): array
+{
+    $settings = load_json(
+        SETTINGS_FILE,
+        default_settings()
+    );
+
+    $defaults = default_settings();
+
+    $settings['kintone'] = array_replace_recursive(
+        $defaults['kintone'],
+        $settings['kintone'] ?? []
+    );
+
+    $settings['mail'] = array_replace_recursive(
+        $defaults['mail'],
+        $settings['mail'] ?? []
+    );
+
+    return $settings;
 }
 
 /* ============================================================
- * kintone
+ * 秘密情報
+ * ============================================================ */
+
+function secret_key(): string
+{
+    $keyFile = DATA_DIR
+        . DIRECTORY_SEPARATOR
+        . '.secret';
+
+    if (is_file($keyFile)) {
+        $key = trim((string)@file_get_contents($keyFile));
+
+        if ($key !== '') {
+            return $key;
+        }
+    }
+
+    $key = base64_encode(
+        random_bytes(32)
+    );
+
+    @file_put_contents(
+        $keyFile,
+        $key,
+        LOCK_EX
+    );
+
+    @chmod($keyFile, 0600);
+
+    return $key;
+}
+
+function encrypt_secret(string $value): string
+{
+    if ($value === '') {
+        return '';
+    }
+
+    $key = hash(
+        'sha256',
+        secret_key(),
+        true
+    );
+
+    $iv = random_bytes(
+        openssl_cipher_iv_length('aes-256-cbc')
+    );
+
+    $encrypted = openssl_encrypt(
+        $value,
+        'aes-256-cbc',
+        $key,
+        OPENSSL_RAW_DATA,
+        $iv
+    );
+
+    if ($encrypted === false) {
+        throw new RuntimeException(
+            '秘密情報を保存できません。'
+        );
+    }
+
+    return base64_encode(
+        $iv . $encrypted
+    );
+}
+
+function decrypt_secret(string $value): string
+{
+    if ($value === '') {
+        return '';
+    }
+
+    $raw = base64_decode(
+        $value,
+        true
+    );
+
+    if ($raw === false) {
+        return '';
+    }
+
+    $key = hash(
+        'sha256',
+        secret_key(),
+        true
+    );
+
+    $ivLength =
+        openssl_cipher_iv_length(
+            'aes-256-cbc'
+        );
+
+    if (strlen($raw) <= $ivLength) {
+        return '';
+    }
+
+    $iv = substr(
+        $raw,
+        0,
+        $ivLength
+    );
+
+    $encrypted = substr(
+        $raw,
+        $ivLength
+    );
+
+    $plain = openssl_decrypt(
+        $encrypted,
+        'aes-256-cbc',
+        $key,
+        OPENSSL_RAW_DATA,
+        $iv
+    );
+
+    return $plain === false
+        ? ''
+        : $plain;
+}
+
+/* ============================================================
+ * kintone 設定
  * ============================================================ */
 
 function normalize_subdomain(string $value): string
@@ -650,7 +615,10 @@ function normalize_subdomain(string $value): string
         $value
     );
 
-    $value = trim((string)$value, '/');
+    $value = trim(
+        (string)$value,
+        '/'
+    );
 
     $value = preg_replace(
         '/\.cybozu\.com.*$/i',
@@ -700,21 +668,19 @@ function validate_kintone_config(array $config): array
 {
     $errors = [];
 
-    $subdomain = normalize_subdomain(
-        (string)($config['subdomain'] ?? '')
-    );
+    $subdomain =
+        normalize_subdomain(
+            (string)($config['subdomain'] ?? '')
+        );
 
-    $appId = trim(
-        (string)($config['app_id'] ?? '')
-    );
+    $appId =
+        trim((string)($config['app_id'] ?? ''));
 
-    $username = trim(
-        (string)($config['username'] ?? '')
-    );
+    $username =
+        trim((string)($config['username'] ?? ''));
 
-    $proxy = trim(
-        (string)($config['proxy'] ?? '')
-    );
+    $proxy =
+        trim((string)($config['proxy'] ?? ''));
 
     if (
         $subdomain === ''
@@ -741,7 +707,10 @@ function validate_kintone_config(array $config): array
             'ログイン名を入力してください。';
     }
 
-    if ($proxy !== '' && parse_proxy($proxy) === null) {
+    if (
+        $proxy !== ''
+        && parse_proxy($proxy) === null
+    ) {
         $errors[] =
             'Proxyは「host:port」形式で入力してください。';
     }
@@ -755,13 +724,76 @@ function validate_kintone_config(array $config): array
     ];
 }
 
+/* ============================================================
+ * kintone API定義
+ *
+ * APIごとにパラメータ名を固定する。
+ *
+ * app.json:
+ *   id
+ *
+ * form/fields.json:
+ *   app
+ *
+ * records.json:
+ *   app
+ *
+ * この関係を一箇所に集約し、
+ * 呼び出し側で自由にパラメータを組み立てない。
+ * ============================================================ */
+
+function kintone_endpoint_app_info(
+    string $appId
+): string {
+    return '/k/v1/app.json?'
+        . http_build_query(
+            ['id' => $appId],
+            '',
+            '&',
+            PHP_QUERY_RFC3986
+        );
+}
+
+function kintone_endpoint_fields(
+    string $appId
+): string {
+    return '/k/v1/app/form/fields.json?'
+        . http_build_query(
+            ['app' => $appId],
+            '',
+            '&',
+            PHP_QUERY_RFC3986
+        );
+}
+
+function kintone_endpoint_records(
+    string $appId
+): string {
+    return '/k/v1/records.json?'
+        . http_build_query(
+            [
+                'app' => $appId,
+                'totalCount' => 'true',
+            ],
+            '',
+            '&',
+            PHP_QUERY_RFC3986
+        );
+}
+
+/* ============================================================
+ * kintone API共通通信
+ * ============================================================ */
+
 function kintone_request(
     array $config,
     string $method,
     string $path,
     ?array $body = null
 ): array {
-    $validation = validate_kintone_config($config);
+
+    $validation =
+        validate_kintone_config($config);
 
     if ($validation['errors']) {
         return [
@@ -770,10 +802,11 @@ function kintone_request(
             'status' => 0,
             'code' => '',
             'id' => '',
-            'message' => implode(
-                ' ',
-                $validation['errors']
-            ),
+            'message' =>
+                implode(
+                    ' ',
+                    $validation['errors']
+                ),
             'data' => null,
         ];
     }
@@ -786,8 +819,12 @@ function kintone_request(
         );
     }
 
-    if ($password === '' && !empty($config['password'])) {
-        $password = (string)$config['password'];
+    if (
+        $password === ''
+        && !empty($config['password'])
+    ) {
+        $password =
+            (string)$config['password'];
     }
 
     if ($password === '') {
@@ -805,12 +842,10 @@ function kintone_request(
 
     $host = kintone_host($config);
 
-    if (
-        !preg_match(
-            '/^[A-Za-z0-9-]+\.cybozu\.com$/',
-            $host
-        )
-    ) {
+    if (!preg_match(
+        '/^[A-Za-z0-9-]+\.cybozu\.com$/',
+        $host
+    )) {
         return [
             'ok' => false,
             'category' => '設定エラー',
@@ -823,19 +858,22 @@ function kintone_request(
         ];
     }
 
-    /*
-     * kintone REST APIのURLをここで一元生成。
-     * 認証情報はURLへ含めない。
-     */
-    $url = 'https://' . $host . $path;
+    $url =
+        'https://'
+        . $host
+        . $path;
 
+    /*
+     * 認証情報はサーバー側だけで生成。
+     * ブラウザへ返さない。
+     */
     $headers = [
-        'X-Cybozu-Authorization: ' .
-            base64_encode(
-                (string)$config['username']
-                . ':'
-                . $password
-            ),
+        'X-Cybozu-Authorization: '
+        . base64_encode(
+            (string)$config['username']
+            . ':'
+            . $password
+        ),
         'Accept: application/json',
         'User-Agent: SurveyApp/1.0',
         'Connection: close',
@@ -844,6 +882,7 @@ function kintone_request(
     $content = null;
 
     if ($body !== null) {
+
         $content = json_encode(
             $body,
             JSON_UNESCAPED_UNICODE
@@ -863,21 +902,36 @@ function kintone_request(
             ];
         }
 
-        $headers[] = 'Content-Type: application/json';
         $headers[] =
-            'Content-Length: ' . strlen($content);
+            'Content-Type: application/json';
+
+        $headers[] =
+            'Content-Length: '
+            . strlen($content);
     }
 
-    $proxy = parse_proxy(
-        (string)($config['proxy'] ?? '')
-    );
+    $proxy =
+        parse_proxy(
+            (string)($config['proxy'] ?? '')
+        );
 
     $http = [
-        'method' => strtoupper($method),
-        'header' => implode("\r\n", $headers),
-        'timeout' => 20,
+        'method' =>
+            strtoupper($method),
+        'header' =>
+            implode("\r\n", $headers),
+        'timeout' =>
+            KINTONE_READ_TIMEOUT,
         'ignore_errors' => true,
         'protocol_version' => 1.1,
+
+        /*
+         * kintone APIからの301/302/303等を
+         * PHP側で勝手に追従しない。
+         *
+         * リダイレクトはAPI通信エラーとして
+         * 呼び出し側へ返す。
+         */
         'follow_location' => 0,
         'max_redirects' => 0,
     ];
@@ -896,19 +950,22 @@ function kintone_request(
         $http['request_fulluri'] = true;
     }
 
-    $verifySsl = !empty($config['verify_ssl']);
+    $verifySsl =
+        !empty($config['verify_ssl']);
 
-    $ssl = [
-        'verify_peer' => $verifySsl,
-        'verify_peer_name' => $verifySsl,
-        'allow_self_signed' => !$verifySsl,
-        'SNI_enabled' => true,
-    ];
-
-    $context = stream_context_create([
-        'http' => $http,
-        'ssl' => $ssl,
-    ]);
+    $context =
+        stream_context_create([
+            'http' => $http,
+            'ssl' => [
+                'verify_peer' =>
+                    $verifySsl,
+                'verify_peer_name' =>
+                    $verifySsl,
+                'allow_self_signed' =>
+                    !$verifySsl,
+                'SNI_enabled' => true,
+            ],
+        ]);
 
     $error = '';
 
@@ -932,7 +989,10 @@ function kintone_request(
 
     $status = 0;
 
-    foreach ($http_response_header ?? [] as $header) {
+    foreach (
+        $http_response_header ?? []
+        as $header
+    ) {
         if (preg_match(
             '/^HTTP\/[0-9.]+\s+([0-9]{3})/',
             $header,
@@ -957,19 +1017,27 @@ function kintone_request(
         ];
     }
 
-    $decoded = json_decode(
-        $response,
-        true
-    );
+    $decoded =
+        json_decode(
+            $response,
+            true
+        );
 
-    if ($status >= 200 && $status < 300) {
+    /*
+     * 200系かつJSONが正常なら成功。
+     */
+    if (
+        $status >= 200
+        && $status < 300
+    ) {
         return [
             'ok' => true,
             'category' => '成功',
             'status' => $status,
             'code' => '',
             'id' => '',
-            'message' => 'kintone接続に成功しました。',
+            'message' =>
+                'kintone接続に成功しました。',
             'data' =>
                 is_array($decoded)
                     ? $decoded
@@ -977,41 +1045,65 @@ function kintone_request(
         ];
     }
 
+    /*
+     * kintoneが返したエラー情報を保持。
+     * CB_VA01等を捨てない。
+     */
     $code = '';
     $id = '';
-    $message = 'kintone APIでエラーが発生しました。';
+    $message =
+        'kintone APIでエラーが発生しました。';
 
     if (is_array($decoded)) {
-        $code = (string)(
-            $decoded['code'] ?? ''
-        );
 
-        $id = (string)(
-            $decoded['id'] ?? ''
-        );
+        $code =
+            (string)(
+                $decoded['code'] ?? ''
+            );
 
-        if (!empty($decoded['message'])) {
+        $id =
+            (string)(
+                $decoded['id'] ?? ''
+            );
+
+        if (
+            isset($decoded['message'])
+            && is_scalar(
+                $decoded['message']
+            )
+        ) {
             $message =
                 (string)$decoded['message'];
         }
     }
 
     $category = match (true) {
-        $status === 400 => '入力・APIリクエストエラー',
-        $status === 401 || $status === 403
-            => '認証エラー',
-        $status === 404
-            => '設定エラー',
-        $status === 408
-            => 'タイムアウト',
-        $status === 429
-            => '外部サービスエラー',
-        $status >= 500
-            => '外部サービスエラー',
-        $status >= 300 && $status < 400
-            => 'リダイレクトエラー',
-        default
-            => '通信エラー',
+
+        $status === 400 =>
+            '入力・APIリクエストエラー',
+
+        $status === 401 ||
+        $status === 403 =>
+            '認証エラー',
+
+        $status === 404 =>
+            '設定エラー',
+
+        $status === 408 =>
+            'タイムアウト',
+
+        $status === 429 =>
+            '外部サービスエラー',
+
+        $status >= 500 =>
+            '外部サービスエラー',
+
+        $status >= 300 &&
+        $status < 400 =>
+            'リダイレクトエラー',
+
+        default =>
+            '通信エラー',
     };
 
     return [
@@ -1021,20 +1113,37 @@ function kintone_request(
         'code' => $code,
         'id' => $id,
         'message' => $message,
-        'data' => is_array($decoded)
-            ? $decoded
-            : null,
+        'data' =>
+            is_array($decoded)
+                ? $decoded
+                : null,
     ];
 }
+
+/* ============================================================
+ * kintone API操作
+ * ============================================================ */
 
 function kintone_connection_test(
     array $config
 ): array {
+
+    /*
+     * 重要:
+     *
+     * /k/v1/app.json は
+     * app ではなく id を使用する。
+     *
+     * 以前:
+     *   /k/v1/app.json?app=123
+     *
+     * 正:
+     *   /k/v1/app.json?id=123
+     */
     return kintone_request(
         $config,
         'GET',
-        '/k/v1/app.json?app='
-        . rawurlencode(
+        kintone_endpoint_app_info(
             (string)$config['app_id']
         )
     );
@@ -1043,1831 +1152,1195 @@ function kintone_connection_test(
 function kintone_fetch_fields(
     array $config
 ): array {
+
     return kintone_request(
         $config,
         'GET',
-        '/k/v1/app/form/fields.json?app='
-        . rawurlencode(
+        kintone_endpoint_fields(
             (string)$config['app_id']
         )
     );
 }
 
-function kintone_sync(
+function kintone_fetch_records(
     array $config
 ): array {
-    $result = kintone_request(
+
+    return kintone_request(
         $config,
         'GET',
-        '/k/v1/records.json?'
-        . http_build_query([
-            'app' => (int)$config['app_id'],
-            'totalCount' => 'true',
-        ])
+        kintone_endpoint_records(
+            (string)$config['app_id']
+        )
     );
+}
+
+/* ============================================================
+ * kintone フィールド変換
+ * ============================================================ */
+
+function kintone_field_value(
+    array $record,
+    string $fieldCode
+): string {
+
+    if (
+        !isset($record[$fieldCode])
+        || !is_array($record[$fieldCode])
+    ) {
+        return '';
+    }
+
+    $value =
+        $record[$fieldCode]['value']
+        ?? '';
+
+    if (is_array($value)) {
+
+        $values = [];
+
+        foreach ($value as $item) {
+
+            if (
+                is_array($item)
+                && isset($item['name'])
+            ) {
+                $values[] =
+                    (string)$item['name'];
+            } elseif (
+                is_scalar($item)
+            ) {
+                $values[] =
+                    (string)$item;
+            }
+        }
+
+        return implode(
+            '、',
+            $values
+        );
+    }
+
+    return is_scalar($value)
+        ? (string)$value
+        : '';
+}
+
+function kintone_fields_to_mapping(
+    array $fields
+): array {
+
+    $result = [];
+
+    foreach ($fields as $code => $field) {
+
+        if (!is_array($field)) {
+            continue;
+        }
+
+        $label =
+            (string)(
+                $field['label']
+                ?? $code
+            );
+
+        $result[$code] = [
+            'code' => $code,
+            'label' => $label,
+            'type' =>
+                (string)(
+                    $field['type']
+                    ?? ''
+                ),
+        ];
+    }
+
+    return $result;
+}
+
+function sync_kintone_customers(
+    array $config,
+    array $settings,
+    array &$data
+): array {
+
+    $result =
+        kintone_fetch_records(
+            $config
+        );
 
     if (!$result['ok']) {
         return $result;
     }
 
     $records =
-        $result['data']['records'] ?? [];
+        $result['data']['records']
+        ?? [];
 
     if (!is_array($records)) {
         $records = [];
     }
 
+    $mapping =
+        $settings['mapping']
+        ?? [];
+
     $customers = [];
 
     foreach ($records as $record) {
+
         if (!is_array($record)) {
             continue;
         }
 
-        $get = static function (
-            array $record,
-            string $field
-        ): string {
-            if (
-                !isset($record[$field])
-                || !is_array($record[$field])
-            ) {
-                return '';
-            }
+        $getMapped =
+            static function (
+                array $record,
+                string $key
+            ) use ($mapping): string {
 
-            return (string)(
-                $record[$field]['value'] ?? ''
-            );
-        };
+                $field =
+                    (string)(
+                        $mapping[$key]
+                        ?? ''
+                    );
+
+                if ($field === '') {
+                    return '';
+                }
+
+                return kintone_field_value(
+                    $record,
+                    $field
+                );
+            };
 
         $customers[] = [
             'id' =>
-                'customer-' . count($customers) + 1,
+                'customer-'
+                . (count($customers) + 1),
+
             'organization' =>
-                $get($record, '組織名'),
+                $getMapped(
+                    $record,
+                    'organization'
+                ),
+
             'name' =>
-                $get($record, '氏名'),
+                $getMapped(
+                    $record,
+                    'name'
+                ),
+
             'email' =>
-                $get($record, 'メールアドレス'),
+                $getMapped(
+                    $record,
+                    'email'
+                ),
+
             'department' =>
-                $get($record, '部署名'),
+                $getMapped(
+                    $record,
+                    'department'
+                ),
+
             'phone' =>
-                $get($record, '電話番号'),
+                $getMapped(
+                    $record,
+                    'phone'
+                ),
+
             'address' =>
-                $get($record, '住所'),
-            'updatedAt' => now_iso(),
+                $getMapped(
+                    $record,
+                    'address'
+                ),
+
+            'updatedAt' => now(),
         ];
     }
+
+    $data['customers'] =
+        $customers;
 
     return [
         'ok' => true,
         'category' => '成功',
-        'status' => $result['status'],
+        'status' =>
+            (int)$result['status'],
         'code' => '',
         'id' => '',
         'message' =>
             count($customers)
-            . '件の顧客情報を取得しました。',
-        'customers' => $customers,
+            . '件の顧客情報を同期しました。',
+        'data' => null,
     ];
 }
 
 /* ============================================================
- * SMTP
+ * アンケート
  * ============================================================ */
 
-function validate_mail_config(array $config): array
-{
-    $errors = [];
+function find_survey(
+    array &$data,
+    string $id
+): ?array {
 
-    if (trim((string)$config['server']) === '') {
-        $errors[] = 'SMTPサーバを入力してください。';
-    }
-
-    $port = (int)$config['port'];
-
-    if ($port < 1 || $port > 65535) {
-        $errors[] = 'SMTPポートが不正です。';
-    }
-
-    if (
-        !empty($config['from_email'])
-        && !filter_var(
-            $config['from_email'],
-            FILTER_VALIDATE_EMAIL
-        )
+    foreach (
+        $data['surveys']
+        as &$survey
     ) {
-        $errors[] =
-            '送信元メールアドレスが不正です。';
-    }
-
-    if (
-        !empty($config['reply_to'])
-        && !filter_var(
-            $config['reply_to'],
-            FILTER_VALIDATE_EMAIL
-        )
-    ) {
-        $errors[] =
-            '返信先メールアドレスが不正です。';
-    }
-
-    return $errors;
-}
-
-function smtp_open(array $config): array
-{
-    $errors = validate_mail_config($config);
-
-    if ($errors) {
-        return [
-            'ok' => false,
-            'message' => implode(' ', $errors),
-        ];
-    }
-
-    $password = '';
-
-    if (!empty($config['password_encrypted'])) {
-        $password = decrypt_secret(
-            (string)$config['password_encrypted']
-        );
-    }
-
-    $server =
-        (string)$config['server'];
-
-    $port =
-        (int)$config['port'];
-
-    $encryption =
-        (string)$config['encryption'];
-
-    $transport = 'tcp://';
-
-    if ($encryption === 'ssl') {
-        $transport = 'ssl://';
-    }
-
-    $errorNo = 0;
-    $errorStr = '';
-
-    $socket = @stream_socket_client(
-        $transport
-        . $server
-        . ':'
-        . $port,
-        $errorNo,
-        $errorStr,
-        15
-    );
-
-    if (!is_resource($socket)) {
-        return [
-            'ok' => false,
-            'message' =>
-                'SMTPへ接続できませんでした。'
-                . ($errorStr !== ''
-                    ? ' ' . $errorStr
-                    : ''),
-        ];
-    }
-
-    stream_set_timeout($socket, 15);
-
-    $read = static function ($socket): string {
-        $result = '';
-
-        while (!feof($socket)) {
-            $line = fgets($socket, 4096);
-
-            if ($line === false) {
-                break;
-            }
-
-            $result .= $line;
-
-            if (
-                isset($line[3])
-                && $line[3] === ' '
-            ) {
-                break;
-            }
-        }
-
-        return $result;
-    };
-
-    $write = static function (
-        $socket,
-        string $command
-    ): string {
-        fwrite(
-            $socket,
-            $command . "\r\n"
-        );
-
-        $result = '';
-
-        while (!feof($socket)) {
-            $line = fgets($socket, 4096);
-
-            if ($line === false) {
-                break;
-            }
-
-            $result .= $line;
-
-            if (
-                isset($line[3])
-                && $line[3] === ' '
-            ) {
-                break;
-            }
-        }
-
-        return $result;
-    };
-
-    $greeting = $read($socket);
-
-    if (
-        !preg_match(
-            '/^2[0-9]{2}/m',
-            $greeting
-        )
-    ) {
-        fclose($socket);
-
-        return [
-            'ok' => false,
-            'message' =>
-                'SMTPサーバから正常な応答がありません。',
-        ];
-    }
-
-    $ehlo = $write(
-        $socket,
-        'EHLO localhost'
-    );
-
-    if (
-        !preg_match(
-            '/^2[0-9]{2}/m',
-            $ehlo
-        )
-    ) {
-        fclose($socket);
-
-        return [
-            'ok' => false,
-            'message' =>
-                'SMTP EHLOに失敗しました。',
-        ];
-    }
-
-    if ($encryption === 'tls') {
-        $startTls = $write(
-            $socket,
-            'STARTTLS'
-        );
-
         if (
-            !preg_match(
-                '/^220/m',
-                $startTls
-            )
+            isset($survey['id'])
+            && $survey['id'] === $id
         ) {
-            fclose($socket);
 
-            return [
-                'ok' => false,
-                'message' =>
-                    'SMTP STARTTLSに失敗しました。',
-            ];
-        }
+            auto_end_survey($survey);
 
-        $crypto = @stream_socket_enable_crypto(
-            $socket,
-            true,
-            STREAM_CRYPTO_METHOD_TLS_CLIENT
-        );
-
-        if ($crypto !== true) {
-            fclose($socket);
-
-            return [
-                'ok' => false,
-                'message' =>
-                    'TLS暗号化を開始できませんでした。',
-            ];
-        }
-
-        $ehlo = $write(
-            $socket,
-            'EHLO localhost'
-        );
-    }
-
-    if (!empty($config['auth'])) {
-        if ($password === '') {
-            fclose($socket);
-
-            return [
-                'ok' => false,
-                'message' =>
-                    'SMTPパスワードが設定されていません。',
-            ];
-        }
-
-        $auth = $write(
-            $socket,
-            'AUTH LOGIN'
-        );
-
-        if (!preg_match('/^334/m', $auth)) {
-            fclose($socket);
-
-            return [
-                'ok' => false,
-                'message' =>
-                    'SMTP認証を開始できません。',
-            ];
-        }
-
-        $userResponse = $write(
-            $socket,
-            base64_encode(
-                (string)$config['username']
-            )
-        );
-
-        if (!preg_match('/^334/m', $userResponse)) {
-            fclose($socket);
-
-            return [
-                'ok' => false,
-                'message' =>
-                    'SMTPユーザー名を受け付けませんでした。',
-            ];
-        }
-
-        $passwordResponse = $write(
-            $socket,
-            base64_encode($password)
-        );
-
-        if (!preg_match('/^235/m', $passwordResponse)) {
-            fclose($socket);
-
-            return [
-                'ok' => false,
-                'message' =>
-                    'SMTP認証に失敗しました。',
-            ];
+            return $survey;
         }
     }
 
-    return [
-        'ok' => true,
-        'socket' => $socket,
-        'read' => $read,
-        'write' => $write,
-    ];
+    return null;
 }
 
-function smtp_test(array $config): array
-{
-    $result = smtp_open($config);
+function auto_end_survey(
+    array &$survey
+): void {
 
-    if (!$result['ok']) {
-        return $result;
+    if (
+        ($survey['status'] ?? '')
+        !== 'published'
+    ) {
+        return;
     }
 
-    $socket = $result['socket'];
+    $endAt =
+        (string)(
+            $survey['endAt']
+            ?? ''
+        );
 
-    fwrite(
-        $socket,
-        "QUIT\r\n"
-    );
+    if ($endAt === '') {
+        return;
+    }
 
-    fclose($socket);
+    $time =
+        strtotime($endAt);
 
-    return [
-        'ok' => true,
-        'message' =>
-            'SMTP接続・認証に成功しました。',
-    ];
+    if (
+        $time !== false
+        && $time < time()
+    ) {
+        $survey['status'] = 'ended';
+        $survey['updatedAt'] = now();
+    }
+}
+
+function recalc_question_numbers(
+    array &$survey
+): void {
+
+    $global = 1;
+    $groupNo = 1;
+
+    foreach (
+        $survey['groups']
+        as &$group
+    ) {
+
+        $questionNo = 1;
+
+        foreach (
+            $group['questions']
+            as &$question
+        ) {
+
+            if (
+                ($survey['numbering'] ?? 'global')
+                === 'group'
+            ) {
+
+                $question['number'] =
+                    'Q'
+                    . $groupNo
+                    . '-'
+                    . $questionNo;
+
+            } else {
+
+                $question['number'] =
+                    'Q'
+                    . $global;
+            }
+
+            $questionNo++;
+            $global++;
+        }
+
+        unset($question);
+
+        $groupNo++;
+    }
+
+    unset($group);
 }
 
 /* ============================================================
  * POST処理
- *
- * 重要:
- * 設定画面のPOST後に302/303を返して処理結果を失わない。
- * 同一リクエストで画面を再描画する。
  * ============================================================ */
 
 function handle_post(
-    array &$surveys,
-    array &$customers,
-    array &$answers,
-    array &$history,
-    array &$kintone,
-    array &$mail
-): array {
-    $action = post_string('action');
+    array &$data,
+    array &$settings
+): void {
+
+    $action =
+        post_string('action');
 
     if ($action === '') {
-        return [
-            'screen' => 'list',
-        ];
+        return;
     }
 
     try {
-        switch ($action) {
 
-            /* ------------------------------------------------
-             * kintone設定保存
-             * ------------------------------------------------ */
+        /* ----------------------------------------------------
+         * kintone 設定保存
+         * ---------------------------------------------------- */
 
-            case 'save_kintone':
-                $subdomain =
-                    normalize_subdomain(
-                        post_string('subdomain')
-                    );
+        if (
+            $action ===
+            'kintone_save'
+        ) {
 
-                $appId =
-                    post_string('app_id');
-
-                $username =
-                    post_string('username');
-
-                $password =
-                    post_string('password');
-
-                $proxy =
-                    post_string('proxy');
-
-                $verifySsl =
-                    isset($_POST['verify_ssl']);
-
-                $candidate = [
-                    'subdomain' => $subdomain,
-                    'app_id' => $appId,
-                    'username' => $username,
-                    'proxy' => $proxy,
-                    'verify_ssl' => $verifySsl,
-                ];
-
-                $validation =
-                    validate_kintone_config(
-                        $candidate
-                    );
-
-                if ($validation['errors']) {
-                    throw new InvalidArgumentException(
-                        implode(
-                            ' ',
-                            $validation['errors']
-                        )
-                    );
-                }
-
-                /*
-                 * パスワード未入力の場合は既存値を維持。
-                 */
-                $encrypted =
-                    (string)(
-                        $kintone[
-                            'password_encrypted'
-                        ] ?? ''
-                    );
-
-                if ($password !== '') {
-                    $encrypted =
-                        encrypt_secret(
-                            $password
-                        );
-                }
-
-                $kintone = array_merge(
-                    $kintone,
-                    [
-                        'subdomain' => $subdomain,
-                        'app_id' => $appId,
-                        'username' => $username,
-                        'password_encrypted' =>
-                            $encrypted,
-                        'proxy' => $proxy,
-                        'verify_ssl' => $verifySsl,
-                    ]
+            $subdomain =
+                normalize_subdomain(
+                    post_string('subdomain')
                 );
 
-                if (!save_kintone($kintone)) {
-                    throw new RuntimeException(
-                        'kintone設定を保存できません。'
-                    );
-                }
+            $appId =
+                post_string('app_id');
+
+            $username =
+                post_string('username');
+
+            $proxy =
+                post_string('proxy');
+
+            $password =
+                post_string('password');
+
+            $verifySsl =
+                post_bool('verify_ssl');
+
+            $config = [
+                'subdomain' =>
+                    $subdomain,
+
+                'app_id' =>
+                    $appId,
+
+                'username' =>
+                    $username,
+
+                'proxy' =>
+                    $proxy,
+
+                'verify_ssl' =>
+                    $verifySsl,
+            ];
+
+            $validation =
+                validate_kintone_config(
+                    $config
+                );
+
+            if ($validation['errors']) {
 
                 flash(
-                    'success',
-                    'kintone設定を保存しました。'
+                    'error',
+                    implode(
+                        ' ',
+                        $validation['errors']
+                    )
                 );
 
-                return [
-                    'screen' => 'kintone',
-                ];
+                return;
+            }
 
-            /* ------------------------------------------------
-             * kintone接続テスト
-             * ------------------------------------------------ */
+            $current =
+                $settings['kintone'];
 
-            case 'test_kintone':
-                $candidate = $kintone;
+            $current['subdomain'] =
+                $subdomain;
 
-                $candidate['subdomain'] =
-                    normalize_subdomain(
-                        post_string('subdomain')
-                    );
+            $current['app_id'] =
+                $appId;
 
-                $candidate['app_id'] =
-                    post_string('app_id');
+            $current['username'] =
+                $username;
 
-                $candidate['username'] =
-                    post_string('username');
+            $current['proxy'] =
+                $proxy;
 
-                $candidate['proxy'] =
-                    post_string('proxy');
+            $current['verify_ssl'] =
+                $verifySsl;
 
-                $candidate['verify_ssl'] =
-                    isset($_POST['verify_ssl']);
-
-                $newPassword =
-                    post_string('password');
-
-                if ($newPassword !== '') {
-                    $candidate[
-                        'password_encrypted'
-                    ] = encrypt_secret(
-                        $newPassword
-                    );
-                }
-
-                $validation =
-                    validate_kintone_config(
-                        $candidate
-                    );
-
-                if ($validation['errors']) {
-                    $_SESSION[
-                        'kintone_test_result'
-                    ] = [
-                        'ok' => false,
-                        'category' => '入力エラー',
-                        'status' => 0,
-                        'code' => '',
-                        'id' => '',
-                        'message' =>
-                            implode(
-                                ' ',
-                                $validation['errors']
-                            ),
-                    ];
-
-                    return [
-                        'screen' => 'kintone',
-                    ];
-                }
-
-                $result =
-                    kintone_connection_test(
-                        $candidate
-                    );
-
-                $_SESSION[
-                    'kintone_test_result'
-                ] = $result;
-
-                if ($result['ok']) {
-                    $kintone['status'] =
-                        '接続確認済み';
-
-                    $kintone['last_test'] =
-                        now_iso();
-
-                    save_kintone($kintone);
-                } else {
-                    $kintone['status'] =
-                        '接続できません';
-
-                    save_kintone($kintone);
-                }
-
-                return [
-                    'screen' => 'kintone',
-                ];
-
-            /* ------------------------------------------------
-             * kintone項目取得
-             * ------------------------------------------------ */
-
-            case 'fetch_kintone_fields':
-                $result =
-                    kintone_fetch_fields(
-                        $kintone
-                    );
-
-                if (!$result['ok']) {
-                    $_SESSION[
-                        'kintone_fields_result'
-                    ] = $result;
-
-                    return [
-                        'screen' => 'kintone',
-                    ];
-                }
-
-                $fields = [];
-
-                foreach (
-                    ($result['data']['properties'] ?? [])
-                    as $code => $field
-                ) {
-                    if (!is_array($field)) {
-                        continue;
-                    }
-
-                    $label =
-                        (string)(
-                            $field['label']
-                            ?? $code
-                        );
-
-                    $fields[] = [
-                        'code' => (string)$code,
-                        'label' => $label,
-                        'type' =>
-                            (string)(
-                                $field['type'] ?? ''
-                            ),
-                    ];
-                }
-
-                usort(
-                    $fields,
-                    static fn(
-                        array $a,
-                        array $b
-                    ): int =>
-                        strcmp(
-                            $a['label'],
-                            $b['label']
-                        )
-                );
-
-                $kintone['fields'] =
-                    $fields;
-
-                save_kintone($kintone);
-
-                $_SESSION[
-                    'kintone_fields_result'
-                ] = [
-                    'ok' => true,
-                    'category' => '成功',
-                    'status' =>
-                        $result['status'],
-                    'message' =>
-                        count($fields)
-                        . '件の項目を取得しました。',
-                ];
-
-                return [
-                    'screen' => 'kintone',
-                ];
-
-            /* ------------------------------------------------
-             * kintoneマッピング保存
-             * ------------------------------------------------ */
-
-            case 'save_kintone_mapping':
-                $kintone['mapping'] = [
-                    'organization' =>
-                        post_string(
-                            'mapping_organization'
-                        ),
-                    'name' =>
-                        post_string(
-                            'mapping_name'
-                        ),
-                    'email' =>
-                        post_string(
-                            'mapping_email'
-                        ),
-                    'department' =>
-                        post_string(
-                            'mapping_department'
-                        ),
-                    'phone' =>
-                        post_string(
-                            'mapping_phone'
-                        ),
-                    'address' =>
-                        post_array(
-                            'mapping_address'
-                        ),
-                ];
-
-                if (!save_kintone($kintone)) {
-                    throw new RuntimeException(
-                        'マッピングを保存できません。'
-                    );
-                }
-
-                flash(
-                    'success',
-                    '項目マッピングを保存しました。'
-                );
-
-                return [
-                    'screen' => 'kintone',
-                ];
-
-            /* ------------------------------------------------
-             * kintone顧客同期
-             * ------------------------------------------------ */
-
-            case 'sync_kintone':
-                $result =
-                    kintone_sync(
-                        $kintone
-                    );
-
-                if (!$result['ok']) {
-                    $_SESSION[
-                        'kintone_sync_result'
-                    ] = $result;
-
-                    return [
-                        'screen' => 'kintone',
-                    ];
-                }
-
-                $customers =
-                    $result['customers'];
-
-                $kintone['last_sync'] =
-                    now_iso();
-
-                save_kintone($kintone);
-                save_customers($customers);
-
-                $_SESSION[
-                    'kintone_sync_result'
-                ] = $result;
-
-                return [
-                    'screen' => 'kintone',
-                ];
-
-            /* ------------------------------------------------
-             * メール設定保存
-             * ------------------------------------------------ */
-
-            case 'save_mail':
-                $candidate = [
-                    'server' =>
-                        post_string('server'),
-                    'port' =>
-                        (int)post_string('port'),
-                    'encryption' =>
-                        post_string('encryption'),
-                    'auth' =>
-                        isset($_POST['auth']),
-                    'username' =>
-                        post_string('username'),
-                    'from_email' =>
-                        post_string('from_email'),
-                    'from_name' =>
-                        post_string('from_name'),
-                    'reply_to' =>
-                        post_string('reply_to'),
-                ];
-
-                $errors =
-                    validate_mail_config(
-                        $candidate
-                    );
-
-                if ($errors) {
-                    throw new InvalidArgumentException(
-                        implode(' ', $errors)
-                    );
-                }
-
-                $password =
-                    post_string('password');
-
-                $encrypted =
-                    (string)(
-                        $mail['password_encrypted']
-                        ?? ''
-                    );
-
-                if ($password !== '') {
-                    $encrypted =
-                        encrypt_secret(
-                            $password
-                        );
-                }
-
-                $mail = array_merge(
-                    $mail,
-                    $candidate,
-                    [
-                        'password_encrypted' =>
-                            $encrypted,
-                    ]
-                );
-
-                if (!save_mail($mail)) {
-                    throw new RuntimeException(
-                        'メール設定を保存できません。'
-                    );
-                }
-
-                flash(
-                    'success',
-                    'メール設定を保存しました。'
-                );
-
-                return [
-                    'screen' => 'mail',
-                ];
-
-            /* ------------------------------------------------
-             * SMTP接続テスト
-             * ------------------------------------------------ */
-
-            case 'test_mail':
-                $candidate = $mail;
-
-                foreach (
-                    [
-                        'server',
-                        'encryption',
-                        'username',
-                        'from_email',
-                        'from_name',
-                        'reply_to',
-                    ] as $key
-                ) {
-                    $candidate[$key] =
-                        post_string($key);
-                }
-
-                $candidate['port'] =
-                    (int)post_string('port');
-
-                $candidate['auth'] =
-                    isset($_POST['auth']);
-
-                $password =
-                    post_string('password');
-
-                if ($password !== '') {
-                    $candidate[
-                        'password_encrypted'
-                    ] = encrypt_secret(
+            if ($password !== '') {
+                $current[
+                    'password_encrypted'
+                ] =
+                    encrypt_secret(
                         $password
                     );
-                }
+            }
 
-                $result =
-                    smtp_test($candidate);
+            $settings['kintone'] =
+                $current;
 
-                $_SESSION[
-                    'mail_test_result'
-                ] = $result;
+            save_json(
+                SETTINGS_FILE,
+                $settings
+            );
 
-                if ($result['ok']) {
-                    $mail['status'] =
-                        '接続確認済み';
+            flash(
+                'success',
+                'kintone設定を保存しました。'
+            );
 
-                    $mail['last_test'] =
-                        now_iso();
+            redirect_screen(
+                'kintone'
+            );
+        }
 
-                    save_mail($mail);
-                } else {
-                    $mail['status'] =
-                        '接続できません';
+        /* ----------------------------------------------------
+         * kintone 接続テスト
+         * ---------------------------------------------------- */
 
-                    save_mail($mail);
-                }
+        if (
+            $action ===
+            'kintone_test'
+        ) {
 
-                return [
-                    'screen' => 'mail',
-                ];
+            /*
+             * 画面入力を一時設定として使用。
+             * 保存処理とは分離する。
+             */
+            $config =
+                $settings['kintone'];
 
-            /* ------------------------------------------------
-             * アンケート保存
-             * ------------------------------------------------ */
+            $config['subdomain'] =
+                post_string(
+                    'subdomain'
+                );
 
-            case 'save_survey':
-                $id =
-                    post_string('survey_id');
+            $config['app_id'] =
+                post_string(
+                    'app_id'
+                );
 
-                $title =
-                    post_string('title');
+            $config['username'] =
+                post_string(
+                    'username'
+                );
 
-                if ($title === '') {
-                    throw new InvalidArgumentException(
-                        'アンケートタイトルを入力してください。'
-                    );
-                }
+            $config['proxy'] =
+                post_string(
+                    'proxy'
+                );
 
-                $survey =
-                    $id !== ''
-                        ? find_survey(
-                            $surveys,
-                            $id
-                        )
-                        : null;
+            $config['verify_ssl'] =
+                post_bool(
+                    'verify_ssl'
+                );
 
-                if ($survey === null) {
-                    $survey =
-                        new_survey();
+            $password =
+                post_string(
+                    'password'
+                );
 
-                    if ($id !== '') {
-                        $survey['id'] =
-                            $id;
-                    }
-                }
+            if ($password !== '') {
+                $config['password'] =
+                    $password;
+            }
 
-                $survey['title'] =
-                    $title;
+            /*
+             * 実際のkintone APIへ接続。
+             *
+             * ここでは画面遷移用の
+             * LocationヘッダーをAPIへ渡さない。
+             */
+            $result =
+                kintone_connection_test(
+                    $config
+                );
 
-                $survey['description'] =
-                    post_string('description');
+            $settings[
+                'kintone'
+            ][
+                'last_test'
+            ] = [
+                'at' => now(),
+                'ok' =>
+                    $result['ok'],
+                'status' =>
+                    $result['status'],
+                'code' =>
+                    $result['code'],
+                'id' =>
+                    $result['id'],
+            ];
 
-                $survey['startAt'] =
-                    post_string('startAt');
+            save_json(
+                SETTINGS_FILE,
+                $settings
+            );
 
-                $survey['endAt'] =
-                    post_string('endAt');
+            if ($result['ok']) {
 
-                $survey['numbering'] =
-                    post_string('numbering')
-                    ?: 'global';
+                flash(
+                    'success',
+                    'kintone接続テストに成功しました。'
+                );
+
+            } else {
+
+                $detail =
+                    'kintone接続テストに失敗しました。';
 
                 if (
-                    !in_array(
-                        $survey['numbering'],
-                        ['global', 'group'],
-                        true
-                    )
+                    $result['status'] > 0
                 ) {
-                    $survey['numbering'] =
-                        'global';
+                    $detail .=
+                        ' HTTP '
+                        . $result['status'];
                 }
 
-                $survey['updatedAt'] =
-                    now_iso();
+                if (
+                    $result['code'] !== ''
+                ) {
+                    $detail .=
+                        ' / エラーコード: '
+                        . $result['code'];
+                }
 
-                recalc_question_numbers(
+                if (
+                    $result['id'] !== ''
+                ) {
+                    $detail .=
+                        ' / エラーID: '
+                        . $result['id'];
+                }
+
+                $detail .=
+                    ' / '
+                    . $result['message'];
+
+                flash(
+                    'error',
+                    $detail
+                );
+            }
+
+            redirect_screen(
+                'kintone'
+            );
+        }
+
+        /* ----------------------------------------------------
+         * kintone 項目再取得
+         * ---------------------------------------------------- */
+
+        if (
+            $action ===
+            'kintone_fields'
+        ) {
+
+            $result =
+                kintone_fetch_fields(
+                    $settings['kintone']
+                );
+
+            if (!$result['ok']) {
+
+                flash(
+                    'error',
+                    '項目一覧の取得に失敗しました。'
+                    . ' HTTP '
+                    . $result['status']
+                    . ' / '
+                    . $result['code']
+                    . ' / '
+                    . $result['message']
+                );
+
+                redirect_screen(
+                    'kintone'
+                );
+            }
+
+            $fields =
+                $result['data']['properties']
+                ?? [];
+
+            if (!is_array($fields)) {
+                $fields = [];
+            }
+
+            $settings[
+                'kintone'
+            ][
+                'fields'
+            ] =
+                kintone_fields_to_mapping(
+                    $fields
+                );
+
+            save_json(
+                SETTINGS_FILE,
+                $settings
+            );
+
+            flash(
+                'success',
+                'kintoneの項目一覧を取得しました。'
+            );
+
+            redirect_screen(
+                'kintone'
+            );
+        }
+
+        /* ----------------------------------------------------
+         * kintone 顧客同期
+         * ---------------------------------------------------- */
+
+        if (
+            $action ===
+            'kintone_sync'
+        ) {
+
+            $result =
+                sync_kintone_customers(
+                    $settings['kintone'],
+                    $settings['kintone'],
+                    $data
+                );
+
+            if (!$result['ok']) {
+
+                flash(
+                    'error',
+                    '顧客情報の同期に失敗しました。'
+                    . ' HTTP '
+                    . $result['status']
+                    . ' / '
+                    . $result['code']
+                    . ' / '
+                    . $result['message']
+                );
+
+            } else {
+
+                $settings[
+                    'kintone'
+                ][
+                    'last_sync'
+                ] = [
+                    'at' => now(),
+                    'count' =>
+                        count(
+                            $data['customers']
+                        ),
+                ];
+
+                save_json(
+                    DATA_FILE,
+                    $data
+                );
+
+                save_json(
+                    SETTINGS_FILE,
+                    $settings
+                );
+
+                flash(
+                    'success',
+                    $result['message']
+                );
+            }
+
+            redirect_screen(
+                'kintone'
+            );
+        }
+
+        /* ----------------------------------------------------
+         * アンケート保存
+         * ---------------------------------------------------- */
+
+        if (
+            $action ===
+            'survey_save'
+        ) {
+
+            $id =
+                post_string('id');
+
+            if (
+                $id !== ''
+                && !safe_id($id)
+            ) {
+                throw new RuntimeException(
+                    'アンケートIDが不正です。'
+                );
+            }
+
+            $survey = null;
+
+            foreach (
+                $data['surveys']
+                as &$item
+            ) {
+
+                if (
+                    $item['id'] === $id
+                ) {
+                    $survey =& $item;
+                    break;
+                }
+            }
+
+            if ($survey === null) {
+
+                $survey = [
+                    'id' =>
+                        $id !== ''
+                            ? $id
+                            : new_id('survey'),
+
+                    'createdAt' => now(),
+                    'groups' => [],
+                ];
+
+                $data['surveys'][] =
+                    $survey;
+
+                $survey =&
+                    $data['surveys'][
+                        array_key_last(
+                            $data['surveys']
+                        )
+                    ];
+            }
+
+            $survey['title'] =
+                post_string('title');
+
+            $survey['description'] =
+                post_string(
+                    'description'
+                );
+
+            $survey['startAt'] =
+                post_string(
+                    'startAt'
+                );
+
+            $survey['endAt'] =
+                post_string(
+                    'endAt'
+                );
+
+            $numbering =
+                post_string(
+                    'numbering'
+                );
+
+            $survey['numbering'] =
+                in_array(
+                    $numbering,
+                    ['global', 'group'],
+                    true
+                )
+                    ? $numbering
+                    : 'global';
+
+            $survey['status'] =
+                $survey['status']
+                ?? 'draft';
+
+            $survey['updatedAt'] =
+                now();
+
+            recalc_question_numbers(
+                $survey
+            );
+
+            save_json(
+                DATA_FILE,
+                $data
+            );
+
+            flash(
+                'success',
+                'アンケートを保存しました。'
+            );
+
+            redirect_screen(
+                'list'
+            );
+        }
+
+        /* ----------------------------------------------------
+         * アンケート削除
+         * ---------------------------------------------------- */
+
+        if (
+            $action ===
+            'survey_delete'
+        ) {
+
+            $id =
+                post_string('id');
+
+            $data['surveys'] =
+                array_values(
+                    array_filter(
+                        $data['surveys'],
+                        static fn(
+                            array $survey
+                        ): bool =>
+                            $survey['id']
+                            !== $id
+                    )
+                );
+
+            save_json(
+                DATA_FILE,
+                $data
+            );
+
+            flash(
+                'success',
+                'アンケートを削除しました。'
+            );
+
+            redirect_screen(
+                'list'
+            );
+        }
+
+        /* ----------------------------------------------------
+         * アンケート複製
+         * ---------------------------------------------------- */
+
+        if (
+            $action ===
+            'survey_duplicate'
+        ) {
+
+            $id =
+                post_string('id');
+
+            $source = null;
+
+            foreach (
+                $data['surveys']
+                as $survey
+            ) {
+                if (
+                    $survey['id'] === $id
+                ) {
+                    $source = $survey;
+                    break;
+                }
+            }
+
+            if ($source === null) {
+                throw new RuntimeException(
+                    '複製対象が見つかりません。'
+                );
+            }
+
+            $source['id'] =
+                new_id('survey');
+
+            $source['title'] =
+                $source['title']
+                . '（コピー）';
+
+            $source['status'] =
+                'draft';
+
+            $source['createdAt'] =
+                now();
+
+            $source['updatedAt'] =
+                now();
+
+            $data['surveys'][] =
+                $source;
+
+            save_json(
+                DATA_FILE,
+                $data
+            );
+
+            flash(
+                'success',
+                'アンケートを複製しました。'
+            );
+
+            redirect_screen(
+                'list'
+            );
+        }
+
+        /* ----------------------------------------------------
+         * 状態変更
+         * ---------------------------------------------------- */
+
+        if (
+            $action ===
+            'survey_status'
+        ) {
+
+            $id =
+                post_string('id');
+
+            $status =
+                post_string('status');
+
+            $allowed = [
+                'draft',
+                'published',
+                'stopped',
+            ];
+
+            if (
+                !in_array(
+                    $status,
+                    $allowed,
+                    true
+                )
+            ) {
+                throw new RuntimeException(
+                    '状態が不正です。'
+                );
+            }
+
+            foreach (
+                $data['surveys']
+                as &$survey
+            ) {
+
+                if (
+                    $survey['id'] !== $id
+                ) {
+                    continue;
+                }
+
+                auto_end_survey(
                     $survey
                 );
 
-                $index =
-                    survey_index(
-                        $surveys,
-                        $survey['id']
-                    );
-
-                if ($index >= 0) {
-                    /*
-                     * 既存編集では状態を維持。
-                     */
-                    $survey['status'] =
-                        $surveys[$index]['status']
-                        ?? 'draft';
-
-                    $surveys[$index] =
-                        $survey;
-                } else {
-                    $survey['status'] =
-                        'draft';
-
-                    $survey['createdAt'] =
-                        now_iso();
-
-                    $surveys[] =
-                        $survey;
-                }
-
-                if (!save_surveys($surveys)) {
-                    throw new RuntimeException(
-                        'アンケートを保存できません。'
-                    );
-                }
-
-                flash(
-                    'success',
-                    'アンケートを保存しました。'
-                );
-
-                /*
-                 * PRGではなく同一POSTで一覧を表示。
-                 * 環境側の303/302に依存しない。
-                 */
-                return [
-                    'screen' => 'list',
-                ];
-
-            /* ------------------------------------------------
-             * 削除
-             * ------------------------------------------------ */
-
-            case 'delete_survey':
-                $id =
-                    post_string('survey_id');
-
-                $index =
-                    survey_index(
-                        $surveys,
-                        $id
-                    );
-
-                if ($index < 0) {
-                    throw new InvalidArgumentException(
-                        '削除対象が見つかりません。'
-                    );
-                }
-
-                array_splice(
-                    $surveys,
-                    $index,
-                    1
-                );
-
-                save_surveys($surveys);
-
-                flash(
-                    'success',
-                    'アンケートを削除しました。'
-                );
-
-                return [
-                    'screen' => 'list',
-                ];
-
-            /* ------------------------------------------------
-             * 複製
-             * ------------------------------------------------ */
-
-            case 'duplicate_survey':
-                $id =
-                    post_string('survey_id');
-
-                $survey =
-                    find_survey(
-                        $surveys,
-                        $id
-                    );
-
-                if ($survey === null) {
-                    throw new InvalidArgumentException(
-                        '複製対象が見つかりません。'
-                    );
-                }
-
-                $copy =
-                    $survey;
-
-                $copy['id'] =
-                    new_id('survey');
-
-                $copy['title'] =
-                    (string)$copy['title']
-                    . '（コピー）';
-
-                $copy['status'] =
-                    'draft';
-
-                $copy['createdAt'] =
-                    now_iso();
-
-                $copy['updatedAt'] =
-                    now_iso();
-
-                $surveys[] =
-                    $copy;
-
-                save_surveys($surveys);
-
-                flash(
-                    'success',
-                    'アンケートを複製しました。'
-                );
-
-                return [
-                    'screen' => 'list',
-                ];
-
-            /* ------------------------------------------------
-             * 状態変更
-             * ------------------------------------------------ */
-
-            case 'change_status':
-                $id =
-                    post_string('survey_id');
-
-                $next =
-                    post_string('next_status');
-
-                $index =
-                    survey_index(
-                        $surveys,
-                        $id
-                    );
-
-                if ($index < 0) {
-                    throw new InvalidArgumentException(
-                        '対象アンケートが見つかりません。'
-                    );
-                }
-
-                $current =
-                    $surveys[$index]['status']
-                    ?? 'draft';
-
-                $allowed = [
-                    'draft' =>
-                        ['published'],
-                    'published' =>
-                        ['stopped'],
-                    'stopped' =>
-                        ['published'],
-                    'ended' =>
-                        [],
-                ];
-
                 if (
-                    !in_array(
-                        $next,
-                        $allowed[$current]
-                        ?? [],
-                        true
-                    )
-                ) {
-                    throw new InvalidArgumentException(
-                        '指定された状態変更はできません。'
-                    );
-                }
-
-                $surveys[$index]['status'] =
-                    $next;
-
-                $surveys[$index]['updatedAt'] =
-                    now_iso();
-
-                save_surveys($surveys);
-
-                flash(
-                    'success',
-                    '状態を変更しました。'
-                );
-
-                return [
-                    'screen' => 'list',
-                ];
-
-            /* ------------------------------------------------
-             * 回答
-             * ------------------------------------------------ */
-
-            case 'answer':
-                $id =
-                    post_string('survey_id');
-
-                $survey =
-                    find_survey(
-                        $surveys,
-                        $id
-                    );
-
-                if ($survey === null) {
-                    throw new InvalidArgumentException(
-                        'アンケートが見つかりません。'
-                    );
-                }
-
-                if (
-                    ($survey['status'] ?? '')
-                    !== 'published'
-                ) {
-                    throw new InvalidArgumentException(
-                        'このアンケートは現在回答できません。'
-                    );
-                }
-
-                $answersDraft = [];
-
-                foreach (
-                    $survey['groups'] ?? []
-                    as $group
-                ) {
-                    foreach (
-                        $group['questions'] ?? []
-                        as $question
-                    ) {
-                        $qid =
-                            (string)$question['id'];
-
-                        $value =
-                            $_POST[
-                                'answer_' . $qid
-                            ] ?? '';
-
-                        if (
-                            ($question['type'] ?? '')
-                            === 'multiple'
-                        ) {
-                            $value =
-                                is_array($value)
-                                    ? array_values(
-                                        array_filter(
-                                            array_map(
-                                                'strval',
-                                                $value
-                                            )
-                                        )
-                                    )
-                                    : [];
-                        } else {
-                            $value =
-                                is_scalar($value)
-                                    ? trim(
-                                        (string)$value
-                                    )
-                                    : '';
-                        }
-
-                        if (
-                            !empty(
-                                $question['required']
-                            )
-                            && (
-                                $value === ''
-                                || $value === []
-                            )
-                        ) {
-                            throw new InvalidArgumentException(
-                                '必須項目が未回答です。'
-                            );
-                        }
-
-                        $answersDraft[$qid] =
-                            $value;
-                    }
-                }
-
-                $_SESSION[
-                    'answer_draft'
-                ] = [
-                    'survey_id' => $id,
-                    'answers' =>
-                        $answersDraft,
-                ];
-
-                return [
-                    'screen' => 'confirm',
-                    'id' => $id,
-                ];
-
-            /* ------------------------------------------------
-             * 回答確定
-             * ------------------------------------------------ */
-
-            case 'finalize_answer':
-                $draft =
-                    $_SESSION[
-                        'answer_draft'
-                    ] ?? null;
-
-                if (!is_array($draft)) {
-                    throw new RuntimeException(
-                        '回答状態が見つかりません。'
-                    );
-                }
-
-                $surveyId =
-                    (string)(
-                        $draft['survey_id']
-                        ?? ''
-                    );
-
-                if (
-                    $surveyId === ''
-                    || !safe_id($surveyId)
+                    $survey['status']
+                    === 'ended'
                 ) {
                     throw new RuntimeException(
-                        '回答対象が不正です。'
+                        '終了したアンケートの状態は変更できません。'
                     );
                 }
 
-                $answers[] = [
-                    'id' =>
-                        new_id('answer'),
-                    'survey_id' =>
-                        $surveyId,
-                    'answers' =>
-                        $draft['answers']
-                        ?? [],
-                    'createdAt' =>
-                        now_iso(),
-                ];
+                $survey['status'] =
+                    $status;
 
-                save_answers($answers);
+                $survey['updatedAt'] =
+                    now();
 
-                unset(
-                    $_SESSION[
-                        'answer_draft'
-                    ]
-                );
+                break;
+            }
 
-                return [
-                    'screen' => 'complete',
-                ];
+            unset($survey);
 
-            /* ------------------------------------------------
-             * メール送信
-             * ------------------------------------------------ */
+            save_json(
+                DATA_FILE,
+                $data
+            );
 
-            case 'send_mail':
-                $surveyId =
-                    post_string('survey_id');
+            flash(
+                'success',
+                '状態を変更しました。'
+            );
 
-                $survey =
-                    find_survey(
-                        $surveys,
-                        $surveyId
-                    );
-
-                if ($survey === null) {
-                    throw new InvalidArgumentException(
-                        '対象アンケートが見つかりません。'
-                    );
-                }
-
-                $selected =
-                    post_array(
-                        'customer_ids'
-                    );
-
-                if (!$selected) {
-                    throw new InvalidArgumentException(
-                        '送信対象を選択してください。'
-                    );
-                }
-
-                $subject =
-                    post_string('subject');
-
-                $body =
-                    (string)(
-                        $_POST['body']
-                        ?? ''
-                    );
-
-                if ($subject === '') {
-                    throw new InvalidArgumentException(
-                        'メール件名を入力してください。'
-                    );
-                }
-
-                /*
-                 * POCでも実際のSMTP接続を使用する。
-                 * ここではSMTP設定を確認してから送信。
-                 */
-                $smtp =
-                    smtp_open($mail);
-
-                if (!$smtp['ok']) {
-                    throw new RuntimeException(
-                        $smtp['message']
-                    );
-                }
-
-                $socket =
-                    $smtp['socket'];
-
-                $read =
-                    $smtp['read'];
-
-                $write =
-                    $smtp['write'];
-
-                $sent = 0;
-
-                foreach ($customers as $customer) {
-                    if (
-                        !in_array(
-                            (string)$customer['id'],
-                            $selected,
-                            true
-                        )
-                    ) {
-                        continue;
-                    }
-
-                    $email =
-                        trim(
-                            (string)(
-                                $customer['email']
-                                ?? ''
-                            )
-                        );
-
-                    if (
-                        !filter_var(
-                            $email,
-                            FILTER_VALIDATE_EMAIL
-                        )
-                    ) {
-                        continue;
-                    }
-
-                    $name =
-                        (string)(
-                            $customer['name']
-                            ?? ''
-                        );
-
-                    $url =
-                        app_url([
-                            'screen' =>
-                                'answer',
-                            'id' =>
-                                $surveyId,
-                        ]);
-
-                    $personalBody =
-                        str_replace(
-                            [
-                                '{顧客名}',
-                                '{アンケートURL}',
-                            ],
-                            [
-                                $name,
-                                $url,
-                            ],
-                            $body
-                        );
-
-                    $write(
-                        $socket,
-                        'MAIL FROM:<'
-                        . $mail['from_email']
-                        . '>'
-                    );
-
-                    $write(
-                        $socket,
-                        'RCPT TO:<'
-                        . $email
-                        . '>'
-                    );
-
-                    $dataResult =
-                        $write(
-                            $socket,
-                            'DATA'
-                        );
-
-                    if (
-                        !preg_match(
-                            '/^354/m',
-                            $dataResult
-                        )
-                    ) {
-                        continue;
-                    }
-
-                    $headers = [];
-
-                    $headers[] =
-                        'From: '
-                        . $mail['from_name']
-                        . ' <'
-                        . $mail['from_email']
-                        . '>';
-
-                    $headers[] =
-                        'To: <'
-                        . $email
-                        . '>';
-
-                    $headers[] =
-                        'Subject: =?UTF-8?B?'
-                        . base64_encode(
-                            $subject
-                        )
-                        . '?=';
-
-                    if (
-                        !empty(
-                            $mail['reply_to']
-                        )
-                    ) {
-                        $headers[] =
-                            'Reply-To: '
-                            . $mail['reply_to'];
-                    }
-
-                    $headers[] =
-                        'MIME-Version: 1.0';
-
-                    $headers[] =
-                        'Content-Type: text/plain; charset=UTF-8';
-
-                    $message =
-                        implode(
-                            "\r\n",
-                            $headers
-                        )
-                        . "\r\n\r\n"
-                        . $personalBody
-                        . "\r\n.";
-
-                    $response =
-                        $write(
-                            $socket,
-                            $message
-                        );
-
-                    if (
-                        preg_match(
-                            '/^250/m',
-                            $response
-                        )
-                    ) {
-                        $sent++;
-
-                        $history[] = [
-                            'id' =>
-                                new_id('send'),
-                            'survey_id' =>
-                                $surveyId,
-                            'customer_id' =>
-                                $customer['id'],
-                            'customer_name' =>
-                                $name,
-                            'email' =>
-                                $email,
-                            'type' =>
-                                'send',
-                            'status' =>
-                                'sent',
-                            'createdAt' =>
-                                now_iso(),
-                        ];
-                    }
-                }
-
-                $write(
-                    $socket,
-                    'QUIT'
-                );
-
-                fclose($socket);
-
-                save_history($history);
-
-                $_SESSION[
-                    'send_result'
-                ] = [
-                    'ok' => true,
-                    'sent' => $sent,
-                    'message' =>
-                        $sent . '件送信しました。',
-                ];
-
-                return [
-                    'screen' => 'send',
-                    'id' => $surveyId,
-                ];
-
-            default:
-                throw new InvalidArgumentException(
-                    '不明な操作です。'
-                );
+            redirect_screen(
+                'list'
+            );
         }
-    } catch (
-        InvalidArgumentException $e
-    ) {
+
+        /* ----------------------------------------------------
+         * 回答
+         * ---------------------------------------------------- */
+
+        if (
+            $action ===
+            'answer_submit'
+        ) {
+
+            $surveyId =
+                post_string(
+                    'survey_id'
+                );
+
+            $survey =
+                find_survey(
+                    $data,
+                    $surveyId
+                );
+
+            if ($survey === null) {
+                throw new RuntimeException(
+                    'アンケートが見つかりません。'
+                );
+            }
+
+            $_SESSION[
+                'answer_' . $surveyId
+            ] =
+                $_POST['answer']
+                ?? [];
+
+            redirect_screen(
+                'confirm',
+                [
+                    'id' =>
+                        $surveyId,
+                ]
+            );
+        }
+
+        /* ----------------------------------------------------
+         * 回答確定
+         * ---------------------------------------------------- */
+
+        if (
+            $action ===
+            'answer_confirm'
+        ) {
+
+            $surveyId =
+                post_string(
+                    'survey_id'
+                );
+
+            $answer =
+                $_SESSION[
+                    'answer_' . $surveyId
+                ]
+                ?? [];
+
+            $data['answers'][] = [
+                'id' =>
+                    new_id('answer'),
+                'surveyId' =>
+                    $surveyId,
+                'answers' =>
+                    $answer,
+                'createdAt' =>
+                    now(),
+            ];
+
+            unset(
+                $_SESSION[
+                    'answer_' . $surveyId
+                ]
+            );
+
+            save_json(
+                DATA_FILE,
+                $data
+            );
+
+            redirect_screen(
+                'complete',
+                [
+                    'id' =>
+                        $surveyId,
+                ]
+            );
+        }
+
+    } catch (Throwable $e) {
+
+        /*
+         * システム内部情報はそのまま表示しない。
+         */
         flash(
             'error',
             $e->getMessage()
         );
-
-        return [
-            'screen' =>
-                post_string(
-                    'return_screen'
-                ) ?: 'list',
-            'id' =>
-                post_string(
-                    'survey_id'
-                ),
-        ];
-    } catch (Throwable $e) {
-        flash(
-            'error',
-            '処理に失敗しました。'
-            . '入力値、設定値、通信状態を確認してください。'
-        );
-
-        return [
-            'screen' =>
-                post_string(
-                    'return_screen'
-                ) ?: 'list',
-            'id' =>
-                post_string(
-                    'survey_id'
-                ),
-        ];
     }
 }
 
 /* ============================================================
- * POST実行
+ * POST処理実行
  * ============================================================ */
 
-$surveys =
-    load_surveys();
+$data =
+    load_data();
 
-$customers =
-    load_customers();
+$settings =
+    load_settings();
 
-$answers =
-    load_answers();
-
-$history =
-    load_history();
-
-$kintone =
-    load_kintone();
-
-$mail =
-    load_mail();
-
-refresh_all_statuses(
-    $surveys
-);
-
-$postResult = null;
-
-if (
-    ($_SERVER['REQUEST_METHOD'] ?? 'GET')
-    === 'POST'
-) {
-    $postResult =
-        handle_post(
-            $surveys,
-            $customers,
-            $answers,
-            $history,
-            $kintone,
-            $mail
-        );
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    handle_post(
+        $data,
+        $settings
+    );
 }
 
+/*
+ * GET時にも終了状態を自動判定。
+ */
+foreach (
+    $data['surveys']
+    as &$survey
+) {
+    auto_end_survey(
+        $survey
+    );
+}
+unset($survey);
+
+save_json(
+    DATA_FILE,
+    $data
+);
+
+/* ============================================================
+ * 画面
+ * ============================================================ */
+
 $screen =
-    is_array($postResult)
-        ? (string)(
-            $postResult['screen']
-            ?? 'list'
-        )
-        : get_string('screen');
+    get_string('screen');
 
 if ($screen === '') {
     $screen = 'list';
 }
 
-$id =
-    is_array($postResult)
-        ? (string)(
-            $postResult['id']
-            ?? get_string('id')
-        )
-        : get_string('id');
+$surveyId =
+    get_string('id');
+
+$flash =
+    take_flash();
 
 /* ============================================================
- * CSV
+ * 共通HTML
  * ============================================================ */
 
-if ($screen === 'csv') {
-    $survey =
-        find_survey(
-            $surveys,
-            $id
-        );
-
-    if ($survey === null) {
-        http_response_code(404);
-        exit('アンケートが見つかりません。');
-    }
-
-    $rows = [];
-
-    foreach ($answers as $answer) {
-        if (
-            ($answer['survey_id'] ?? '')
-            !== $survey['id']
-        ) {
-            continue;
-        }
-
-        $row = [
-            '回答日時' =>
-                $answer['createdAt'] ?? '',
-        ];
-
-        foreach (
-            $survey['groups'] ?? []
-            as $group
-        ) {
-            foreach (
-                $group['questions'] ?? []
-                as $question
-            ) {
-                $qid =
-                    (string)$question['id'];
-
-                $value =
-                    $answer['answers'][$qid]
-                    ?? '';
-
-                if (is_array($value)) {
-                    $value =
-                        implode(
-                            '、',
-                            $value
-                        );
-                }
-
-                $row[
-                    $question['number']
-                    . ' '
-                    . $question['text']
-                ] = $value;
-            }
-        }
-
-        $rows[] = $row;
-    }
-
-    header(
-        'Content-Type: text/csv; charset=UTF-8'
-    );
-
-    header(
-        'Content-Disposition: attachment; filename="survey-'
-        . rawurlencode($survey['id'])
-        . '.csv"'
-    );
-
-    echo "\xEF\xBB\xBF";
-
-    if ($rows) {
-        $fp = fopen('php://output', 'w');
-
-        fputcsv(
-            $fp,
-            array_keys($rows[0])
-        );
-
-        foreach ($rows as $row) {
-            fputcsv(
-                $fp,
-                array_values($row)
-            );
-        }
-
-        fclose($fp);
-    }
-
-    exit;
-}
-
-/* ============================================================
- * HTML共通
- * ============================================================ */
-
-function render_head(
+function render_header(
     string $title,
     bool $admin = true
 ): void {
@@ -2881,7 +2354,7 @@ function render_head(
 <title><?= h($title) ?> - <?= h(APP_TITLE) ?></title>
 
 <style>
-:root{
+:root {
     --primary:#2563eb;
     --primary-dark:#1d4ed8;
     --success:#16a34a;
@@ -2895,17 +2368,17 @@ function render_head(
     --shadow:0 4px 18px rgba(15,23,42,.08);
 }
 
-*{
+* {
     box-sizing:border-box;
 }
 
 html,
-body{
+body {
     margin:0;
     padding:0;
 }
 
-body{
+body {
     background:#f8fafc;
     color:var(--text);
     font-family:
@@ -2916,1635 +2389,1057 @@ body{
         "Hiragino Kaku Gothic ProN",
         Meiryo,
         sans-serif;
-    line-height:1.6;
 }
 
-a{
+a {
     color:var(--primary);
+    text-decoration:none;
 }
 
 button,
 input,
-select,
-textarea{
+textarea,
+select {
     font:inherit;
 }
 
-.container{
-    width:min(1200px,calc(100% - 32px));
-    margin:0 auto;
+button {
+    cursor:pointer;
 }
 
-.admin-header{
+.admin-header {
     background:#0f172a;
     color:#fff;
+    padding:16px 24px;
 }
 
-.admin-header-inner{
-    width:min(1200px,calc(100% - 32px));
-    margin:0 auto;
-    min-height:64px;
+.admin-header-inner {
+    max-width:1400px;
+    margin:auto;
     display:flex;
     align-items:center;
     justify-content:space-between;
     gap:20px;
 }
 
-.brand{
-    font-size:18px;
-    font-weight:800;
-    white-space:nowrap;
-}
-
-.nav{
-    display:flex;
-    gap:4px;
-    overflow-x:auto;
-}
-
-.nav a{
-    color:#cbd5e1;
-    text-decoration:none;
-    padding:20px 14px;
-    font-size:14px;
-    white-space:nowrap;
-}
-
-.nav a.active,
-.nav a:hover{
+.admin-header a {
     color:#fff;
-    background:rgba(255,255,255,.08);
 }
 
-.page{
-    padding:28px 0 48px;
+.brand {
+    font-weight:700;
+    font-size:18px;
 }
 
-.page-title{
+.nav {
     display:flex;
-    align-items:flex-start;
-    justify-content:space-between;
-    gap:16px;
-    margin-bottom:20px;
+    gap:8px;
+    flex-wrap:wrap;
 }
 
-.page-title h1{
-    margin:0;
-    font-size:25px;
-    line-height:1.3;
+.nav a {
+    padding:8px 12px;
+    border-radius:8px;
+    color:#cbd5e1;
 }
 
-.page-title p{
-    margin:6px 0 0;
+.nav a:hover {
+    background:#1e293b;
+    color:#fff;
+}
+
+.container {
+    max-width:1400px;
+    margin:0 auto;
+    padding:28px 24px 60px;
+}
+
+.answer-container {
+    max-width:760px;
+    margin:0 auto;
+    padding:24px 16px 60px;
+}
+
+.page-title {
+    margin:0 0 6px;
+    font-size:26px;
+}
+
+.page-description {
     color:var(--gray);
-    font-size:14px;
+    margin:0 0 24px;
 }
 
-.card{
+.card {
     background:#fff;
     border:1px solid var(--border);
     border-radius:12px;
     box-shadow:var(--shadow);
-    margin-bottom:18px;
+    padding:22px;
+    margin-bottom:20px;
 }
 
-.card-header{
-    padding:16px 20px;
-    border-bottom:1px solid var(--border);
+.toolbar {
     display:flex;
+    align-items:center;
     justify-content:space-between;
-    align-items:center;
     gap:12px;
-}
-
-.card-header h2{
-    margin:0;
-    font-size:18px;
-}
-
-.card-body{
-    padding:20px;
-}
-
-.grid{
-    display:grid;
-    gap:16px;
-}
-
-.grid-2{
-    grid-template-columns:repeat(2,minmax(0,1fr));
-}
-
-.grid-3{
-    grid-template-columns:repeat(3,minmax(0,1fr));
-}
-
-.form-group{
-    margin-bottom:16px;
-}
-
-label{
-    display:block;
-    font-weight:600;
-}
-
-label > span{
-    display:block;
-    margin-bottom:6px;
-}
-
-input,
-select,
-textarea{
-    width:100%;
-    border:1px solid #cbd5e1;
-    border-radius:8px;
-    padding:10px 12px;
-    color:var(--text);
-    background:#fff;
-}
-
-textarea{
-    min-height:120px;
-    resize:vertical;
-}
-
-input:focus,
-select:focus,
-textarea:focus{
-    outline:none;
-    border-color:var(--primary);
-    box-shadow:0 0 0 3px rgba(37,99,235,.12);
-}
-
-.help{
-    margin-top:5px;
-    color:var(--gray);
-    font-size:13px;
-    font-weight:400;
-}
-
-.button-row{
-    display:flex;
-    gap:10px;
+    margin-bottom:20px;
     flex-wrap:wrap;
-    align-items:center;
 }
 
-.btn{
+.button {
     display:inline-flex;
     align-items:center;
     justify-content:center;
-    gap:5px;
     min-height:40px;
-    border:0;
+    padding:9px 16px;
+    border:1px solid transparent;
     border-radius:8px;
-    padding:9px 15px;
-    cursor:pointer;
-    text-decoration:none;
-    font-weight:600;
+    background:#fff;
+    color:var(--text);
 }
 
-.btn-primary{
+.button.primary {
     background:var(--primary);
     color:#fff;
 }
 
-.btn-primary:hover{
+.button.primary:hover {
     background:var(--primary-dark);
 }
 
-.btn-success{
+.button.success {
     background:var(--success);
     color:#fff;
 }
 
-.btn-warning{
-    background:var(--warning);
-    color:#fff;
-}
-
-.btn-danger{
+.button.danger {
     background:var(--danger);
     color:#fff;
 }
 
-.btn-secondary{
-    background:#e2e8f0;
-    color:#334155;
+.button.secondary {
+    border-color:var(--border);
 }
 
-.btn-light{
-    background:#f8fafc;
-    color:#334155;
-    border:1px solid var(--border);
-}
-
-.btn:disabled{
-    opacity:.55;
+.button:disabled {
+    opacity:.5;
     cursor:not-allowed;
 }
 
-.alert{
-    padding:13px 15px;
-    border-radius:9px;
+.form-grid {
+    display:grid;
+    grid-template-columns:
+        repeat(2,minmax(0,1fr));
+    gap:18px;
+}
+
+.form-group {
+    display:flex;
+    flex-direction:column;
+    gap:7px;
+}
+
+.form-group.full {
+    grid-column:1/-1;
+}
+
+.form-label {
+    font-weight:600;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="number"],
+input[type="datetime-local"],
+textarea,
+select {
+    width:100%;
+    border:1px solid var(--border);
+    border-radius:8px;
+    padding:10px 12px;
+    background:#fff;
+    color:var(--text);
+}
+
+textarea {
+    min-height:110px;
+    resize:vertical;
+}
+
+.actions {
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+    margin-top:20px;
+}
+
+.alert {
+    border-radius:10px;
+    padding:13px 16px;
     margin-bottom:16px;
 }
 
-.alert-success{
+.alert.success {
+    background:#ecfdf5;
     color:#166534;
-    background:#dcfce7;
     border:1px solid #bbf7d0;
 }
 
-.alert-error{
+.alert.error {
+    background:#fef2f2;
     color:#991b1b;
-    background:#fee2e2;
     border:1px solid #fecaca;
 }
 
-.alert-warning{
-    color:#92400e;
-    background:#fef3c7;
-    border:1px solid #fde68a;
-}
-
-.alert-info{
-    color:#1e40af;
-    background:#dbeafe;
-    border:1px solid #bfdbfe;
-}
-
-.table-scroll{
+.table-wrap {
     overflow-x:auto;
 }
 
-table{
+table {
     width:100%;
-    min-width:760px;
     border-collapse:collapse;
+    min-width:950px;
 }
 
 th,
-td{
-    padding:11px 12px;
+td {
+    padding:12px 10px;
     border-bottom:1px solid var(--border);
     text-align:left;
     vertical-align:middle;
 }
 
-th{
+th {
     background:#f8fafc;
-    font-size:13px;
+    font-weight:700;
 }
 
-.badge{
-    display:inline-block;
+.badge {
+    display:inline-flex;
+    padding:4px 9px;
     border-radius:999px;
-    padding:3px 9px;
     font-size:12px;
     font-weight:700;
 }
 
-.badge-success{
-    color:#166534;
-    background:#dcfce7;
-}
-
-.badge-warning{
-    color:#92400e;
-    background:#fef3c7;
-}
-
-.badge-danger{
-    color:#991b1b;
-    background:#fee2e2;
-}
-
-.badge-draft{
-    color:#475569;
+.badge.draft {
     background:#e2e8f0;
-}
-
-.badge-gray{
     color:#475569;
-    background:#f1f5f9;
 }
 
-.toolbar{
-    display:flex;
-    justify-content:space-between;
-    gap:12px;
-    flex-wrap:wrap;
-    margin-bottom:16px;
+.badge.published {
+    background:#dcfce7;
+    color:#166534;
 }
 
-.toolbar-left,
-.toolbar-right{
-    display:flex;
-    gap:8px;
-    flex-wrap:wrap;
-    align-items:center;
+.badge.stopped {
+    background:#fef3c7;
+    color:#92400e;
 }
 
-.stat-grid{
+.badge.ended {
+    background:#fee2e2;
+    color:#991b1b;
+}
+
+.grid {
     display:grid;
-    grid-template-columns:repeat(4,minmax(0,1fr));
-    gap:14px;
-    margin-bottom:18px;
+    grid-template-columns:
+        repeat(3,minmax(0,1fr));
+    gap:16px;
 }
 
-.stat{
+.stat {
     background:#fff;
     border:1px solid var(--border);
     border-radius:12px;
-    padding:18px;
+    padding:20px;
     box-shadow:var(--shadow);
 }
 
-.stat-label{
+.stat-label {
     color:var(--gray);
     font-size:13px;
 }
 
-.stat-value{
+.stat-value {
     font-size:28px;
-    font-weight:800;
-    margin-top:4px;
+    font-weight:700;
+    margin-top:6px;
 }
 
-.question-card{
+.question {
     border:1px solid var(--border);
     border-radius:10px;
-    background:#fff;
+    padding:18px;
     margin-bottom:14px;
-}
-
-.question-head{
-    display:flex;
-    justify-content:space-between;
-    gap:12px;
-    padding:12px 14px;
-    background:#f8fafc;
-    border-bottom:1px solid var(--border);
-}
-
-.question-body{
-    padding:16px;
-}
-
-.group-card{
-    border:1px solid #cbd5e1;
-    border-radius:12px;
-    margin-bottom:18px;
     background:#fff;
 }
 
-.group-head{
+.question-title {
+    font-weight:700;
+    margin-bottom:12px;
+}
+
+.option {
     display:flex;
-    justify-content:space-between;
-    gap:12px;
-    padding:14px 16px;
-    background:#f1f5f9;
-    border-bottom:1px solid var(--border);
     align-items:center;
-}
-
-.drag-handle{
-    cursor:grab;
-    color:var(--gray);
-}
-
-.option-row{
-    display:flex;
-    gap:8px;
-    margin-bottom:8px;
-}
-
-.preview-question{
-    padding:18px 0;
-    border-bottom:1px solid var(--border);
-}
-
-.preview-question:last-child{
-    border-bottom:0;
-}
-
-.required{
-    color:var(--danger);
-    font-size:12px;
-    margin-left:5px;
-}
-
-.answer-option{
-    display:flex;
-    align-items:flex-start;
     gap:10px;
-    padding:10px 12px;
-    border:1px solid var(--border);
-    border-radius:8px;
-    margin-bottom:8px;
-    cursor:pointer;
+    padding:8px 0;
 }
 
-.answer-option:hover{
-    background:#f8fafc;
-}
-
-.loading-overlay{
-    display:none;
-    position:fixed;
-    inset:0;
-    background:rgba(15,23,42,.35);
-    z-index:1000;
-    align-items:center;
-    justify-content:center;
-}
-
-.loading-box{
-    background:#fff;
-    border-radius:12px;
-    padding:25px 30px;
-    box-shadow:var(--shadow);
-    text-align:center;
-}
-
-.spinner{
-    width:28px;
-    height:28px;
-    border:3px solid #dbeafe;
-    border-top-color:var(--primary);
-    border-radius:50%;
-    animation:spin .8s linear infinite;
-    margin:0 auto 10px;
-}
-
-@keyframes spin{
-    to{transform:rotate(360deg)}
-}
-
-.empty{
-    padding:36px 20px;
-    text-align:center;
-    color:var(--gray);
-}
-
-.sticky-actions{
-    position:sticky;
-    bottom:0;
-    z-index:10;
-    background:rgba(248,250,252,.95);
-    border-top:1px solid var(--border);
-    padding:14px 0;
-}
-
-.kpi{
-    display:flex;
-    gap:10px;
-    flex-wrap:wrap;
-}
-
-.kpi-item{
-    background:#f8fafc;
-    border:1px solid var(--border);
-    border-radius:8px;
-    padding:10px 14px;
-}
-
-.notice{
-    background:#eff6ff;
-    border-left:4px solid var(--primary);
-    padding:12px 14px;
+.group-title {
+    font-size:18px;
+    font-weight:700;
     margin-bottom:16px;
 }
 
-pre.debug{
-    white-space:pre-wrap;
-    word-break:break-word;
-    background:#0f172a;
-    color:#e2e8f0;
-    padding:12px;
-    border-radius:8px;
-    font-size:12px;
+.kintone-status {
+    display:flex;
+    gap:12px;
+    flex-wrap:wrap;
+    align-items:center;
 }
 
-@media(max-width:900px){
-    .grid-2,
-    .grid-3,
-    .stat-grid{
+.muted {
+    color:var(--gray);
+}
+
+.text-danger {
+    color:var(--danger);
+}
+
+.text-success {
+    color:var(--success);
+}
+
+.preview-frame {
+    background:#fff;
+    border:1px solid var(--border);
+    border-radius:12px;
+    padding:30px;
+    box-shadow:var(--shadow);
+}
+
+.mobile-preview {
+    max-width:430px;
+    margin:auto;
+}
+
+.empty {
+    padding:50px 20px;
+    text-align:center;
+    color:var(--gray);
+}
+
+@media (max-width:800px) {
+
+    .container {
+        padding:20px 14px 40px;
+    }
+
+    .admin-header {
+        padding:14px;
+    }
+
+    .admin-header-inner {
+        align-items:flex-start;
+        flex-direction:column;
+    }
+
+    .form-grid {
         grid-template-columns:1fr;
     }
 
-    .admin-header-inner{
-        align-items:flex-start;
-        flex-direction:column;
-        padding:10px 0;
+    .form-group.full {
+        grid-column:auto;
     }
 
-    .nav{
-        width:100%;
-    }
-}
-
-@media(max-width:600px){
-    .container{
-        width:min(100% - 20px,1200px);
+    .grid {
+        grid-template-columns:1fr;
     }
 
-    .page{
-        padding-top:18px;
+    .page-title {
+        font-size:22px;
     }
 
-    .page-title{
-        flex-direction:column;
+    .card {
+        padding:16px;
     }
 
-    .btn{
+    .button {
         min-height:44px;
-    }
-
-    input,
-    select,
-    textarea{
-        font-size:16px;
-    }
-
-    .card-body{
-        padding:15px;
-    }
-
-    .group-head,
-    .question-head{
-        flex-direction:column;
-        align-items:flex-start;
     }
 }
 </style>
 </head>
 <body>
+
 <?php if ($admin): ?>
+
 <header class="admin-header">
 <div class="admin-header-inner">
-    <div class="brand"><?= h(APP_TITLE) ?></div>
 
-    <nav class="nav">
-        <a href="<?= h(app_url(['screen'=>'list'])) ?>">
-            アンケート一覧
-        </a>
-        <a href="<?= h(app_url(['screen'=>'kintone'])) ?>">
-            kintone設定
-        </a>
-        <a href="<?= h(app_url(['screen'=>'mail'])) ?>">
-            メール設定
-        </a>
-    </nav>
+<a class="brand"
+   href="<?= h(app_url(['screen'=>'list'])) ?>">
+    アンケート管理
+</a>
+
+<nav class="nav">
+<a href="<?= h(app_url(['screen'=>'list'])) ?>">
+    アンケート一覧
+</a>
+<a href="<?= h(app_url(['screen'=>'kintone'])) ?>">
+    kintone連携
+</a>
+<a href="<?= h(app_url(['screen'=>'mail'])) ?>">
+    メール設定
+</a>
+</nav>
+
 </div>
 </header>
+
 <?php endif; ?>
 
-<div class="container">
-<div class="page">
 <?php
 }
 
 function render_footer(): void
 {
 ?>
-</div>
-</div>
-
-<div class="loading-overlay" id="loadingOverlay">
-    <div class="loading-box">
-        <div class="spinner"></div>
-        <div>処理中です。しばらくお待ちください。</div>
-    </div>
-</div>
-
-<script>
-document.querySelectorAll('form[data-loading]')
-    .forEach(function(form){
-        form.addEventListener('submit',function(){
-            var overlay =
-                document.getElementById('loadingOverlay');
-
-            if (overlay) {
-                overlay.style.display = 'flex';
-            }
-
-            form.querySelectorAll(
-                'button[type="submit"]'
-            ).forEach(function(button){
-                button.disabled = true;
-            });
-        });
-    });
-
-document.querySelectorAll('[data-confirm]')
-    .forEach(function(element){
-        element.addEventListener('click',function(event){
-            var message =
-                element.getAttribute('data-confirm');
-
-            if (
-                message
-                && !window.confirm(message)
-            ) {
-                event.preventDefault();
-            }
-        });
-    });
-
-document.querySelectorAll('[data-dismiss]')
-    .forEach(function(element){
-        element.addEventListener('click',function(){
-            element.remove();
-        });
-    });
-</script>
 </body>
 </html>
 <?php
 }
 
 /* ============================================================
- * 共通アラート
+ * Flash表示
  * ============================================================ */
 
-function render_flash(): void
-{
-    $flash = consume_flash();
+function render_flash(
+    array $flash
+): void {
 
-    if (!$flash) {
-        return;
+    foreach ($flash as $item) {
+
+        $type =
+            $item['type']
+            ?? 'error';
+
+        $message =
+            $item['message']
+            ?? '';
+
+        ?>
+        <div class="alert <?= h($type) ?>">
+            <?= h($message) ?>
+        </div>
+        <?php
     }
-
-    $type =
-        (string)($flash['type'] ?? 'info');
-
-    $class =
-        match ($type) {
-            'success' => 'alert-success',
-            'error' => 'alert-error',
-            'warning' => 'alert-warning',
-            default => 'alert-info',
-        };
-?>
-<div class="alert <?= h($class) ?>">
-    <?= h($flash['message'] ?? '') ?>
-</div>
-<?php
 }
 
 /* ============================================================
  * 一覧
  * ============================================================ */
 
-function render_list(array $surveys): void
-{
-    $q =
-        get_string('q');
+if ($screen === 'list') {
 
-    $status =
-        get_string('status');
-
-    $sort =
-        get_string('sort');
-
-    $filtered = [];
-
-    foreach ($surveys as $survey) {
-        if (
-            $q !== ''
-            && mb_stripos(
-                (string)$survey['title'],
-                $q
-            ) === false
-        ) {
-            continue;
-        }
-
-        if (
-            $status !== ''
-            && $status !== 'all'
-            && ($survey['status'] ?? 'draft')
-                !== $status
-        ) {
-            continue;
-        }
-
-        $filtered[] =
-            $survey;
-    }
-
-    usort(
-        $filtered,
-        static function(
-            array $a,
-            array $b
-        ) use ($sort): int {
-            return match ($sort) {
-                'updated_old' =>
-                    strcmp(
-                        (string)$a['updatedAt'],
-                        (string)$b['updatedAt']
-                    ),
-                'answers_desc',
-                'answers_asc' => 0,
-                'start_desc' =>
-                    strcmp(
-                        (string)$b['startAt'],
-                        (string)$a['startAt']
-                    ),
-                'start_asc' =>
-                    strcmp(
-                        (string)$a['startAt'],
-                        (string)$b['startAt']
-                    ),
-                default =>
-                    strcmp(
-                        (string)$b['updatedAt'],
-                        (string)$a['updatedAt']
-                    ),
-            };
-        }
+    render_header(
+        'アンケート一覧'
     );
-
-    render_head('アンケート一覧');
 ?>
-<div class="page-title">
-    <div>
-        <h1>アンケート一覧</h1>
-        <p>アンケートの作成・公開・集計・送信を管理します。</p>
-    </div>
 
-    <a class="btn btn-primary"
-       href="<?= h(app_url(['screen'=>'edit'])) ?>">
-        ＋ 新規作成
-    </a>
-</div>
+<main class="container">
 
-<?php render_flash(); ?>
+<h1 class="page-title">
+    アンケート一覧
+</h1>
 
-<div class="card">
-<div class="card-body">
+<p class="page-description">
+    アンケートの作成・公開・回答状況を管理します。
+</p>
 
-<form method="get" class="toolbar">
-    <input type="hidden"
-           name="screen"
-           value="list">
+<?php render_flash($flash); ?>
 
-    <div class="toolbar-left">
-        <input
-            type="search"
-            name="q"
-            value="<?= h($q) ?>"
-            placeholder="タイトルを検索"
-            style="min-width:260px">
+<div class="toolbar">
 
-        <select name="status">
-            <option value="all">すべて</option>
-            <option value="published"
-                <?= $status==='published'?'selected':'' ?>>
-                公開中
-            </option>
-            <option value="draft"
-                <?= $status==='draft'?'selected':'' ?>>
-                下書き
-            </option>
-            <option value="stopped"
-                <?= $status==='stopped'?'selected':'' ?>>
-                停止
-            </option>
-            <option value="ended"
-                <?= $status==='ended'?'selected':'' ?>>
-                終了
-            </option>
-        </select>
+<form method="get"
+      style="display:flex;gap:8px;flex:1;max-width:500px">
 
-        <button class="btn btn-secondary"
-                type="submit">
-            検索
-        </button>
-    </div>
+<input type="hidden"
+       name="screen"
+       value="list">
 
-    <div class="toolbar-right">
-        <select name="sort"
-                onchange="this.form.submit()">
-            <option value="">更新日：新しい順</option>
-            <option value="updated_old"
-                <?= $sort==='updated_old'?'selected':'' ?>>
-                更新日：古い順
-            </option>
-            <option value="answers_desc"
-                <?= $sort==='answers_desc'?'selected':'' ?>>
-                回答数：多い順
-            </option>
-            <option value="answers_asc"
-                <?= $sort==='answers_asc'?'selected':'' ?>>
-                回答数：少ない順
-            </option>
-            <option value="start_desc"
-                <?= $sort==='start_desc'?'selected':'' ?>>
-                開始日：新しい順
-            </option>
-            <option value="start_asc"
-                <?= $sort==='start_asc'?'selected':'' ?>>
-                開始日：古い順
-            </option>
-        </select>
-    </div>
+<input type="text"
+       name="q"
+       value="<?= h(get_string('q')) ?>"
+       placeholder="タイトルで検索">
+
+<button class="button secondary">
+    検索
+</button>
+
 </form>
 
-<div class="table-scroll">
+<a class="button primary"
+   href="<?= h(app_url(['screen'=>'edit'])) ?>">
+    ＋ 新規作成
+</a>
+
+</div>
+
+<div class="card">
+
+<?php
+
+$q =
+    mb_strtolower(
+        get_string('q')
+    );
+
+$surveys =
+    $data['surveys'];
+
+if ($q !== '') {
+
+    $surveys =
+        array_filter(
+            $surveys,
+            static function (
+                array $survey
+            ) use ($q): bool {
+
+                return mb_strpos(
+                    mb_strtolower(
+                        (string)(
+                            $survey['title']
+                            ?? ''
+                        )
+                    ),
+                    $q
+                ) !== false;
+            }
+        );
+}
+
+?>
+
+<div class="table-wrap">
+
 <table>
+
 <thead>
 <tr>
-    <th>タイトル</th>
-    <th>期間</th>
-    <th>状態</th>
-    <th>回答数</th>
-    <th>更新日</th>
-    <th>操作</th>
+<th>タイトル</th>
+<th>作成日</th>
+<th>更新日</th>
+<th>期間</th>
+<th>状態</th>
+<th>回答数</th>
+<th>操作</th>
 </tr>
 </thead>
+
 <tbody>
-<?php if (!$filtered): ?>
+
+<?php if (!$surveys): ?>
+
 <tr>
-    <td colspan="6">
-        <div class="empty">
-            アンケートがありません。
-        </div>
-    </td>
+<td colspan="7">
+<div class="empty">
+    アンケートがありません。
+</div>
+</td>
 </tr>
+
 <?php else: ?>
-<?php foreach ($filtered as $survey): ?>
+
+<?php foreach ($surveys as $survey): ?>
+
 <?php
-    $answerCount = 0;
+$status =
+    $survey['status']
+    ?? 'draft';
+
+$statusLabel = [
+    'draft' =>
+        '下書き',
+    'published' =>
+        '公開中',
+    'stopped' =>
+        '停止',
+    'ended' =>
+        '終了',
+][$status] ?? $status;
+
+$answerCount =
+    count(
+        array_filter(
+            $data['answers'],
+            static fn(
+                array $answer
+            ): bool =>
+                ($answer['surveyId'] ?? '')
+                === ($survey['id'] ?? '')
+        )
+    );
 ?>
+
 <tr>
-    <td>
-        <strong><?= h($survey['title']) ?></strong>
-    </td>
 
-    <td>
-        <?= h($survey['startAt'] ?? '') ?>
-        <br>
-        ～
-        <?= h($survey['endAt'] ?? '') ?>
-    </td>
+<td>
+<strong>
+<?= h($survey['title'] ?? '') ?>
+</strong>
+</td>
 
-    <td>
-        <span class="badge badge-<?= h(
-            status_class(
-                (string)$survey['status']
-            )
-        ) ?>">
-            <?= h(
-                status_label(
-                    (string)$survey['status']
-                )
-            ) ?>
-        </span>
-    </td>
+<td>
+<?= h($survey['createdAt'] ?? '') ?>
+</td>
 
-    <td><?= h($answerCount) ?></td>
+<td>
+<?= h($survey['updatedAt'] ?? '') ?>
+</td>
 
-    <td>
-        <?= h($survey['updatedAt'] ?? '') ?>
-    </td>
+<td>
+<?= h($survey['startAt'] ?? '') ?>
+～
+<?= h($survey['endAt'] ?? '') ?>
+</td>
 
-    <td>
-        <div class="button-row">
+<td>
+<span class="badge <?= h($status) ?>">
+<?= h($statusLabel) ?>
+</span>
+</td>
 
-            <a class="btn btn-light"
-               href="<?= h(app_url([
-                   'screen'=>'edit',
-                   'id'=>$survey['id'],
-               ])) ?>">
-                確認・編集
-            </a>
+<td>
+<?= $answerCount ?>
+</td>
 
-            <a class="btn btn-light"
-               href="<?= h(app_url([
-                   'screen'=>'analytics',
-                   'id'=>$survey['id'],
-               ])) ?>">
-                集計
-            </a>
+<td>
 
-            <a class="btn btn-light"
-               href="<?= h(app_url([
-                   'screen'=>'send',
-                   'id'=>$survey['id'],
-               ])) ?>">
-                送信
-            </a>
+<div style="display:flex;gap:6px;flex-wrap:wrap">
 
-            <form method="post"
-                  data-loading
-                  style="display:inline">
-                <input type="hidden"
-                       name="action"
-                       value="duplicate_survey">
-                <input type="hidden"
-                       name="survey_id"
-                       value="<?= h($survey['id']) ?>">
+<a class="button secondary"
+   href="<?= h(app_url([
+       'screen'=>'edit',
+       'id'=>$survey['id'],
+   ])) ?>">
+    確認・編集
+</a>
 
-                <button
-                    class="btn btn-secondary"
-                    type="submit"
-                    data-confirm="このアンケートを複製しますか？">
-                    複製
-                </button>
-            </form>
+<a class="button secondary"
+   href="<?= h(app_url([
+       'screen'=>'preview',
+       'id'=>$survey['id'],
+   ])) ?>">
+    プレビュー
+</a>
 
-            <form method="post"
-                  data-loading
-                  style="display:inline">
-                <input type="hidden"
-                       name="action"
-                       value="delete_survey">
-                <input type="hidden"
-                       name="survey_id"
-                       value="<?= h($survey['id']) ?>">
+<a class="button secondary"
+   href="<?= h(app_url([
+       'screen'=>'analytics',
+       'id'=>$survey['id'],
+   ])) ?>">
+    集計
+</a>
 
-                <button
-                    class="btn btn-danger"
-                    type="submit"
-                    data-confirm="このアンケートを削除しますか？">
-                    削除
-                </button>
-            </form>
+<a class="button secondary"
+   href="<?= h(app_url([
+       'screen'=>'send',
+       'id'=>$survey['id'],
+   ])) ?>">
+    送信
+</a>
 
-        </div>
+<form method="post"
+      style="display:inline"
+      onsubmit="return confirm('複製しますか？')">
 
-        <?php if ($survey['status'] !== 'ended'): ?>
-        <div class="button-row"
-             style="margin-top:8px">
+<input type="hidden"
+       name="action"
+       value="survey_duplicate">
 
-            <?php if ($survey['status'] === 'draft'): ?>
-            <form method="post"
-                  data-loading>
-                <input type="hidden"
-                       name="action"
-                       value="change_status">
-                <input type="hidden"
-                       name="survey_id"
-                       value="<?= h($survey['id']) ?>">
-                <input type="hidden"
-                       name="next_status"
-                       value="published">
+<input type="hidden"
+       name="id"
+       value="<?= h($survey['id']) ?>">
 
-                <button
-                    class="btn btn-success"
-                    type="submit"
-                    data-confirm="公開しますか？">
-                    公開
-                </button>
-            </form>
-            <?php elseif ($survey['status'] === 'published'): ?>
-            <form method="post"
-                  data-loading>
-                <input type="hidden"
-                       name="action"
-                       value="change_status">
-                <input type="hidden"
-                       name="survey_id"
-                       value="<?= h($survey['id']) ?>">
-                <input type="hidden"
-                       name="next_status"
-                       value="stopped">
+<button class="button secondary">
+    複製
+</button>
 
-                <button
-                    class="btn btn-warning"
-                    type="submit"
-                    data-confirm="停止しますか？">
-                    停止
-                </button>
-            </form>
-            <?php elseif ($survey['status'] === 'stopped'): ?>
-            <form method="post"
-                  data-loading>
-                <input type="hidden"
-                       name="action"
-                       value="change_status">
-                <input type="hidden"
-                       name="survey_id"
-                       value="<?= h($survey['id']) ?>">
-                <input type="hidden"
-                       name="next_status"
-                       value="published">
+</form>
 
-                <button
-                    class="btn btn-success"
-                    type="submit"
-                    data-confirm="再開しますか？">
-                    再開
-                </button>
-            </form>
-            <?php endif; ?>
+<form method="post"
+      style="display:inline"
+      onsubmit="return confirm('削除しますか？')">
 
-        </div>
-        <?php endif; ?>
-    </td>
+<input type="hidden"
+       name="action"
+       value="survey_delete">
+
+<input type="hidden"
+       name="id"
+       value="<?= h($survey['id']) ?>">
+
+<button class="button danger">
+    削除
+</button>
+
+</form>
+
+</div>
+
+</td>
+
 </tr>
+
 <?php endforeach; ?>
+
 <?php endif; ?>
+
 </tbody>
+
 </table>
+
 </div>
 
 </div>
-</div>
+
+</main>
+
 <?php
-render_footer();
+    render_footer();
+    exit;
 }
 
 /* ============================================================
  * 編集
  * ============================================================ */
 
-function render_edit(
-    array $surveys,
-    ?array $survey
-): void {
+if ($screen === 'edit') {
+
     $survey =
-        $survey
-        ?? new_survey();
+        $surveyId !== ''
+            ? find_survey(
+                $data,
+                $surveyId
+            )
+            : null;
 
-    recalc_question_numbers(
-        $survey
+    if ($survey === null) {
+
+        $survey = [
+            'id' => '',
+            'title' => '',
+            'description' => '',
+            'startAt' => now_input(),
+            'endAt' => '',
+            'status' => 'draft',
+            'numbering' => 'global',
+            'groups' => [],
+        ];
+    }
+
+    render_header(
+        'アンケート作成・編集'
     );
-
-    render_head('アンケート作成・編集');
-    render_flash();
 ?>
-<div class="page-title">
-    <div>
-        <h1>アンケート作成・編集</h1>
-        <p>質問、グループ、公開期間を設定します。</p>
-    </div>
-</div>
 
-<form method="post"
-      data-loading
-      id="surveyForm">
+<main class="container">
+
+<h1 class="page-title">
+    アンケート作成・編集
+</h1>
+
+<p class="page-description">
+    アンケートの基本情報を設定します。
+</p>
+
+<?php render_flash($flash); ?>
+
+<form method="post">
 
 <input type="hidden"
        name="action"
-       value="save_survey">
+       value="survey_save">
 
 <input type="hidden"
-       name="survey_id"
-       value="<?= h($survey['id'] ?? '') ?>">
-
-<input type="hidden"
-       name="return_screen"
-       value="edit">
+       name="id"
+       value="<?= h($survey['id']) ?>">
 
 <div class="card">
-<div class="card-body">
 
-<div class="button-row"
-     style="justify-content:space-between">
+<div class="toolbar">
 
-    <a class="btn btn-secondary"
-       href="<?= h(app_url(['screen'=>'list'])) ?>">
-        キャンセル
-    </a>
-
-    <div class="button-row">
-        <span class="badge badge-<?= h(
-            status_class(
-                (string)$survey['status']
-            )
-        ) ?>">
-            状態：
-            <?= h(
-                status_label(
-                    (string)$survey['status']
-                )
-            ) ?>
-        </span>
-
-        <button class="btn btn-primary"
-                type="submit">
-            保存して一覧へ
-        </button>
-    </div>
+<div>
+<strong>
+    状態：
+    <?= h([
+        'draft'=>'下書き',
+        'published'=>'公開中',
+        'stopped'=>'停止',
+        'ended'=>'終了',
+    ][$survey['status']] ?? '') ?>
+</strong>
 </div>
 
-<hr style="border:0;border-top:1px solid var(--border);margin:20px 0">
+<div class="actions"
+     style="margin-top:0">
 
-<div class="grid grid-2">
+<a class="button secondary"
+   href="<?= h(app_url(['screen'=>'list'])) ?>">
+    キャンセル
+</a>
 
-<div class="form-group">
-<label>
-<span>アンケートタイトル</span>
+<a class="button secondary"
+   href="<?= h(app_url([
+       'screen'=>'preview',
+       'id'=>$survey['id'],
+   ])) ?>">
+    プレビュー
+</a>
+
+<button class="button primary">
+    保存して一覧へ
+</button>
+
+</div>
+
+</div>
+
+<div class="form-grid">
+
+<div class="form-group full">
+
+<label class="form-label">
+    アンケートタイトル
+</label>
+
 <input type="text"
        name="title"
-       value="<?= h($survey['title']) ?>"
-       maxlength="200"
-       required>
+       required
+       value="<?= h($survey['title']) ?>">
+
+</div>
+
+<div class="form-group full">
+
+<label class="form-label">
+    アンケート説明
 </label>
-</div>
 
-<div class="form-group">
-<label>
-<span>質問番号の採番方式</span>
-<select name="numbering">
-    <option value="global"
-        <?= ($survey['numbering'] ?? 'global')
-            === 'global'
-            ? 'selected'
-            : '' ?>>
-        アンケート全体で通番
-    </option>
-    <option value="group"
-        <?= ($survey['numbering'] ?? '')
-            === 'group'
-            ? 'selected'
-            : '' ?>>
-        グループ毎に採番
-    </option>
-</select>
-</label>
-</div>
-
-</div>
-
-<div class="form-group">
-<label>
-<span>アンケート説明</span>
 <textarea name="description"><?= h(
     $survey['description']
 ) ?></textarea>
-</label>
+
 </div>
 
-<div class="grid grid-2">
-
 <div class="form-group">
-<label>
-<span>開始日時</span>
+
+<label class="form-label">
+    開始日時
+</label>
+
 <input type="datetime-local"
        name="startAt"
        value="<?= h($survey['startAt']) ?>">
-</label>
+
 </div>
 
 <div class="form-group">
-<label>
-<span>終了日時</span>
+
+<label class="form-label">
+    終了日時
+</label>
+
 <input type="datetime-local"
        name="endAt"
        value="<?= h($survey['endAt']) ?>">
-</label>
-</div>
 
 </div>
-
-</div>
-</div>
-
-<div id="groups">
-<?php foreach (
-    $survey['groups'] as $gi => $group
-): ?>
-
-<div class="group-card"
-     draggable="true"
-     data-group-index="<?= h($gi) ?>">
-
-<div class="group-head">
-    <div>
-        <span class="drag-handle">☷</span>
-        <strong>
-            グループ <?= h($gi + 1) ?>
-        </strong>
-    </div>
-
-    <button
-        type="button"
-        class="btn btn-danger"
-        onclick="removeGroup(this)">
-        グループ削除
-    </button>
-</div>
-
-<div class="card-body">
 
 <div class="form-group">
-<label>
-<span>グループタイトル</span>
-<input type="text"
-       name="group_title[<?= h($group['id']) ?>]"
-       value="<?= h($group['title']) ?>"
-       maxlength="200">
+
+<label class="form-label">
+    質問番号の採番方式
 </label>
-</div>
 
-<div class="questions">
+<select name="numbering">
 
-<?php foreach (
-    $group['questions'] as $qi => $question
-): ?>
+<option value="global"
+<?= ($survey['numbering'] ?? '')
+    === 'global'
+    ? 'selected'
+    : '' ?>>
+    アンケート全体で通番
+    （Q1、Q2、Q3…）
+</option>
 
-<div class="question-card"
-     draggable="true"
-     data-question-id="<?= h(
-         $question['id']
-     ) ?>">
+<option value="group"
+<?= ($survey['numbering'] ?? '')
+    === 'group'
+    ? 'selected'
+    : '' ?>>
+    グループ毎
+    （Q1-1、Q1-2…）
+</option>
 
-<div class="question-head">
-    <div>
-        <span class="drag-handle">☷</span>
-        <strong>
-            <?= h($question['number']) ?>
-        </strong>
-    </div>
-
-    <button
-        type="button"
-        class="btn btn-danger"
-        onclick="removeQuestion(this)">
-        質問削除
-    </button>
-</div>
-
-<div class="question-body">
-
-<input type="hidden"
-       name="question_id[]"
-       value="<?= h($question['id']) ?>">
-
-<div class="form-group">
-<label>
-<span>質問文</span>
-<input type="text"
-       name="question_text[<?= h(
-           $question['id']
-       ) ?>]"
-       value="<?= h($question['text']) ?>"
-       maxlength="500">
-</label>
-</div>
-
-<div class="grid grid-2">
-
-<div class="form-group">
-<label>
-<span>回答形式</span>
-<select name="question_type[<?= h(
-    $question['id']
-) ?>]">
-    <option value="single"
-        <?= ($question['type'] ?? '')
-            === 'single'
-            ? 'selected'
-            : '' ?>>
-        単一選択
-    </option>
-    <option value="multiple"
-        <?= ($question['type'] ?? '')
-            === 'multiple'
-            ? 'selected'
-            : '' ?>>
-        複数選択
-    </option>
-    <option value="text"
-        <?= ($question['type'] ?? '')
-            === 'text'
-            ? 'selected'
-            : '' ?>>
-        自由記述
-    </option>
 </select>
-</label>
-</div>
 
-<div class="form-group">
-<label>
-<span>必須設定</span>
-<select name="question_required[<?= h(
-    $question['id']
-) ?>]">
-    <option value="1"
-        <?= !empty($question['required'])
-            ? 'selected'
-            : '' ?>>
-        必須
-    </option>
-    <option value="0"
-        <?= empty($question['required'])
-            ? 'selected'
-            : '' ?>>
-        任意
-    </option>
-</select>
-</label>
 </div>
 
 </div>
 
-<?php if (
-    in_array(
-        $question['type'] ?? '',
-        ['single','multiple'],
-        true
-    )
-): ?>
-
-<div class="form-group">
-<label>
-<span>選択肢</span>
-</label>
-
-<div class="options">
-<?php foreach (
-    $question['options'] ?? []
-    as $oi => $option
-): ?>
-<div class="option-row">
-    <input type="text"
-           name="question_option[<?= h(
-               $question['id']
-           ) ?>][]"
-           value="<?= h($option) ?>">
-    <button
-        type="button"
-        class="btn btn-light"
-        onclick="this.parentElement.remove()">
-        削除
-    </button>
-</div>
-<?php endforeach; ?>
-</div>
-
-<button
-    type="button"
-    class="btn btn-secondary"
-    onclick="addOption(this)">
-    ＋ 選択肢追加
-</button>
-</div>
-
-<?php endif; ?>
-
-<?php if (
-    ($question['type'] ?? '')
-    === 'single'
-): ?>
-<div class="form-group">
-<label>
-<span>条件分岐</span>
-<select name="branching[<?= h(
-    $question['id']
-) ?>]">
-    <option value="">分岐なし</option>
-    <?php foreach (
-        $survey['groups'] as $branchGroup
-    ): ?>
-        <?php foreach (
-            $branchGroup['questions']
-            as $branchQuestion
-        ): ?>
-            <?php if (
-                $branchQuestion['id']
-                !== $question['id']
-            ): ?>
-            <option
-                value="<?= h(
-                    $branchQuestion['id']
-                ) ?>">
-                <?= h(
-                    $branchQuestion['number']
-                    . ' '
-                    . $branchQuestion['text']
-                ) ?>
-            </option>
-            <?php endif; ?>
-        <?php endforeach; ?>
-    <?php endforeach; ?>
-</select>
-</label>
-</div>
-<?php endif; ?>
-
-</div>
-</div>
-
-<?php endforeach; ?>
-</div>
-
-<button
-    type="button"
-    class="btn btn-secondary"
-    onclick="addQuestion(this)">
-    ＋ 質問を追加
-</button>
-
-</div>
-</div>
-
-<?php endforeach; ?>
 </div>
 
 <div class="card">
-<div class="card-body">
-    <button
-        type="button"
-        class="btn btn-secondary"
-        onclick="addGroup()">
-        ＋ グループを追加
-    </button>
-</div>
-</div>
 
-<div class="sticky-actions">
-<div class="button-row"
-     style="justify-content:flex-end">
-
-    <a class="btn btn-secondary"
-       href="<?= h(app_url([
-           'screen'=>'preview',
-           'id'=>$survey['id'],
-       ])) ?>">
-        プレビュー
-    </a>
-
-    <button class="btn btn-primary"
-            type="submit">
-        保存して一覧へ
-    </button>
-</div>
-</div>
-
-</form>
-
-<script>
-function removeQuestion(button){
-    if(window.confirm('この質問を削除しますか？')){
-        button.closest('.question-card').remove();
-    }
-}
-
-function removeGroup(button){
-    if(window.confirm('このグループを削除しますか？')){
-        button.closest('.group-card').remove();
-    }
-}
-
-function addOption(button){
-    var container =
-        button.previousElementSibling;
-
-    var row =
-        document.createElement('div');
-
-    row.className = 'option-row';
-
-    row.innerHTML =
-        '<input type="text" name="question_option[new][]">'
-        + '<button type="button" class="btn btn-light"'
-        + ' onclick="this.parentElement.remove()">'
-        + '削除</button>';
-
-    container.appendChild(row);
-}
-
-function addQuestion(button){
-    var container =
-        button.previousElementSibling;
-
-    var id =
-        'new-' + Date.now();
-
-    var card =
-        document.createElement('div');
-
-    card.className =
-        'question-card';
-
-    card.innerHTML =
-        '<div class="question-head">'
-        + '<strong>新規質問</strong>'
-        + '<button type="button" class="btn btn-danger"'
-        + ' onclick="removeQuestion(this)">質問削除</button>'
-        + '</div>'
-        + '<div class="question-body">'
-        + '<input type="hidden" name="question_id[]" value="'+id+'">'
-        + '<div class="form-group">'
-        + '<label><span>質問文</span>'
-        + '<input type="text" name="question_text['+id+']">'
-        + '</label></div>'
-        + '<div class="grid grid-2">'
-        + '<div class="form-group"><label><span>回答形式</span>'
-        + '<select name="question_type['+id+']">'
-        + '<option value="single">単一選択</option>'
-        + '<option value="multiple">複数選択</option>'
-        + '<option value="text">自由記述</option>'
-        + '</select></label></div>'
-        + '<div class="form-group"><label><span>必須設定</span>'
-        + '<select name="question_required['+id+']">'
-        + '<option value="1">必須</option>'
-        + '<option value="0">任意</option>'
-        + '</select></label></div>'
-        + '</div>'
-        + '</div>';
-
-    container.appendChild(card);
-}
-
-function addGroup(){
-    var groups =
-        document.getElementById('groups');
-
-    var group =
-        document.createElement('div');
-
-    group.className =
-        'group-card';
-
-    group.innerHTML =
-        '<div class="group-head">'
-        + '<strong>新しいグループ</strong>'
-        + '<button type="button" class="btn btn-danger"'
-        + ' onclick="removeGroup(this)">グループ削除</button>'
-        + '</div>'
-        + '<div class="card-body">'
-        + '<div class="form-group">'
-        + '<label><span>グループタイトル</span>'
-        + '<input type="text" name="group_title[new-'+Date.now()+']">'
-        + '</label></div>'
-        + '<div class="questions"></div>'
-        + '<button type="button" class="btn btn-secondary"'
-        + ' onclick="addQuestion(this)">'
-        + '＋ 質問を追加</button>'
-        + '</div>';
-
-    groups.appendChild(group);
-}
-</script>
-
-<?php
-render_footer();
-}
-
-/* ============================================================
- * プレビュー
- * ============================================================ */
-
-function render_preview(
-    ?array $survey
-): void {
-    if ($survey === null) {
-        render_head('プレビュー');
-        ?>
-        <div class="alert alert-error">
-            アンケートが見つかりません。
-        </div>
-        <?php
-        render_footer();
-        return;
-    }
-
-    render_head('プレビュー');
-?>
-<div class="page-title">
-    <div>
-        <h1><?= h($survey['title']) ?></h1>
-        <p>アンケートプレビュー</p>
-    </div>
-
-    <a class="btn btn-secondary"
-       href="<?= h(app_url([
-           'screen'=>'edit',
-           'id'=>$survey['id'],
-       ])) ?>">
-        編集へ戻る
-    </a>
-</div>
-
-<div class="card">
-<div class="card-body">
-
-<?php if (
-    trim((string)$survey['description'])
-    !== ''
-): ?>
-<p><?= nl2br(
-    h($survey['description'])
-) ?></p>
-<?php endif; ?>
+<h2>質問・グループ</h2>
 
 <?php foreach (
     $survey['groups']
     as $group
 ): ?>
 
-<h2 style="margin-top:28px">
-    <?= h($group['title']) ?>
+<div class="question">
+
+<div class="group-title">
+<?= h($group['title'] ?? '') ?>
+</div>
+
+<?php foreach (
+    $group['questions']
+    as $question
+): ?>
+
+<div class="question">
+
+<div class="question-title">
+
+<?= h(
+    $question['number']
+    ?? ''
+) ?>
+
+　
+<?= h(
+    $question['text']
+    ?? ''
+) ?>
+
+<?php if (
+    !empty($question['required'])
+): ?>
+
+<span class="badge published">
+必須
+</span>
+
+<?php endif; ?>
+
+</div>
+
+<div class="muted">
+回答形式：
+<?= h([
+    'single'=>'単一選択',
+    'multiple'=>'複数選択',
+    'text'=>'自由記述',
+][$question['type'] ?? 'text']
+    ?? '') ?>
+</div>
+
+</div>
+
+<?php endforeach; ?>
+
+</div>
+
+<?php endforeach; ?>
+
+</div>
+
+</form>
+
+</main>
+
+<?php
+    render_footer();
+    exit;
+}
+
+/* ============================================================
+ * プレビュー
+ * ============================================================ */
+
+if ($screen === 'preview') {
+
+    $survey =
+        find_survey(
+            $data,
+            $surveyId
+        );
+
+    if ($survey === null) {
+        redirect_screen('list');
+    }
+
+    render_header(
+        'プレビュー'
+    );
+?>
+
+<main class="container">
+
+<div class="toolbar">
+
+<div>
+<h1 class="page-title">
+    プレビュー
+</h1>
+
+<p class="page-description">
+    <?= h($survey['title']) ?>
+</p>
+</div>
+
+<a class="button secondary"
+   href="<?= h(app_url([
+       'screen'=>'edit',
+       'id'=>$survey['id'],
+   ])) ?>">
+    編集へ戻る
+</a>
+
+</div>
+
+<div class="preview-frame">
+
+<h1>
+<?= h($survey['title']) ?>
+</h1>
+
+<p>
+<?= nl2br(
+    h($survey['description'])
+) ?>
+</p>
+
+<?php foreach (
+    $survey['groups']
+    as $group
+): ?>
+
+<section class="card">
+
+<h2>
+<?= h($group['title']) ?>
 </h2>
 
 <?php foreach (
@@ -4552,1695 +3447,1372 @@ function render_preview(
     as $question
 ): ?>
 
-<div class="preview-question">
-    <div>
-        <strong>
-            <?= h($question['number']) ?>
-            <?= h($question['text']) ?>
-        </strong>
+<div class="question">
 
-        <?php if (
-            !empty($question['required'])
-        ): ?>
-        <span class="required">必須</span>
-        <?php endif; ?>
-    </div>
-
-    <div style="margin-top:12px">
-
-    <?php if (
-        $question['type']
-        === 'text'
-    ): ?>
-
-        <textarea
-            placeholder="回答を入力してください"></textarea>
-
-    <?php elseif (
-        $question['type']
-        === 'multiple'
-    ): ?>
-
-        <?php foreach (
-            $question['options'] ?? []
-            as $option
-        ): ?>
-        <label class="answer-option">
-            <input type="checkbox">
-            <span><?= h($option) ?></span>
-        </label>
-        <?php endforeach; ?>
-
-    <?php else: ?>
-
-        <?php foreach (
-            $question['options'] ?? []
-            as $option
-        ): ?>
-        <label class="answer-option">
-            <input type="radio"
-                   name="preview_<?= h(
-                       $question['id']
-                   ) ?>">
-            <span><?= h($option) ?></span>
-        </label>
-        <?php endforeach; ?>
-
-    <?php endif; ?>
-
-    </div>
+<div class="question-title">
+<?= h($question['number']) ?>　
+<?= h($question['text']) ?>
 </div>
-
-<?php endforeach; ?>
-<?php endforeach; ?>
-
-</div>
-</div>
-<?php
-render_footer();
-}
-
-/* ============================================================
- * kintone設定
- * ============================================================ */
-
-function render_kintone(
-    array $config
-): void {
-    $test =
-        $_SESSION[
-            'kintone_test_result'
-        ] ?? null;
-
-    unset(
-        $_SESSION[
-            'kintone_test_result'
-        ]
-    );
-
-    $fieldsResult =
-        $_SESSION[
-            'kintone_fields_result'
-        ] ?? null;
-
-    unset(
-        $_SESSION[
-            'kintone_fields_result'
-        ]
-    );
-
-    $syncResult =
-        $_SESSION[
-            'kintone_sync_result'
-        ] ?? null;
-
-    unset(
-        $_SESSION[
-            'kintone_sync_result'
-        ]
-    );
-
-    render_head('kintone設定');
-?>
-<div class="page-title">
-    <div>
-        <h1>kintone連携設定</h1>
-        <p>顧客情報取得元となるkintoneを設定します。</p>
-    </div>
-</div>
-
-<?php render_flash(); ?>
 
 <?php if (
-    is_array($test)
+    $question['type'] === 'single'
 ): ?>
-<div class="alert <?= !empty($test['ok'])
-    ? 'alert-success'
-    : 'alert-error' ?>">
-
-<strong>
-<?= !empty($test['ok'])
-    ? '✓ kintone接続テスト'
-    : '✕ kintone接続テスト' ?>
-</strong>
-
-<div style="margin-top:6px">
-    <?= h($test['message'] ?? '') ?>
-</div>
-
-<?php if (empty($test['ok'])): ?>
-<div style="margin-top:8px">
-    HTTP
-    <?= h($test['status'] ?? 0) ?>
-
-    <?php if (!empty($test['code'])): ?>
-    / エラーコード:
-    <?= h($test['code']) ?>
-    <?php endif; ?>
-
-    <?php if (!empty($test['id'])): ?>
-    / エラーID:
-    <?= h($test['id']) ?>
-    <?php endif; ?>
-</div>
-<?php endif; ?>
-
-</div>
-<?php endif; ?>
-
-<?php if (
-    is_array($fieldsResult)
-): ?>
-<div class="alert <?= !empty($fieldsResult['ok'])
-    ? 'alert-success'
-    : 'alert-error' ?>">
-    <?= h(
-        $fieldsResult['message'] ?? ''
-    ) ?>
-</div>
-<?php endif; ?>
-
-<?php if (
-    is_array($syncResult)
-): ?>
-<div class="alert <?= !empty($syncResult['ok'])
-    ? 'alert-success'
-    : 'alert-error' ?>">
-    <?= h(
-        $syncResult['message'] ?? ''
-    ) ?>
-</div>
-<?php endif; ?>
-
-<div class="card">
-<div class="card-header">
-    <h2>接続設定</h2>
-
-    <span class="badge <?= h(
-        $config['status'] === '接続確認済み'
-            ? 'badge-success'
-            : 'badge-gray'
-    ) ?>">
-        <?= h($config['status']) ?>
-    </span>
-</div>
-
-<div class="card-body">
-
-<form method="post"
-      data-loading>
-
-<input type="hidden"
-       name="action"
-       value="save_kintone">
-
-<div class="grid grid-2">
-
-<div class="form-group">
-<label>
-<span>サブドメイン</span>
-<input type="text"
-       name="subdomain"
-       value="<?= h(
-           $config['subdomain']
-       ) ?>"
-       placeholder="xxxx / xxxx.cybozu.com"
-       required>
-</label>
-</div>
-
-<div class="form-group">
-<label>
-<span>顧客管理アプリID</span>
-<input type="number"
-       name="app_id"
-       min="1"
-       value="<?= h(
-           $config['app_id']
-       ) ?>"
-       required>
-</label>
-</div>
-
-<div class="form-group">
-<label>
-<span>ログイン名</span>
-<input type="text"
-       name="username"
-       value="<?= h(
-           $config['username']
-       ) ?>"
-       required>
-</label>
-</div>
-
-<div class="form-group">
-<label>
-<span>パスワード</span>
-<input type="password"
-       name="password"
-       value=""
-       autocomplete="new-password">
-</label>
-<div class="help">
-変更しない場合は空欄のままにしてください。
-</div>
-</div>
-
-<div class="form-group">
-<label>
-<span>Proxy</span>
-<input type="text"
-       name="proxy"
-       value="<?= h(
-           $config['proxy']
-       ) ?>"
-       placeholder="host:port">
-</label>
-</div>
-
-<div class="form-group">
-<label>
-<span>SSL証明書検証</span>
-<select name="verify_ssl">
-    <option value=""
-        <?= empty($config['verify_ssl'])
-            ? 'selected'
-            : '' ?>>
-        無効
-    </option>
-    <option value="1"
-        <?= !empty($config['verify_ssl'])
-            ? 'selected'
-            : '' ?>>
-        有効
-    </option>
-</select>
-</label>
-</div>
-
-</div>
-
-<div class="button-row"
-     style="margin-top:10px">
-
-<button class="btn btn-primary"
-        type="submit">
-    設定保存
-</button>
-
-</div>
-
-</form>
-
-<hr style="border:0;border-top:1px solid var(--border);margin:22px 0">
-
-<form method="post"
-      data-loading>
-
-<input type="hidden"
-       name="action"
-       value="test_kintone">
-
-<input type="hidden"
-       name="subdomain"
-       value="<?= h(
-           $config['subdomain']
-       ) ?>">
-
-<input type="hidden"
-       name="app_id"
-       value="<?= h(
-           $config['app_id']
-       ) ?>">
-
-<input type="hidden"
-       name="username"
-       value="<?= h(
-           $config['username']
-       ) ?>">
-
-<input type="hidden"
-       name="proxy"
-       value="<?= h(
-           $config['proxy']
-       ) ?>">
-
-<?php if (
-    !empty($config['verify_ssl'])
-): ?>
-<input type="hidden"
-       name="verify_ssl"
-       value="1">
-<?php endif; ?>
-
-<div class="form-group">
-<label>
-<span>接続テスト用パスワード</span>
-<input type="password"
-       name="password"
-       autocomplete="new-password"
-       placeholder="保存済みの場合は空欄でも可">
-</label>
-</div>
-
-<button class="btn btn-secondary"
-        type="submit">
-    接続テスト
-</button>
-
-</form>
-
-</div>
-</div>
-
-<div class="card">
-<div class="card-header">
-    <h2>顧客項目マッピング</h2>
-</div>
-
-<div class="card-body">
-
-<form method="post"
-      data-loading>
-
-<input type="hidden"
-       name="action"
-       value="fetch_kintone_fields">
-
-<button class="btn btn-secondary"
-        type="submit">
-    項目一覧を再取得
-</button>
-
-</form>
-
-<?php if (
-    !empty($config['fields'])
-): ?>
-
-<form method="post"
-      data-loading
-      style="margin-top:20px">
-
-<input type="hidden"
-       name="action"
-       value="save_kintone_mapping">
-
-<div class="grid grid-2">
-
-<?php
-$mappingLabels = [
-    'organization' => '組織名',
-    'name' => '氏名',
-    'email' => 'メールアドレス',
-    'department' => '部署名',
-    'phone' => '電話番号',
-];
-?>
 
 <?php foreach (
-    $mappingLabels as $key => $label
-): ?>
-<div class="form-group">
-<label>
-<span><?= h($label) ?></span>
-<select name="mapping_<?= h($key) ?>">
-    <option value="">未設定</option>
-
-    <?php foreach (
-        $config['fields']
-        as $field
-    ): ?>
-    <option
-        value="<?= h(
-            $field['code']
-        ) ?>"
-        <?= (
-            ($config['mapping'][$key] ?? '')
-            === $field['code']
-        )
-            ? 'selected'
-            : '' ?>>
-        <?= h(
-            $field['label']
-            . ' ('
-            . $field['code']
-            . ')'
-        ) ?>
-    </option>
-    <?php endforeach; ?>
-</select>
-</label>
-</div>
-<?php endforeach; ?>
-
-<div class="form-group">
-<label>
-<span>住所</span>
-
-<?php foreach (
-    $config['fields']
-    as $field
-): ?>
-<label style="font-weight:400;margin:7px 0">
-<input type="checkbox"
-       name="mapping_address[]"
-       value="<?= h(
-           $field['code']
-       ) ?>"
-       <?= in_array(
-           $field['code'],
-           $config['mapping']['address']
-               ?? [],
-           true
-       )
-           ? 'checked'
-           : '' ?>
-       style="width:auto">
-<?= h($field['label']) ?>
-</label>
-<?php endforeach; ?>
-
-</label>
-</div>
-
-</div>
-
-<button class="btn btn-primary"
-        type="submit">
-    マッピングを保存
-</button>
-
-</form>
-
-<?php endif; ?>
-
-</div>
-</div>
-
-<div class="card">
-<div class="card-header">
-    <h2>顧客情報同期</h2>
-</div>
-
-<div class="card-body">
-
-<p>
-kintoneの顧客管理アプリから顧客情報を取得し、
-サーバー側の顧客情報を更新します。
-</p>
-
-<form method="post"
-      data-loading>
-
-<input type="hidden"
-       name="action"
-       value="sync_kintone">
-
-<button class="btn btn-primary"
-        type="submit"
-        data-confirm="kintoneから顧客情報を同期しますか？">
-    顧客情報を同期
-</button>
-
-</form>
-
-<?php if (
-    !empty($config['last_sync'])
-): ?>
-<p class="help">
-最終同期：
-<?= h($config['last_sync']) ?>
-</p>
-<?php endif; ?>
-
-</div>
-</div>
-
-<?php
-render_footer();
-}
-
-/* ============================================================
- * メール設定
- * ============================================================ */
-
-function render_mail(
-    array $config
-): void {
-    $test =
-        $_SESSION[
-            'mail_test_result'
-        ] ?? null;
-
-    unset(
-        $_SESSION[
-            'mail_test_result'
-        ]
-    );
-
-    render_head('メールサーバ設定');
-?>
-<div class="page-title">
-    <div>
-        <h1>メールサーバ設定</h1>
-        <p>SMTPサーバへの接続・認証設定を行います。</p>
-    </div>
-</div>
-
-<?php render_flash(); ?>
-
-<?php if (
-    is_array($test)
-): ?>
-<div class="alert <?= !empty($test['ok'])
-    ? 'alert-success'
-    : 'alert-error' ?>">
-    <?= h(
-        $test['message'] ?? ''
-    ) ?>
-</div>
-<?php endif; ?>
-
-<div class="card">
-<div class="card-body">
-
-<form method="post"
-      data-loading>
-
-<input type="hidden"
-       name="action"
-       value="save_mail">
-
-<div class="grid grid-2">
-
-<div class="form-group">
-<label>
-<span>SMTPサーバ</span>
-<input type="text"
-       name="server"
-       value="<?= h(
-           $config['server']
-       ) ?>"
-       required>
-</label>
-</div>
-
-<div class="form-group">
-<label>
-<span>SMTPポート</span>
-<input type="number"
-       name="port"
-       min="1"
-       max="65535"
-       value="<?= h(
-           $config['port']
-       ) ?>"
-       required>
-</label>
-</div>
-
-<div class="form-group">
-<label>
-<span>暗号化方式</span>
-<select name="encryption">
-    <option value="ssl"
-        <?= $config['encryption']==='ssl'
-            ? 'selected'
-            : '' ?>>
-        SSL
-    </option>
-    <option value="tls"
-        <?= $config['encryption']==='tls'
-            ? 'selected'
-            : '' ?>>
-        TLS
-    </option>
-    <option value="none"
-        <?= $config['encryption']==='none'
-            ? 'selected'
-            : '' ?>>
-        なし
-    </option>
-</select>
-</label>
-</div>
-
-<div class="form-group">
-<label>
-<span>SMTP認証</span>
-<select name="auth">
-    <option value="1"
-        <?= !empty($config['auth'])
-            ? 'selected'
-            : '' ?>>
-        あり
-    </option>
-    <option value="0"
-        <?= empty($config['auth'])
-            ? 'selected'
-            : '' ?>>
-        なし
-    </option>
-</select>
-</label>
-</div>
-
-<div class="form-group">
-<label>
-<span>SMTPユーザー名</span>
-<input type="text"
-       name="username"
-       value="<?= h(
-           $config['username']
-       ) ?>">
-</label>
-</div>
-
-<div class="form-group">
-<label>
-<span>SMTPパスワード</span>
-<input type="password"
-       name="password"
-       autocomplete="new-password">
-</label>
-<div class="help">
-変更しない場合は空欄のままにしてください。
-</div>
-</div>
-
-<div class="form-group">
-<label>
-<span>送信元メールアドレス</span>
-<input type="email"
-       name="from_email"
-       value="<?= h(
-           $config['from_email']
-       ) ?>"
-       required>
-</label>
-</div>
-
-<div class="form-group">
-<label>
-<span>送信元名</span>
-<input type="text"
-       name="from_name"
-       value="<?= h(
-           $config['from_name']
-       ) ?>">
-</label>
-</div>
-
-<div class="form-group">
-<label>
-<span>返信先メールアドレス</span>
-<input type="email"
-       name="reply_to"
-       value="<?= h(
-           $config['reply_to']
-       ) ?>">
-</label>
-</div>
-
-</div>
-
-<button class="btn btn-primary"
-        type="submit">
-    設定保存
-</button>
-
-</form>
-
-<hr style="border:0;border-top:1px solid var(--border);margin:22px 0">
-
-<form method="post"
-      data-loading>
-
-<input type="hidden"
-       name="action"
-       value="test_mail">
-
-<?php foreach (
-    [
-        'server',
-        'port',
-        'encryption',
-        'username',
-        'from_email',
-        'from_name',
-        'reply_to',
-    ] as $key
-): ?>
-<input type="hidden"
-       name="<?= h($key) ?>"
-       value="<?= h(
-           $config[$key] ?? ''
-       ) ?>">
-<?php endforeach; ?>
-
-<input type="hidden"
-       name="auth"
-       value="<?= !empty($config['auth'])
-           ? '1'
-           : '0' ?>">
-
-<div class="form-group">
-<label>
-<span>接続テスト用パスワード</span>
-<input type="password"
-       name="password"
-       autocomplete="new-password"
-       placeholder="保存済みの場合は空欄でも可">
-</label>
-</div>
-
-<button class="btn btn-secondary"
-        type="submit">
-    接続テスト
-</button>
-
-</form>
-
-</div>
-</div>
-
-<div class="card">
-<div class="card-header">
-    <h2>接続状態</h2>
-</div>
-
-<div class="card-body">
-
-<span class="badge badge-<?= h(
-    $config['status'] === '接続確認済み'
-        ? 'badge-success'
-        : 'badge-gray'
-) ?>">
-    <?= h($config['status']) ?>
-</span>
-
-<?php if (
-    !empty($config['last_test'])
-): ?>
-<p class="help">
-最終確認：
-<?= h($config['last_test']) ?>
-</p>
-<?php endif; ?>
-
-</div>
-</div>
-
-<?php
-render_footer();
-}
-
-/* ============================================================
- * 送信
- * ============================================================ */
-
-function render_send(
-    array $survey,
-    array $customers,
-    array $history
-): void {
-    $result =
-        $_SESSION['send_result']
-        ?? null;
-
-    unset(
-        $_SESSION['send_result']
-    );
-
-    $q =
-        get_string('q');
-
-    render_head('顧客選択・メール送信');
-?>
-<div class="page-title">
-    <div>
-        <h1>顧客選択・メール送信</h1>
-        <p>
-            対象：
-            <strong><?= h(
-                $survey['title']
-            ) ?></strong>
-        </p>
-    </div>
-
-    <a class="btn btn-secondary"
-       href="<?= h(app_url([
-           'screen'=>'list',
-       ])) ?>">
-        一覧へ戻る
-    </a>
-</div>
-
-<?php if (
-    is_array($result)
-): ?>
-<div class="alert alert-success">
-    <?= h($result['message'] ?? '') ?>
-</div>
-<?php endif; ?>
-
-<div class="card">
-<div class="card-header">
-    <h2>顧客選択・メール作成</h2>
-</div>
-
-<div class="card-body">
-
-<form method="post"
-      data-loading>
-
-<input type="hidden"
-       name="action"
-       value="send_mail">
-
-<input type="hidden"
-       name="survey_id"
-       value="<?= h(
-           $survey['id']
-       ) ?>">
-
-<div class="form-group">
-<label>
-<span>顧客検索</span>
-<input type="search"
-       value="<?= h($q) ?>"
-       placeholder="氏名・組織名・メールアドレス">
-</label>
-</div>
-
-<div class="table-scroll">
-<table>
-<thead>
-<tr>
-    <th>
-        <input type="checkbox"
-               id="selectAll">
-    </th>
-    <th>組織名</th>
-    <th>氏名</th>
-    <th>メールアドレス</th>
-    <th>部署</th>
-</tr>
-</thead>
-
-<tbody>
-<?php foreach (
-    $customers as $customer
-): ?>
-<tr>
-    <td>
-        <input type="checkbox"
-               name="customer_ids[]"
-               value="<?= h(
-                   $customer['id']
-               ) ?>"
-               class="customer-check">
-    </td>
-
-    <td><?= h(
-        $customer['organization']
-        ?? ''
-    ) ?></td>
-
-    <td><?= h(
-        $customer['name']
-        ?? ''
-    ) ?></td>
-
-    <td><?= h(
-        $customer['email']
-        ?? ''
-    ) ?></td>
-
-    <td><?= h(
-        $customer['department']
-        ?? ''
-    ) ?></td>
-</tr>
-<?php endforeach; ?>
-</tbody>
-</table>
-</div>
-
-<div class="grid grid-2"
-     style="margin-top:20px">
-
-<div class="form-group">
-<label>
-<span>メール件名</span>
-<input type="text"
-       name="subject"
-       value="<?= h(
-           $survey['title']
-       ) ?>"
-       required>
-</label>
-</div>
-
-<div class="form-group">
-<label>
-<span>利用可能な変数</span>
-<div class="notice">
-{顧客名}<br>
-{アンケートURL}
-</div>
-</label>
-</div>
-
-</div>
-
-<div class="form-group">
-<label>
-<span>メール本文</span>
-<textarea name="body"
-          required>いつもお世話になっております。
-
-{顧客名} 様
-
-以下のURLよりアンケートへご回答ください。
-
-{アンケートURL}
-
-よろしくお願いいたします。</textarea>
-</label>
-</div>
-
-<div class="button-row">
-    <button
-        class="btn btn-primary"
-        type="submit"
-        data-confirm="選択した顧客へメールを送信しますか？">
-        一括送信
-    </button>
-
-    <button
-        class="btn btn-secondary"
-        type="button">
-        再送
-    </button>
-
-    <button
-        class="btn btn-secondary"
-        type="button">
-        リマインド
-    </button>
-</div>
-
-</form>
-
-</div>
-</div>
-
-<div class="card">
-<div class="card-header">
-    <h2>送信履歴</h2>
-</div>
-
-<div class="card-body">
-
-<div class="table-scroll">
-<table>
-<thead>
-<tr>
-    <th>日時</th>
-    <th>顧客名</th>
-    <th>メール</th>
-    <th>種別</th>
-    <th>結果</th>
-</tr>
-</thead>
-<tbody>
-<?php
-$found = false;
-
-foreach (
-    array_reverse($history)
-    as $row
-):
-    if (
-        ($row['survey_id'] ?? '')
-        !== $survey['id']
-    ) {
-        continue;
-    }
-
-    $found = true;
-?>
-<tr>
-    <td><?= h(
-        $row['createdAt']
-        ?? ''
-    ) ?></td>
-    <td><?= h(
-        $row['customer_name']
-        ?? ''
-    ) ?></td>
-    <td><?= h(
-        $row['email']
-        ?? ''
-    ) ?></td>
-    <td><?= h(
-        $row['type']
-        ?? ''
-    ) ?></td>
-    <td>
-        <span class="badge badge-success">
-            <?= h(
-                $row['status']
-                ?? ''
-            ) ?>
-        </span>
-    </td>
-</tr>
-<?php endforeach; ?>
-
-<?php if (!$found): ?>
-<tr>
-    <td colspan="5">
-        <div class="empty">
-            送信履歴はありません。
-        </div>
-    </td>
-</tr>
-<?php endif; ?>
-
-</tbody>
-</table>
-</div>
-
-</div>
-</div>
-
-<script>
-document.getElementById('selectAll')
-    ?.addEventListener('change',function(){
-        document.querySelectorAll(
-            '.customer-check'
-        ).forEach(function(input){
-            input.checked =
-                document.getElementById(
-                    'selectAll'
-                ).checked;
-        });
-    });
-</script>
-
-<?php
-render_footer();
-}
-
-/* ============================================================
- * 集計
- * ============================================================ */
-
-function render_analytics(
-    array $survey,
-    array $answers,
-    array $customers
-): void {
-    $surveyAnswers = [];
-
-    foreach (
-        $answers as $answer
-    ) {
-        if (
-            ($answer['survey_id'] ?? '')
-            === $survey['id']
-        ) {
-            $surveyAnswers[] =
-                $answer;
-        }
-    }
-
-    $answerCount =
-        count($surveyAnswers);
-
-    $customerCount =
-        count($customers);
-
-    $rate =
-        $customerCount > 0
-            ? round(
-                $answerCount
-                / $customerCount
-                * 100,
-                1
-            )
-            : 0;
-
-    render_head('回答集計・分析');
-?>
-<div class="page-title">
-    <div>
-        <h1>回答集計・分析</h1>
-        <p>
-            対象：
-            <strong><?= h(
-                $survey['title']
-            ) ?></strong>
-        </p>
-    </div>
-
-    <a class="btn btn-secondary"
-       href="<?= h(app_url([
-           'screen'=>'list',
-       ])) ?>">
-        一覧へ戻る
-    </a>
-</div>
-
-<div class="stat-grid">
-
-<div class="stat">
-    <div class="stat-label">
-        送信対象者数
-    </div>
-    <div class="stat-value">
-        <?= h($customerCount) ?>
-    </div>
-</div>
-
-<div class="stat">
-    <div class="stat-label">
-        回答数
-    </div>
-    <div class="stat-value">
-        <?= h($answerCount) ?>
-    </div>
-</div>
-
-<div class="stat">
-    <div class="stat-label">
-        未回答数
-    </div>
-    <div class="stat-value">
-        <?= h(
-            max(
-                0,
-                $customerCount
-                - $answerCount
-            )
-        ) ?>
-    </div>
-</div>
-
-<div class="stat">
-    <div class="stat-label">
-        回答率
-    </div>
-    <div class="stat-value">
-        <?= h($rate) ?>%
-    </div>
-</div>
-
-</div>
-
-<div class="card">
-<div class="card-header">
-    <h2>出力</h2>
-</div>
-
-<div class="card-body">
-
-<div class="button-row">
-
-<a class="btn btn-secondary"
-   href="<?= h(app_url([
-       'screen'=>'csv',
-       'id'=>$survey['id'],
-   ])) ?>">
-    CSV出力
-</a>
-
-<button class="btn btn-secondary"
-        type="button"
-        onclick="window.print()">
-    PDF出力
-</button>
-
-</div>
-
-</div>
-</div>
-
-<?php if (!$surveyAnswers): ?>
-
-<div class="card">
-<div class="card-body">
-    <div class="empty">
-        現在、回答データはありません
-    </div>
-</div>
-</div>
-
-<?php else: ?>
-
-<?php foreach (
-    $survey['groups'] as $group
-): ?>
-
-<div class="card">
-<div class="card-header">
-    <h2><?= h(
-        $group['title']
-    ) ?></h2>
-</div>
-
-<div class="card-body">
-
-<?php foreach (
-    $group['questions'] as $question
-): ?>
-
-<?php
-$counts = [];
-
-foreach (
-    $question['options'] ?? []
+    $question['options']
     as $option
-) {
-    $counts[$option] = 0;
-}
-
-$textAnswers = [];
-
-foreach (
-    $surveyAnswers as $answer
-) {
-    $value =
-        $answer['answers'][
-            $question['id']
-        ] ?? '';
-
-    if (
-        is_array($value)
-    ) {
-        foreach ($value as $item) {
-            $counts[$item] =
-                ($counts[$item] ?? 0)
-                + 1;
-        }
-    } elseif (
-        $question['type'] !== 'text'
-    ) {
-        if ($value !== '') {
-            $counts[$value] =
-                ($counts[$value] ?? 0)
-                + 1;
-        }
-    } elseif (
-        $value !== ''
-    ) {
-        $textAnswers[] =
-            $value;
-    }
-}
-?>
-
-<div class="preview-question">
-
-<strong>
-<?= h($question['number']) ?>
-<?= h($question['text']) ?>
-</strong>
-
-<?php if (
-    $question['type'] === 'text'
 ): ?>
 
-<?php foreach (
-    $textAnswers as $text
-): ?>
-<div class="notice"
-     style="margin-top:10px">
-    <?= nl2br(h($text)) ?>
-</div>
-<?php endforeach; ?>
-
-<?php else: ?>
-
-<div style="margin-top:12px">
-<?php foreach (
-    $counts as $option => $count
-): ?>
-<div style="margin-bottom:10px">
-    <div style="
-        display:flex;
-        justify-content:space-between;
-        gap:10px;">
-        <span><?= h($option) ?></span>
-        <strong><?= h($count) ?>件</strong>
-    </div>
-
-    <div style="
-        height:8px;
-        background:#e2e8f0;
-        border-radius:99px;
-        overflow:hidden;">
-        <div style="
-            height:100%;
-            width:<?= $answerCount > 0
-                ? h(
-                    min(
-                        100,
-                        $count
-                        / $answerCount
-                        * 100
-                    )
-                )
-                : 0 ?>%;
-            background:var(--primary);">
-        </div>
-    </div>
-</div>
-<?php endforeach; ?>
-</div>
-
-<?php endif; ?>
-
-</div>
+<label class="option">
+<input type="radio"
+       disabled>
+<?= h($option['label']) ?>
+</label>
 
 <?php endforeach; ?>
-
-</div>
-</div>
-
-<?php endforeach; ?>
-
-<div class="card">
-<div class="card-header">
-    <h2>個別回答</h2>
-</div>
-
-<div class="card-body">
-
-<?php foreach (
-    $surveyAnswers as $answer
-): ?>
-
-<div class="notice">
-
-<strong>
-<?= h(
-    $answer['createdAt']
-    ?? ''
-) ?>
-</strong>
-
-<?php foreach (
-    $survey['groups'] as $group
-): ?>
-
-<?php foreach (
-    $group['questions'] as $question
-): ?>
-
-<?php
-$value =
-    $answer['answers'][
-        $question['id']
-    ] ?? '';
-
-if (is_array($value)) {
-    $value =
-        implode(
-            '、',
-            $value
-        );
-}
-?>
-
-<div style="margin-top:8px">
-    <strong>
-        <?= h(
-            $question['number']
-        ) ?>
-    </strong>
-    <?= h(
-        $question['text']
-    ) ?>：
-    <?= nl2br(h($value)) ?>
-</div>
-
-<?php endforeach; ?>
-<?php endforeach; ?>
-
-</div>
-
-<?php endforeach; ?>
-
-</div>
-</div>
-
-<?php endif; ?>
-
-<?php
-render_footer();
-}
-
-/* ============================================================
- * 回答者
- * ============================================================ */
-
-function render_answer(
-    array $survey
-): void {
-    render_head(
-        $survey['title'],
-        false
-    );
-?>
-<div class="page-title">
-    <div>
-        <h1><?= h(
-            $survey['title']
-        ) ?></h1>
-
-        <?php if (
-            trim(
-                (string)$survey['description']
-            ) !== ''
-        ): ?>
-        <p><?= nl2br(
-            h($survey['description'])
-        ) ?></p>
-        <?php endif; ?>
-    </div>
-</div>
-
-<form method="post"
-      data-loading>
-
-<input type="hidden"
-       name="action"
-       value="answer">
-
-<input type="hidden"
-       name="survey_id"
-       value="<?= h(
-           $survey['id']
-       ) ?>">
-
-<?php foreach (
-    $survey['groups'] as $group
-): ?>
-
-<div class="card">
-<div class="card-header">
-    <h2><?= h(
-        $group['title']
-    ) ?></h2>
-</div>
-
-<div class="card-body">
-
-<?php foreach (
-    $group['questions'] as $question
-): ?>
-
-<div class="preview-question">
-
-<strong>
-<?= h($question['number']) ?>
-<?= h($question['text']) ?>
-
-<?php if (
-    !empty($question['required'])
-): ?>
-<span class="required">必須</span>
-<?php endif; ?>
-
-</strong>
-
-<div style="margin-top:12px">
-
-<?php if (
-    $question['type'] === 'text'
-): ?>
-
-<textarea
-    name="answer_<?= h(
-        $question['id']
-    ) ?>"
-    <?= !empty($question['required'])
-        ? 'required'
-        : '' ?>></textarea>
 
 <?php elseif (
     $question['type'] === 'multiple'
 ): ?>
 
 <?php foreach (
-    $question['options'] ?? []
+    $question['options']
     as $option
 ): ?>
-<label class="answer-option">
-    <input
-        type="checkbox"
-        name="answer_<?= h(
-            $question['id']
-        ) ?>[]"
-        value="<?= h($option) ?>">
-    <span><?= h($option) ?></span>
+
+<label class="option">
+<input type="checkbox"
+       disabled>
+<?= h($option['label']) ?>
 </label>
+
 <?php endforeach; ?>
 
 <?php else: ?>
 
-<?php foreach (
-    $question['options'] ?? []
-    as $option
-): ?>
-<label class="answer-option">
-    <input
-        type="radio"
-        name="answer_<?= h(
-            $question['id']
-        ) ?>"
-        value="<?= h($option) ?>"
-        <?= !empty($question['required'])
-            ? 'required'
-            : '' ?>>
-    <span><?= h($option) ?></span>
-</label>
-<?php endforeach; ?>
+<textarea disabled></textarea>
 
 <?php endif; ?>
 
 </div>
-</div>
+
+<?php endforeach; ?>
+
+</section>
 
 <?php endforeach; ?>
 
 </div>
+
+</main>
+
+<?php
+    render_footer();
+    exit;
+}
+
+/* ============================================================
+ * kintone設定
+ * ============================================================ */
+
+if ($screen === 'kintone') {
+
+    $config =
+        $settings['kintone'];
+
+    render_header(
+        'kintone連携設定'
+    );
+?>
+
+<main class="container">
+
+<h1 class="page-title">
+    kintone連携設定
+</h1>
+
+<p class="page-description">
+    顧客情報を取得するkintoneを設定します。
+</p>
+
+<?php render_flash($flash); ?>
+
+<div class="card">
+
+<form method="post">
+
+<input type="hidden"
+       name="action"
+       value="kintone_save">
+
+<div class="form-grid">
+
+<div class="form-group">
+
+<label class="form-label">
+    サブドメイン
+</label>
+
+<input type="text"
+       name="subdomain"
+       value="<?= h(
+           $config['subdomain']
+       ) ?>"
+       placeholder="xxxx / xxxx.cybozu.com">
+
 </div>
 
-<?php endforeach; ?>
+<div class="form-group">
 
-<div class="button-row"
-     style="justify-content:flex-end">
+<label class="form-label">
+    顧客管理アプリID
+</label>
 
-<button class="btn btn-primary"
-        type="submit">
-    回答を確認
+<input type="number"
+       name="app_id"
+       min="1"
+       value="<?= h(
+           $config['app_id']
+       ) ?>">
+
+</div>
+
+<div class="form-group">
+
+<label class="form-label">
+    ログイン名
+</label>
+
+<input type="text"
+       name="username"
+       autocomplete="username"
+       value="<?= h(
+           $config['username']
+       ) ?>">
+
+</div>
+
+<div class="form-group">
+
+<label class="form-label">
+    パスワード
+</label>
+
+<input type="password"
+       name="password"
+       autocomplete="new-password"
+       placeholder="変更しない場合は空欄">
+
+</div>
+
+<div class="form-group">
+
+<label class="form-label">
+    Proxy
+</label>
+
+<input type="text"
+       name="proxy"
+       value="<?= h(
+           $config['proxy']
+       ) ?>"
+       placeholder="host:port">
+
+</div>
+
+<div class="form-group">
+
+<label class="form-label">
+    SSL証明書検証
+</label>
+
+<select name="verify_ssl">
+
+<option value="0"
+<?= empty(
+    $config['verify_ssl']
+)
+    ? 'selected'
+    : '' ?>>
+    無効
+</option>
+
+<option value="1"
+<?= !empty(
+    $config['verify_ssl']
+)
+    ? 'selected'
+    : '' ?>>
+    有効
+</option>
+
+</select>
+
+</div>
+
+</div>
+
+<div class="actions">
+
+<button class="button primary">
+    設定保存
 </button>
 
 </div>
 
 </form>
+
+</div>
+
+<div class="card">
+
+<h2>
+kintone接続
+</h2>
+
+<p class="muted">
+設定保存とは独立して、実際のkintoneへ接続して確認します。
+</p>
+
+<form method="post">
+
+<input type="hidden"
+       name="action"
+       value="kintone_test">
+
+<input type="hidden"
+       name="subdomain"
+       value="<?= h(
+           $config['subdomain']
+       ) ?>">
+
+<input type="hidden"
+       name="app_id"
+       value="<?= h(
+           $config['app_id']
+       ) ?>">
+
+<input type="hidden"
+       name="username"
+       value="<?= h(
+           $config['username']
+       ) ?>">
+
+<input type="hidden"
+       name="proxy"
+       value="<?= h(
+           $config['proxy']
+       ) ?>">
+
+<input type="hidden"
+       name="verify_ssl"
+       value="<?= !empty(
+           $config['verify_ssl']
+       ) ? '1' : '0' ?>">
+
+<div class="actions">
+
+<button class="button primary"
+        onclick="
+            this.disabled=true;
+            this.form.submit();
+        ">
+    kintone接続テスト
+</button>
+
+</div>
+
+</form>
+
 <?php
-render_footer();
+$lastTest =
+    $config['last_test']
+    ?? null;
+?>
+
+<?php if (is_array($lastTest)): ?>
+
+<div class="kintone-status"
+     style="margin-top:18px">
+
+<?php if (
+    !empty($lastTest['ok'])
+): ?>
+
+<span class="badge published">
+    接続成功
+</span>
+
+<?php else: ?>
+
+<span class="badge ended">
+    接続失敗
+</span>
+
+<?php endif; ?>
+
+<span class="muted">
+<?= h(
+    $lastTest['at']
+    ?? ''
+) ?>
+</span>
+
+<?php if (
+    !empty($lastTest['code'])
+): ?>
+
+<span>
+エラーコード:
+<?= h(
+    $lastTest['code']
+) ?>
+</span>
+
+<?php endif; ?>
+
+<?php if (
+    !empty($lastTest['id'])
+): ?>
+
+<span>
+エラーID:
+<?= h(
+    $lastTest['id']
+) ?>
+</span>
+
+<?php endif; ?>
+
+</div>
+
+<?php endif; ?>
+
+</div>
+
+<div class="card">
+
+<h2>
+顧客項目
+</h2>
+
+<form method="post">
+
+<input type="hidden"
+       name="action"
+       value="kintone_fields">
+
+<button class="button secondary">
+    項目一覧を再取得
+</button>
+
+</form>
+
+<?php
+$fields =
+    $config['fields']
+    ?? [];
+?>
+
+<?php if ($fields): ?>
+
+<div class="table-wrap"
+     style="margin-top:18px">
+
+<table>
+
+<thead>
+<tr>
+<th>フィールドコード</th>
+<th>項目名</th>
+<th>形式</th>
+</tr>
+</thead>
+
+<tbody>
+
+<?php foreach (
+    $fields
+    as $field
+): ?>
+
+<tr>
+
+<td>
+<?= h(
+    $field['code']
+    ?? ''
+) ?>
+</td>
+
+<td>
+<?= h(
+    $field['label']
+    ?? ''
+) ?>
+</td>
+
+<td>
+<?= h(
+    $field['type']
+    ?? ''
+) ?>
+</td>
+
+</tr>
+
+<?php endforeach; ?>
+
+</tbody>
+
+</table>
+
+</div>
+
+<?php else: ?>
+
+<p class="muted">
+まだ項目一覧を取得していません。
+</p>
+
+<?php endif; ?>
+
+</div>
+
+<div class="card">
+
+<h2>
+顧客情報を同期
+</h2>
+
+<form method="post">
+
+<input type="hidden"
+       name="action"
+       value="kintone_sync">
+
+<button class="button success">
+    顧客情報を同期
+</button>
+
+</form>
+
+<?php if (
+    !empty(
+        $config['last_sync']
+    )
+): ?>
+
+<p class="muted">
+最終同期：
+<?= h(
+    $config['last_sync']['at']
+    ?? ''
+) ?>
+
+/
+<?= h(
+    $config['last_sync']['count']
+    ?? 0
+) ?>件
+</p>
+
+<?php endif; ?>
+
+</div>
+
+</main>
+
+<?php
+    render_footer();
+    exit;
+}
+
+/* ============================================================
+ * メール設定
+ * ============================================================ */
+
+if ($screen === 'mail') {
+
+    render_header(
+        'メールサーバ設定'
+    );
+?>
+
+<main class="container">
+
+<h1 class="page-title">
+    メールサーバ設定
+</h1>
+
+<p class="page-description">
+    SMTPサーバを設定します。
+</p>
+
+<?php render_flash($flash); ?>
+
+<div class="card">
+
+<div class="form-grid">
+
+<div class="form-group">
+
+<label class="form-label">
+SMTPサーバ
+</label>
+
+<input type="text"
+       value="<?= h(
+           $settings['mail']['server']
+       ) ?>">
+
+</div>
+
+<div class="form-group">
+
+<label class="form-label">
+SMTPポート
+</label>
+
+<input type="number"
+       value="<?= h(
+           $settings['mail']['port']
+       ) ?>">
+
+</div>
+
+<div class="form-group">
+
+<label class="form-label">
+暗号化方式
+</label>
+
+<select>
+<option>SSL</option>
+<option selected>TLS</option>
+<option>なし</option>
+</select>
+
+</div>
+
+<div class="form-group">
+
+<label class="form-label">
+SMTPユーザー名
+</label>
+
+<input type="text"
+       value="<?= h(
+           $settings['mail']['username']
+       ) ?>">
+
+</div>
+
+<div class="form-group">
+
+<label class="form-label">
+送信元メールアドレス
+</label>
+
+<input type="email"
+       value="<?= h(
+           $settings['mail']['from_email']
+       ) ?>">
+
+</div>
+
+<div class="form-group">
+
+<label class="form-label">
+送信元名
+</label>
+
+<input type="text"
+       value="<?= h(
+           $settings['mail']['from_name']
+       ) ?>">
+
+</div>
+
+<div class="form-group">
+
+<label class="form-label">
+返信先メールアドレス
+</label>
+
+<input type="email"
+       value="<?= h(
+           $settings['mail']['reply_to']
+       ) ?>">
+
+</div>
+
+</div>
+
+<div class="actions">
+
+<button class="button primary">
+    設定保存
+</button>
+
+<button class="button secondary">
+    接続テスト
+</button>
+
+<button class="button secondary">
+    テストメール送信
+</button>
+
+</div>
+
+</div>
+
+</main>
+
+<?php
+    render_footer();
+    exit;
+}
+
+/* ============================================================
+ * 送信
+ * ============================================================ */
+
+if ($screen === 'send') {
+
+    $survey =
+        find_survey(
+            $data,
+            $surveyId
+        );
+
+    if ($survey === null) {
+        redirect_screen('list');
+    }
+
+    render_header(
+        '顧客選択・メール送信'
+    );
+?>
+
+<main class="container">
+
+<h1 class="page-title">
+    顧客選択・メール送信
+</h1>
+
+<p class="page-description">
+対象アンケート：
+<strong><?= h(
+    $survey['title']
+) ?></strong>
+</p>
+
+<?php render_flash($flash); ?>
+
+<div class="card">
+
+<h2>
+顧客選択
+</h2>
+
+<div class="table-wrap">
+
+<table>
+
+<thead>
+<tr>
+<th>選択</th>
+<th>組織名</th>
+<th>氏名</th>
+<th>メールアドレス</th>
+<th>部署</th>
+</tr>
+</thead>
+
+<tbody>
+
+<?php foreach (
+    $data['customers']
+    as $customer
+): ?>
+
+<tr>
+
+<td>
+<input type="checkbox">
+</td>
+
+<td>
+<?= h(
+    $customer['organization']
+    ?? ''
+) ?>
+</td>
+
+<td>
+<?= h(
+    $customer['name']
+    ?? ''
+) ?>
+</td>
+
+<td>
+<?= h(
+    $customer['email']
+    ?? ''
+) ?>
+</td>
+
+<td>
+<?= h(
+    $customer['department']
+    ?? ''
+) ?>
+</td>
+
+</tr>
+
+<?php endforeach; ?>
+
+</tbody>
+
+</table>
+
+</div>
+
+</div>
+
+<div class="card">
+
+<h2>
+メール作成
+</h2>
+
+<div class="form-group">
+
+<label class="form-label">
+件名
+</label>
+
+<input type="text"
+       value="<?= h(
+           $survey['title']
+       ) ?>">
+
+</div>
+
+<div class="form-group"
+     style="margin-top:16px">
+
+<label class="form-label">
+本文
+</label>
+
+<textarea><?= h(
+    "{顧客名} 様\n\n"
+    . "アンケートへのご協力をお願いいたします。\n"
+    . "{アンケートURL}"
+) ?></textarea>
+
+</div>
+
+<div class="actions">
+
+<button class="button primary"
+        onclick="
+            return confirm('一括送信しますか？');
+        ">
+    一括送信
+</button>
+
+<button class="button secondary">
+    再送
+</button>
+
+<button class="button secondary">
+    リマインド
+</button>
+
+</div>
+
+</div>
+
+<div class="card">
+
+<h2>
+送信履歴
+</h2>
+
+<?php if (
+    !$data['send_history']
+): ?>
+
+<div class="empty">
+    送信履歴はありません。
+</div>
+
+<?php else: ?>
+
+<div class="table-wrap">
+
+<table>
+
+<thead>
+<tr>
+<th>日時</th>
+<th>対象</th>
+<th>件数</th>
+<th>結果</th>
+</tr>
+</thead>
+
+<tbody>
+
+<?php foreach (
+    $data['send_history']
+    as $history
+): ?>
+
+<tr>
+
+<td>
+<?= h(
+    $history['createdAt']
+    ?? ''
+) ?>
+</td>
+
+<td>
+<?= h(
+    $history['surveyTitle']
+    ?? ''
+) ?>
+</td>
+
+<td>
+<?= h(
+    $history['count']
+    ?? 0
+) ?>
+</td>
+
+<td>
+<?= h(
+    $history['result']
+    ?? ''
+) ?>
+</td>
+
+</tr>
+
+<?php endforeach; ?>
+
+</tbody>
+
+</table>
+
+</div>
+
+<?php endif; ?>
+
+</div>
+
+</main>
+
+<?php
+    render_footer();
+    exit;
+}
+
+/* ============================================================
+ * 集計
+ * ============================================================ */
+
+if ($screen === 'analytics') {
+
+    $survey =
+        find_survey(
+            $data,
+            $surveyId
+        );
+
+    if ($survey === null) {
+        redirect_screen('list');
+    }
+
+    $answers =
+        array_values(
+            array_filter(
+                $data['answers'],
+                static fn(
+                    array $answer
+                ): bool =>
+                    ($answer['surveyId'] ?? '')
+                    === $survey['id']
+            )
+        );
+
+    render_header(
+        '回答集計・分析'
+    );
+?>
+
+<main class="container">
+
+<h1 class="page-title">
+    回答集計・分析
+</h1>
+
+<p class="page-description">
+対象アンケート：
+<strong><?= h(
+    $survey['title']
+) ?></strong>
+</p>
+
+<?php render_flash($flash); ?>
+
+<div class="grid">
+
+<div class="stat">
+<div class="stat-label">
+送信対象者数
+</div>
+<div class="stat-value">
+<?= count(
+    $data['customers']
+) ?>
+</div>
+</div>
+
+<div class="stat">
+<div class="stat-label">
+回答数
+</div>
+<div class="stat-value">
+<?= count($answers) ?>
+</div>
+</div>
+
+<div class="stat">
+<div class="stat-label">
+回答率
+</div>
+<div class="stat-value">
+<?php
+$customerCount =
+    count($data['customers']);
+
+echo $customerCount > 0
+    ? h(
+        number_format(
+            count($answers)
+            / $customerCount
+            * 100,
+            1
+        )
+    ) . '%'
+    : '0%';
+?>
+</div>
+</div>
+
+</div>
+
+<div class="card"
+     style="margin-top:20px">
+
+<h2>
+設問別集計
+</h2>
+
+<?php if (!$answers): ?>
+
+<div class="empty">
+    現在、回答データはありません
+</div>
+
+<?php else: ?>
+
+<p>
+回答データ：
+<?= count($answers) ?>件
+</p>
+
+<?php endif; ?>
+
+</div>
+
+<div class="card">
+
+<h2>
+個別回答
+</h2>
+
+<?php if (!$answers): ?>
+
+<div class="empty">
+    現在、回答データはありません
+</div>
+
+<?php else: ?>
+
+<div class="table-wrap">
+
+<table>
+
+<thead>
+<tr>
+<th>回答日時</th>
+<th>回答</th>
+</tr>
+</thead>
+
+<tbody>
+
+<?php foreach (
+    $answers
+    as $answer
+): ?>
+
+<tr>
+
+<td>
+<?= h(
+    $answer['createdAt']
+    ?? ''
+) ?>
+</td>
+
+<td>
+<pre style="
+white-space:pre-wrap;
+margin:0;
+font-family:inherit;
+"><?= h(
+    json_encode(
+        $answer['answers']
+        ?? [],
+        JSON_UNESCAPED_UNICODE
+        | JSON_PRETTY_PRINT
+    )
+) ?></pre>
+</td>
+
+</tr>
+
+<?php endforeach; ?>
+
+</tbody>
+
+</table>
+
+</div>
+
+<?php endif; ?>
+
+</div>
+
+</main>
+
+<?php
+    render_footer();
+    exit;
+}
+
+/* ============================================================
+ * 回答者画面
+ * ============================================================ */
+
+if ($screen === 'answer') {
+
+    $survey =
+        find_survey(
+            $data,
+            $surveyId
+        );
+
+    if ($survey === null) {
+        http_response_code(404);
+        exit('アンケートが見つかりません。');
+    }
+
+    render_header(
+        $survey['title'],
+        false
+    );
+?>
+
+<main class="answer-container">
+
+<div class="card">
+
+<h1 class="page-title">
+<?= h(
+    $survey['title']
+) ?>
+</h1>
+
+<p>
+<?= nl2br(
+    h(
+        $survey['description']
+        ?? ''
+    )
+) ?>
+</p>
+
+</div>
+
+<form method="post">
+
+<input type="hidden"
+       name="action"
+       value="answer_submit">
+
+<input type="hidden"
+       name="survey_id"
+       value="<?= h(
+           $survey['id']
+       ) ?>">
+
+<?php foreach (
+    $survey['groups']
+    as $group
+): ?>
+
+<div class="card">
+
+<h2>
+<?= h(
+    $group['title']
+) ?>
+</h2>
+
+<?php foreach (
+    $group['questions']
+    as $question
+): ?>
+
+<div class="question">
+
+<div class="question-title">
+
+<?= h(
+    $question['number']
+) ?>　
+<?= h(
+    $question['text']
+) ?>
+
+<?php if (
+    !empty($question['required'])
+): ?>
+
+<span class="text-danger">
+*
+</span>
+
+<?php endif; ?>
+
+</div>
+
+<?php if (
+    $question['type']
+    === 'single'
+): ?>
+
+<?php foreach (
+    $question['options']
+    as $option
+): ?>
+
+<label class="option">
+
+<input type="radio"
+       name="answer[<?= h(
+           $question['id']
+       ) ?>]"
+       value="<?= h(
+           $option['id']
+       ) ?>"
+       <?= !empty(
+           $question['required']
+       )
+           ? 'required'
+           : '' ?>>
+
+<?= h(
+    $option['label']
+) ?>
+
+</label>
+
+<?php endforeach; ?>
+
+<?php elseif (
+    $question['type']
+    === 'multiple'
+): ?>
+
+<?php foreach (
+    $question['options']
+    as $option
+): ?>
+
+<label class="option">
+
+<input type="checkbox"
+       name="answer[<?= h(
+           $question['id']
+       ) ?>][]"
+       value="<?= h(
+           $option['id']
+       ) ?>">
+
+<?= h(
+    $option['label']
+) ?>
+
+</label>
+
+<?php endforeach; ?>
+
+<?php else: ?>
+
+<textarea
+    name="answer[<?= h(
+        $question['id']
+    ) ?>]"
+    <?= !empty(
+        $question['required']
+    )
+        ? 'required'
+        : '' ?>></textarea>
+
+<?php endif; ?>
+
+</div>
+
+<?php endforeach; ?>
+
+</div>
+
+<?php endforeach; ?>
+
+<button class="button primary"
+        style="width:100%;margin-top:8px">
+    回答確認へ
+</button>
+
+</form>
+
+</main>
+
+<?php
+    render_footer();
+    exit;
 }
 
 /* ============================================================
  * 回答確認
  * ============================================================ */
 
-function render_confirm(
-    array $survey
-): void {
-    $draft =
+if ($screen === 'confirm') {
+
+    $survey =
+        find_survey(
+            $data,
+            $surveyId
+        );
+
+    if ($survey === null) {
+        http_response_code(404);
+        exit('アンケートが見つかりません。');
+    }
+
+    $answer =
         $_SESSION[
-            'answer_draft'
-        ] ?? [];
+            'answer_' . $surveyId
+        ]
+        ?? [];
 
-    $values =
-        is_array($draft)
-            ? ($draft['answers'] ?? [])
-            : [];
-
-    render_head(
+    render_header(
         '回答確認',
         false
     );
 ?>
-<div class="page-title">
-    <div>
-        <h1>回答確認</h1>
-        <p><?= h(
-            $survey['title']
-        ) ?></p>
-    </div>
-</div>
+
+<main class="answer-container">
 
 <div class="card">
-<div class="card-body">
+
+<h1 class="page-title">
+回答確認
+</h1>
+
+<p>
+送信内容をご確認ください。
+</p>
 
 <?php foreach (
-    $survey['groups'] as $group
+    $survey['groups']
+    as $group
 ): ?>
-
-<h2><?= h(
-    $group['title']
-) ?></h2>
 
 <?php foreach (
-    $group['questions'] as $question
+    $group['questions']
+    as $question
 ): ?>
+
+<div class="question">
+
+<div class="question-title">
+
+<?= h(
+    $question['number']
+) ?>　
+<?= h(
+    $question['text']
+) ?>
+
+</div>
+
+<div>
 
 <?php
 $value =
-    $values[
+    $answer[
         $question['id']
-    ] ?? '';
+    ]
+    ?? '';
 
 if (is_array($value)) {
-    $value =
+    echo h(
         implode(
             '、',
             $value
-        );
+        )
+    );
+} else {
+    echo nl2br(
+        h((string)$value)
+    );
 }
 ?>
 
-<div class="preview-question">
-
-<strong>
-<?= h($question['number']) ?>
-<?= h($question['text']) ?>
-</strong>
-
-<div class="notice"
-     style="margin-top:10px">
-    <?= nl2br(h($value)) ?>
 </div>
 
 </div>
 
 <?php endforeach; ?>
+
 <?php endforeach; ?>
 
-<div class="button-row"
-     style="justify-content:space-between;margin-top:20px">
+<div class="actions">
 
-<a class="btn btn-secondary"
+<a class="button secondary"
    href="<?= h(app_url([
        'screen'=>'answer',
        'id'=>$survey['id'],
@@ -6248,17 +4820,23 @@ if (is_array($value)) {
     戻って修正
 </a>
 
-<form method="post"
-      data-loading>
+<form method="post">
 
 <input type="hidden"
        name="action"
-       value="finalize_answer">
+       value="answer_confirm">
 
-<button class="btn btn-primary"
-        type="submit"
-        data-confirm="この回答を送信しますか？">
-    回答を送信
+<input type="hidden"
+       name="survey_id"
+       value="<?= h(
+           $survey['id']
+       ) ?>">
+
+<button class="button primary"
+        onclick="
+            return confirm('回答を送信しますか？');
+        ">
+    送信する
 </button>
 
 </form>
@@ -6266,242 +4844,82 @@ if (is_array($value)) {
 </div>
 
 </div>
-</div>
+
+</main>
+
 <?php
-render_footer();
+    render_footer();
+    exit;
 }
 
 /* ============================================================
  * 完了
  * ============================================================ */
 
-function render_complete(): void
-{
-    render_head(
+if ($screen === 'complete') {
+
+    render_header(
         '回答完了',
         false
     );
 ?>
-<div class="card">
-<div class="card-body"
-     style="text-align:center;padding:50px 20px">
 
-<div style="
-    width:64px;
-    height:64px;
-    border-radius:50%;
-    background:#dcfce7;
-    color:#16a34a;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    margin:0 auto 18px;
-    font-size:30px;">
-    ✓
-</div>
+<main class="answer-container">
 
-<h1>回答ありがとうございました</h1>
+<div class="card"
+     style="text-align:center">
+
+<h1>
+回答ありがとうございました
+</h1>
 
 <p>
-アンケートの回答を受け付けました。
+回答を受け付けました。
 </p>
 
 </div>
+
+</main>
+
+<?php
+    render_footer();
+    exit;
+}
+
+/* ============================================================
+ * 不明画面
+ * ============================================================ */
+
+http_response_code(404);
+
+render_header(
+    'ページが見つかりません'
+);
+
+?>
+
+<main class="container">
+
+<div class="card">
+
+<h1>
+ページが見つかりません
+</h1>
+
+<p>
+指定された画面は存在しません。
+</p>
+
+<a class="button primary"
+   href="<?= h(
+       app_url(['screen'=>'list'])
+   ) ?>">
+    アンケート一覧へ
+</a>
+
 </div>
+
+</main>
+
 <?php
 render_footer();
-}
-
-/* ============================================================
- * ルーティング
- * ============================================================ */
-
-if (
-    in_array(
-        $screen,
-        ['answer','confirm'],
-        true
-    )
-) {
-    $survey =
-        find_survey(
-            $surveys,
-            $id
-        );
-
-    if ($survey === null) {
-        render_head(
-            'アンケート',
-            false
-        );
-
-        ?>
-        <div class="alert alert-error">
-            アンケートが見つかりません。
-        </div>
-        <?php
-
-        render_footer();
-        exit;
-    }
-
-    if (
-        ($survey['status'] ?? '')
-        !== 'published'
-    ) {
-        render_head(
-            'アンケート',
-            false
-        );
-
-        ?>
-        <div class="alert alert-warning">
-            このアンケートは現在回答を受け付けていません。
-        </div>
-        <?php
-
-        render_footer();
-        exit;
-    }
-
-    if ($screen === 'answer') {
-        render_answer($survey);
-    } else {
-        render_confirm($survey);
-    }
-
-    exit;
-}
-
-if ($screen === 'complete') {
-    render_complete();
-    exit;
-}
-
-/* ============================================================
- * 管理者画面
- * ============================================================ */
-
-switch ($screen) {
-
-    case 'list':
-        render_list($surveys);
-        break;
-
-    case 'edit':
-        $survey =
-            $id !== ''
-                ? find_survey(
-                    $surveys,
-                    $id
-                )
-                : null;
-
-        if (
-            $id !== ''
-            && $survey === null
-        ) {
-            flash(
-                'error',
-                '指定されたアンケートが見つかりません。'
-            );
-
-            render_list(
-                $surveys
-            );
-            break;
-        }
-
-        render_edit(
-            $surveys,
-            $survey
-        );
-        break;
-
-    case 'preview':
-        render_preview(
-            find_survey(
-                $surveys,
-                $id
-            )
-        );
-        break;
-
-    case 'send':
-        $survey =
-            find_survey(
-                $surveys,
-                $id
-            );
-
-        if ($survey === null) {
-            flash(
-                'error',
-                '送信対象のアンケートが見つかりません。'
-            );
-
-            render_list(
-                $surveys
-            );
-            break;
-        }
-
-        /*
-         * 対象アンケートを固定。
-         * send画面内では別アンケートを選択しない。
-         */
-        render_send(
-            $survey,
-            $customers,
-            $history
-        );
-        break;
-
-    case 'analytics':
-        $survey =
-            find_survey(
-                $surveys,
-                $id
-            );
-
-        if ($survey === null) {
-            flash(
-                'error',
-                '集計対象のアンケートが見つかりません。'
-            );
-
-            render_list(
-                $surveys
-            );
-            break;
-        }
-
-        /*
-         * 対象アンケートを固定。
-         * analytics画面内では別アンケートを選択しない。
-         */
-        render_analytics(
-            $survey,
-            $answers,
-            $customers
-        );
-        break;
-
-    case 'kintone':
-        render_kintone(
-            $kintone
-        );
-        break;
-
-    case 'mail':
-        render_mail(
-            $mail
-        );
-        break;
-
-    default:
-        render_list(
-            $surveys
-        );
-        break;
-}
