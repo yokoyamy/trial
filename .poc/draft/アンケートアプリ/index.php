@@ -1,7 +1,6 @@
 <?php
 declare(strict_types=1);
 
-
 /*
  * アンケートアプリ
  * Apache 2.4 / PHP 8.5
