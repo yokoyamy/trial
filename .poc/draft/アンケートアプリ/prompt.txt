@@ -1045,6 +1045,14 @@ X-Cybozu-Authorizationを
 X-Cybozu-Authorizationおよびkintoneパスワードを
 ログやエラー画面へ出力しない。
 
+接続テスト
+/k/v1/app.json?id=nnn       
+
+項目取得
+/k/v1/app/form/fields.json?app=nnn   
+
+顧客同期
+/k/v1/records.json?app=nn           
 
 
 ## 9.2 SMTP
