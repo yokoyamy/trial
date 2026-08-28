@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-<?php
+
 // 現在の PATH の先頭に C:\PHP\php8.5.7 を追加する
 $currentPath = getenv('PATH');
 putenv("PATH=C:\\PHP\\php8.5.7;" . $currentPath);
