@@ -1,1470 +1,1338 @@
 <?php
-declare(strict_types=1);
+session_start();
 
-/**
+/*
  * ============================================================
- * 自作AI Prototype
- * 第2段階：会話履歴を利用した文脈エンジン
- * ============================================================
+ * My AI - Stage 2
+ * 会話履歴を実際に利用する文脈エンジン
  *
- * 環境：
- *   Apache + PHP
+ * Apache + PHP
+ * データベース不要
+ * 1ファイル構成
  *
- * 制約：
- *   - データベースなし
- *   - 外部AI APIなし
- *   - index.php 1ファイル
+ * この段階では「学習」は行わない。
  *
- * 第2段階の目的：
+ * 実装するもの：
+ *   - 会話履歴
+ *   - 文脈解析
+ *   - 話題推定
+ *   - 意図推定
+ *   - 指示語の簡易解決
+ *   - 文脈を利用したモック回答
  *
- *   「現在の入力だけを見る」のではなく、
- *   過去の会話から現在の発言の意味を推定する。
- *
- * 例：
- *
- *   ユーザー：
- *   PHPでAIを作りたい
- *
- *   AI：
- *   まずモックから始めましょう。
- *
- *   ユーザー：
- *   それを詳しく教えて
- *
- *   ↓
- *
- *   「それ」が直前の話題を指していると推定する。
- *
+ * 将来的に：
+ *   - 記憶
+ *   - 知識検索
+ *   - LLM / API
+ *   - 本格的な推論
+ * に発展させる。
  * ============================================================
  */
 
 
-/* ============================================================
- * 基本設定
- * ============================================================ */
+/*
+ * ============================================================
+ * 設定
+ * ============================================================
+ */
 
-session_start();
+const MAX_HISTORY = 30;
+const CONTEXT_TURNS = 8;
 
-header('Content-Type: text/html; charset=UTF-8');
+/*
+ * 開発中は true。
+ *
+ * AIが何を参照しているのか確認できるようにする。
+ * 本番運用時には false にできる。
+ */
+const DEBUG_MODE = true;
 
 
-/* ============================================================
+/*
+ * ============================================================
  * セッション初期化
- * ============================================================ */
+ * ============================================================
+ */
 
-if (!isset($_SESSION['ai_messages']) || !is_array($_SESSION['ai_messages'])) {
-    $_SESSION['ai_messages'] = [];
+if (!isset($_SESSION['messages']) || !is_array($_SESSION['messages'])) {
+    $_SESSION['messages'] = [];
+}
+
+if (!isset($_SESSION['context']) || !is_array($_SESSION['context'])) {
+    $_SESSION['context'] = [
+        'topic' => '',
+        'topic_keywords' => [],
+        'last_user_message' => '',
+        'last_ai_message' => '',
+        'last_reference' => '',
+        'turn_count' => 0
+    ];
 }
 
 
 /*
- * 文脈情報
- *
- * 会話履歴とは別に、
- * 現在AIが把握している「会話状態」を保持する。
+ * ============================================================
+ * 会話リセット
+ * ============================================================
  */
-if (!isset($_SESSION['ai_context']) || !is_array($_SESSION['ai_context'])) {
-    $_SESSION['ai_context'] = [
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reset'])) {
+
+    $_SESSION['messages'] = [];
+
+    $_SESSION['context'] = [
         'topic' => '',
-        'topic_score' => 0,
-        'last_subject' => '',
-        'last_intent' => '',
-        'turn' => 0
+        'topic_keywords' => [],
+        'last_user_message' => '',
+        'last_ai_message' => '',
+        'last_reference' => '',
+        'turn_count' => 0
     ];
+
+    header('Location: ' . $_SERVER['PHP_SELF']);
+    exit;
 }
 
 
-/* ============================================================
- * 共通関数
- * ============================================================ */
-
-
-/**
- * HTMLエスケープ
+/*
+ * ============================================================
+ * メッセージ処理
+ * ============================================================
  */
-function e(string $value): string
-{
-    return htmlspecialchars(
-        $value,
-        ENT_QUOTES | ENT_SUBSTITUTE,
-        'UTF-8'
-    );
-}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['message'])) {
+
+    $userMessage = trim((string)$_POST['message']);
+
+    if ($userMessage !== '') {
+
+        /*
+         * ----------------------------------------------------
+         * 重要：
+         *
+         * 回答を作る前に、現在までの履歴を取得する。
+         *
+         * 以前のコード：
+         *
+         * generateMockResponse($userMessage)
+         *
+         * ではなく、
+         *
+         * generateContextualResponse(
+         *     $userMessage,
+         *     $_SESSION['messages'],
+         *     $_SESSION['context']
+         * )
+         *
+         * とする。
+         * ----------------------------------------------------
+         */
+
+        $historyBeforeMessage = $_SESSION['messages'];
+
+        /*
+         * 現在の文脈を分析
+         */
+        $analysis = analyzeContext(
+            $userMessage,
+            $historyBeforeMessage,
+            $_SESSION['context']
+        );
 
 
-/**
- * 会話履歴へ追加
- */
-function addMessage(string $role, string $content): void
-{
-    $_SESSION['ai_messages'][] = [
-        'role' => $role,
-        'content' => $content,
-        'time' => date('H:i:s')
-    ];
-}
+        /*
+         * 文脈を利用して回答生成
+         */
+        $aiMessage = generateContextualResponse(
+            $userMessage,
+            $historyBeforeMessage,
+            $analysis
+        );
 
 
-/**
- * キーワードを含むか
- *
- * 日本語を考慮して mb_stripos() を使用する。
- */
-function containsAny(string $text, array $keywords): bool
-{
-    foreach ($keywords as $keyword) {
+        /*
+         * ----------------------------------------------------
+         * ユーザー発言を保存
+         * ----------------------------------------------------
+         */
 
-        if ($keyword === '') {
-            continue;
-        }
+        $_SESSION['messages'][] = [
+            'role' => 'user',
+            'content' => $userMessage,
+            'time' => date('Y-m-d H:i:s')
+        ];
 
-        if (mb_stripos($text, $keyword, 0, 'UTF-8') !== false) {
-            return true;
+
+        /*
+         * ----------------------------------------------------
+         * AI回答を保存
+         * ----------------------------------------------------
+         */
+
+        $_SESSION['messages'][] = [
+            'role' => 'ai',
+            'content' => $aiMessage,
+            'time' => date('Y-m-d H:i:s')
+        ];
+
+
+        /*
+         * ----------------------------------------------------
+         * 文脈状態を更新
+         * ----------------------------------------------------
+         */
+
+        $_SESSION['context'] = updateContext(
+            $_SESSION['context'],
+            $userMessage,
+            $aiMessage,
+            $analysis
+        );
+
+
+        /*
+         * 履歴が増えすぎないように制限
+         */
+        if (count($_SESSION['messages']) > MAX_HISTORY) {
+
+            $_SESSION['messages'] = array_slice(
+                $_SESSION['messages'],
+                -MAX_HISTORY
+            );
         }
     }
 
-    return false;
+
+    /*
+     * POST再送信防止
+     */
+    header('Location: ' . $_SERVER['PHP_SELF']);
+    exit;
 }
 
 
-/**
- * 文字列から不要な空白を整理
+/*
+ * ============================================================
+ * 文脈解析
+ * ============================================================
  */
-function normalizeText(string $text): string
+
+/**
+ * 現在の入力と過去の会話から文脈を分析する。
+ *
+ * この関数が第2段階の中心。
+ *
+ * まだLLMは使わない。
+ * PHPのルールで「文脈らしきもの」を構築する。
+ */
+function analyzeContext($message, $history, $previousContext)
+{
+    $message = normalizeText($message);
+
+    /*
+     * 直近の会話だけを取り出す。
+     */
+    $recentMessages = getRecentMessages(
+        $history,
+        CONTEXT_TURNS
+    );
+
+
+    /*
+     * 現在の話題を推定
+     */
+    $topic = detectTopic(
+        $message,
+        $recentMessages,
+        $previousContext
+    );
+
+
+    /*
+     * 意図を推定
+     */
+    $intent = detectIntent($message);
+
+
+    /*
+     * 指示語・省略表現などを確認
+     */
+    $reference = resolveReference(
+        $message,
+        $recentMessages,
+        $previousContext
+    );
+
+
+    /*
+     * 過去の発言から関連するものを抽出
+     */
+    $relatedMessages = findRelatedMessages(
+        $message,
+        $recentMessages,
+        $topic
+    );
+
+
+    /*
+     * 文脈が存在するか
+     */
+    $hasContext = (
+        !empty($recentMessages) &&
+        (
+            $reference !== '' ||
+            $topic !== '' ||
+            !empty($relatedMessages)
+        )
+    );
+
+
+    return [
+        'normalized_message' => $message,
+        'topic' => $topic,
+        'intent' => $intent,
+        'reference' => $reference,
+        'related_messages' => $relatedMessages,
+        'recent_messages' => $recentMessages,
+        'has_context' => $hasContext
+    ];
+}
+
+
+/*
+ * ============================================================
+ * 入力正規化
+ * ============================================================
+ */
+
+function normalizeText($text)
 {
     $text = trim($text);
 
-    $text = preg_replace('/[ \t]+/u', ' ', $text) ?? $text;
+    /*
+     * 全角スペースを半角スペースへ
+     */
+    $text = str_replace(
+        ["　", "\r\n", "\r"],
+        [" ", "\n", "\n"],
+        $text
+    );
 
     return $text;
 }
 
 
-/**
- * 日本語テキストを安全に短縮
+/*
+ * ============================================================
+ * 直近履歴取得
+ * ============================================================
  */
-function shortenText(string $text, int $length = 80): string
+
+function getRecentMessages($history, $limit)
 {
-    $text = trim($text);
-
-    if (mb_strlen($text, 'UTF-8') <= $length) {
-        return $text;
+    if (!is_array($history)) {
+        return [];
     }
 
-    return mb_substr($text, 0, $length, 'UTF-8') . '…';
+    return array_slice($history, -$limit);
 }
 
 
-/* ============================================================
- * 会話履歴
- * ============================================================ */
-
-
-/**
- * 最新のユーザー発言を取得
+/*
+ * ============================================================
+ * 話題推定
+ * ============================================================
  */
-function getLastUserMessage(array $history): string
+
+function detectTopic($message, $recentMessages, $previousContext)
 {
-    for ($i = count($history) - 1; $i >= 0; $i--) {
+    /*
+     * 明確な話題キーワード。
+     *
+     * ここでは「回答を決める」のではなく、
+     * 会話の話題を推定するためだけに使用する。
+     */
 
-        if (
-            isset($history[$i]['role']) &&
-            $history[$i]['role'] === 'user'
-        ) {
-            return (string)$history[$i]['content'];
-        }
-    }
-
-    return '';
-}
-
-
-/**
- * 最新のAI回答を取得
- */
-function getLastAiMessage(array $history): string
-{
-    for ($i = count($history) - 1; $i >= 0; $i--) {
-
-        if (
-            isset($history[$i]['role']) &&
-            $history[$i]['role'] === 'ai'
-        ) {
-            return (string)$history[$i]['content'];
-        }
-    }
-
-    return '';
-}
-
-
-/**
- * 過去のユーザー発言を取得
- */
-function getPreviousUserMessage(
-    array $history,
-    string $currentMessage
-): string {
-
-    $foundCurrent = false;
-
-    for ($i = count($history) - 1; $i >= 0; $i--) {
-
-        if (
-            !isset($history[$i]['role']) ||
-            $history[$i]['role'] !== 'user'
-        ) {
-            continue;
-        }
-
-        $content = (string)$history[$i]['content'];
-
-        /*
-         * 現在の発言は除外する。
-         */
-        if (!$foundCurrent && $content === $currentMessage) {
-            $foundCurrent = true;
-            continue;
-        }
-
-        return $content;
-    }
-
-    return '';
-}
-
-
-/**
- * 直近の会話を取得
- *
- * AIが文脈を判断するための短期記憶。
- */
-function getRecentConversation(
-    array $history,
-    int $maxMessages = 8
-): array {
-
-    if (count($history) <= $maxMessages) {
-        return $history;
-    }
-
-    return array_slice(
-        $history,
-        -$maxMessages
-    );
-}
-
-
-/* ============================================================
- * 話題解析
- * ============================================================ */
-
-
-/**
- * 話題辞書
- *
- * 「単語があれば即回答」という用途ではない。
- *
- * 現在の会話が何について話している可能性が高いかを
- * 推定するために使用する。
- */
-function getTopicDictionary(): array
-{
-    return [
+    $topicRules = [
 
         'PHP' => [
             'PHP',
             'php',
-            'PHPコード',
-            'PHPで',
-            'PHPの'
+            'プログラム',
+            'プログラミング',
+            'コード',
+            '関数',
+            '変数',
+            'Apache',
+            'apache'
         ],
 
         'AI' => [
             'AI',
-            'ＡＩ',
+            'ai',
             '人工知能',
             '生成AI',
-            '生成ＡＩ',
             'LLM',
+            '機械学習',
             'モデル'
         ],
 
-        '自作AI' => [
-            '自作AI',
-            '自作ＡＩ',
-            'AIを作る',
-            'ＡＩを作る',
-            'AI開発',
-            'AI開発'
-        ],
-
-        'Apache' => [
-            'Apache',
-            'apache',
-            'Webサーバー',
-            'ウェブサーバー'
-        ],
-
-        'データベース' => [
-            'データベース',
-            'database',
-            'DB',
-            'ＤＢ',
-            'SQL'
-        ],
-
-        'プログラミング' => [
-            'プログラミング',
-            'プログラム',
-            'コード',
-            '実装',
-            '開発'
-        ],
-
-        '文脈' => [
+        '文脈理解' => [
             '文脈',
             '会話履歴',
-            '会話',
-            'コンテキスト',
-            'context'
+            '履歴',
+            '前の話',
+            '前の質問',
+            'それ',
+            'これ',
+            'その方法',
+            '続き'
         ],
 
-        '記憶' => [
-            '記憶',
-            '覚えて',
+        '学習' => [
+            '学習',
             '覚える',
-            '忘れ',
-            'メモリー',
-            'memory'
+            '覚え',
+            '記憶',
+            '成長',
+            '賢く'
+        ],
+
+        '質問' => [
+            '質問',
+            '教えて',
+            'どうして',
+            'なぜ',
+            '理由',
+            '方法'
         ]
     ];
-}
 
 
-/**
- * 現在の発言から話題候補を抽出
- */
-function detectTopics(string $text): array
-{
-    $dictionary = getTopicDictionary();
-
-    $scores = [];
-
-    foreach ($dictionary as $topic => $keywords) {
-
-        $score = 0;
+    /*
+     * 現在の発言から話題を検索
+     */
+    foreach ($topicRules as $topic => $keywords) {
 
         foreach ($keywords as $keyword) {
 
-            if (
-                mb_stripos(
-                    $text,
-                    $keyword,
-                    0,
-                    'UTF-8'
-                ) !== false
-            ) {
-                $score++;
+            if (mb_stripos($message, $keyword) !== false) {
+                return $topic;
             }
         }
-
-        if ($score > 0) {
-            $scores[$topic] = $score;
-        }
-    }
-
-    arsort($scores);
-
-    return $scores;
-}
-
-
-/**
- * 会話履歴から現在の話題を推定
- *
- * 現在の入力だけでなく、
- * 過去の発言も加味する。
- */
-function detectContextTopic(
-    string $currentMessage,
-    array $history,
-    array $previousContext
-): array {
-
-    $scores = [];
-
-    /*
-     * --------------------------------------------------------
-     * 1. 現在の発言
-     * --------------------------------------------------------
-     */
-
-    $currentTopics = detectTopics($currentMessage);
-
-    foreach ($currentTopics as $topic => $score) {
-
-        if (!isset($scores[$topic])) {
-            $scores[$topic] = 0;
-        }
-
-        /*
-         * 現在の発言を最重要視
-         */
-        $scores[$topic] += $score * 5;
     }
 
 
     /*
-     * --------------------------------------------------------
-     * 2. 直近の会話
-     * --------------------------------------------------------
+     * 現在の発言だけでは分からない場合、
+     * 直近の会話から話題を引き継ぐ。
      */
 
-    $recent = getRecentConversation($history, 8);
+    if (!empty($recentMessages)) {
 
-    /*
-     * 古い発言ほど影響を弱くする。
-     */
-    $distance = 0;
+        $recentText = '';
 
-    for ($i = count($recent) - 1; $i >= 0; $i--) {
+        foreach ($recentMessages as $item) {
 
-        if (!isset($recent[$i]['content'])) {
-            continue;
-        }
-
-        $content = (string)$recent[$i]['content'];
-
-        $topics = detectTopics($content);
-
-        /*
-         * 直近ほど高い重み
-         */
-        $weight = max(
-            1,
-            4 - $distance
-        );
-
-        foreach ($topics as $topic => $score) {
-
-            if (!isset($scores[$topic])) {
-                $scores[$topic] = 0;
+            if (!isset($item['content'])) {
+                continue;
             }
 
-            $scores[$topic] += $score * $weight;
+            $recentText .= "\n" . $item['content'];
         }
 
-        $distance++;
+
+        foreach ($topicRules as $topic => $keywords) {
+
+            foreach ($keywords as $keyword) {
+
+                if (mb_stripos($recentText, $keyword) !== false) {
+                    return $topic;
+                }
+            }
+        }
     }
 
 
     /*
-     * --------------------------------------------------------
-     * 3. 前回の話題
-     * --------------------------------------------------------
-     *
-     * 「それ」「その方法」などの場合、
-     * 前回の話題を強く残す。
+     * 前回の文脈があれば引き継ぐ
      */
     if (
-        isset($previousContext['topic']) &&
-        $previousContext['topic'] !== ''
+        is_array($previousContext) &&
+        !empty($previousContext['topic'])
     ) {
+        return $previousContext['topic'];
+    }
 
-        $topic = (string)$previousContext['topic'];
 
-        if (!isset($scores[$topic])) {
-            $scores[$topic] = 0;
-        }
+    return '';
+}
 
-        $scores[$topic] += 4;
+
+/*
+ * ============================================================
+ * 意図推定
+ * ============================================================
+ */
+
+function detectIntent($message)
+{
+    /*
+     * あいさつ
+     */
+    if (preg_match(
+        '/^(こんにちは|こんばんは|おはよう|やあ|hello|hi)[！!。.\s]*$/iu',
+        $message
+    )) {
+        return 'greeting';
     }
 
 
     /*
-     * --------------------------------------------------------
-     * 4. 結果
-     * --------------------------------------------------------
+     * 自己紹介
      */
-
-    arsort($scores);
-
-    if (empty($scores)) {
-
-        /*
-         * 話題が判定できない場合は、
-         * 前回の話題を維持する。
-         */
-        if (
-            isset($previousContext['topic']) &&
-            $previousContext['topic'] !== ''
-        ) {
-
-            return [
-                'topic' => (string)$previousContext['topic'],
-                'score' => 1,
-                'candidates' => []
-            ];
-        }
-
-        return [
-            'topic' => '',
-            'score' => 0,
-            'candidates' => []
-        ];
+    if (preg_match(
+        '/あなた.*(誰|何)|自己紹介|どんなAI/iu',
+        $message
+    )) {
+        return 'self_introduction';
     }
 
 
-    $topic = (string)array_key_first($scores);
+    /*
+     * 「それ」「これ」などの継続発言
+     */
+    if (preg_match(
+        '/^(それ|これ|その|あれ|その方法|それを|これを|続き|詳しく)[\s\S]*/u',
+        $message
+    )) {
+        return 'context_followup';
+    }
 
-    return [
-        'topic' => $topic,
-        'score' => (int)$scores[$topic],
-        'candidates' => $scores
-    ];
+
+    /*
+     * 理由・説明
+     */
+    if (preg_match(
+        '/(なぜ|どうして|理由|どういう意味|とは|教えて|詳しく|説明)/u',
+        $message
+    )) {
+        return 'explanation';
+    }
+
+
+    /*
+     * 方法・手順
+     */
+    if (preg_match(
+        '/(どうやって|どうすれば|方法|手順|作り方|やり方|実装)/u',
+        $message
+    )) {
+        return 'how_to';
+    }
+
+
+    /*
+     * 質問
+     */
+    if (preg_match(
+        '/(\?|？|ですか|できますか|でしょうか|何|どれ|いつ|どこ)/u',
+        $message
+    )) {
+        return 'question';
+    }
+
+
+    /*
+     * 同意・確認
+     */
+    if (preg_match(
+        '/^(はい|うん|そう|そうです|お願いします|OK|ok|了解|わかりました)[！!。.\s]*$/iu',
+        $message
+    )) {
+        return 'confirmation';
+    }
+
+
+    /*
+     * 否定
+     */
+    if (preg_match(
+        '/^(いいえ|違う|違います|いや)[！!。.\s]*$/u',
+        $message
+    )) {
+        return 'negative';
+    }
+
+
+    return 'statement';
 }
 
 
-/* ============================================================
- * 指示語・継続質問の解析
- * ============================================================ */
-
-
-/**
- * 文脈参照をしている可能性が高いか
+/*
+ * ============================================================
+ * 指示語・省略された対象の解決
+ * ============================================================
  */
-function hasContextReference(string $text): bool
+
+function resolveReference($message, $recentMessages, $previousContext)
 {
-    $references = [
+    /*
+     * 文脈参照を必要としそうな表現
+     */
+    $referenceWords = [
         'それ',
         'これ',
         'あれ',
         'その',
         'この',
         'あの',
-        'さっき',
-        '先ほど',
-        '前の',
-        '前述',
-        '上記',
-        '今の',
-        '今話している',
-        'その話',
-        'この話',
+        'それを',
+        'これを',
         'その方法',
-        'この方法',
-        '同じもの',
-        '同じ方法'
+        'その話',
+        '続き'
     ];
 
-    return containsAny($text, $references);
-}
 
+    $containsReference = false;
 
-/**
- * 詳細化要求か
- */
-function isExpansionRequest(string $text): bool
-{
-    $keywords = [
-        '詳しく',
-        'もっと詳しく',
-        '詳細',
-        '具体的に',
-        'もう少し',
-        '掘り下げ',
-        '深く',
-        '詳しく教えて',
-        '具体例',
-        '例を',
-        '説明して',
-        '解説して'
-    ];
+    foreach ($referenceWords as $word) {
 
-    return containsAny($text, $keywords);
-}
-
-
-/**
- * 確認・肯定応答か
- */
-function isAffirmative(string $text): bool
-{
-    $keywords = [
-        'はい',
-        'うん',
-        'そう',
-        'そうです',
-        'お願いします',
-        'OK',
-        'ＯＫ',
-        '了解',
-        'わかった',
-        '分かった',
-        'その通り'
-    ];
-
-    return containsAny($text, $keywords);
-}
-
-
-/**
- * 否定・変更か
- */
-function isNegativeOrChange(string $text): bool
-{
-    $keywords = [
-        '違う',
-        'ちがう',
-        'いや',
-        'ではなく',
-        '変更',
-        'やめて',
-        '別の',
-        '別に',
-        '違います'
-    ];
-
-    return containsAny($text, $keywords);
-}
-
-
-/* ============================================================
- * 意図解析
- * ============================================================ */
-
-
-/**
- * ユーザーの意図を推定
- *
- * 「回答そのもの」を決めるのではなく、
- * 現在何をしようとしているのかを推定する。
- */
-function detectIntent(
-    string $currentMessage,
-    array $context
-): array {
-
-    $reference = hasContextReference($currentMessage);
-    $expansion = isExpansionRequest($currentMessage);
-    $affirmative = isAffirmative($currentMessage);
-    $negative = isNegativeOrChange($currentMessage);
-
-    if ($negative) {
-        return [
-            'name' => 'change_topic',
-            'label' => '話題変更',
-            'context_reference' => $reference
-        ];
-    }
-
-    if ($expansion) {
-        return [
-            'name' => 'expand',
-            'label' => '詳細説明要求',
-            'context_reference' => $reference
-        ];
-    }
-
-    if ($affirmative) {
-        return [
-            'name' => 'affirm',
-            'label' => '肯定・継続',
-            'context_reference' => $reference
-        ];
-    }
-
-    if ($reference) {
-        return [
-            'name' => 'context_question',
-            'label' => '文脈参照質問',
-            'context_reference' => true
-        ];
-    }
-
-    if (containsAny($currentMessage, [
-        'こんにちは',
-        'こんばんは',
-        'おはよう',
-        'hello',
-        'Hello',
-        'hi',
-        'Hi'
-    ])) {
-        return [
-            'name' => 'greeting',
-            'label' => 'あいさつ',
-            'context_reference' => false
-        ];
-    }
-
-    if (containsAny($currentMessage, [
-        '作りたい',
-        '作る',
-        '作り方',
-        '方法',
-        'やり方',
-        '実装',
-        'コード',
-        '書いて'
-    ])) {
-        return [
-            'name' => 'how_to',
-            'label' => '方法・実装',
-            'context_reference' => false
-        ];
-    }
-
-    if (containsAny($currentMessage, [
-        'なぜ',
-        'どうして',
-        '理由'
-    ])) {
-        return [
-            'name' => 'why',
-            'label' => '理由質問',
-            'context_reference' => false
-        ];
-    }
-
-    if (containsAny($currentMessage, [
-        '何',
-        'とは',
-        '教えて',
-        'できますか',
-        'できる？',
-        'できます？',
-        '?',
-        '？'
-    ])) {
-        return [
-            'name' => 'question',
-            'label' => '質問',
-            'context_reference' => false
-        ];
-    }
-
-    return [
-        'name' => 'conversation',
-        'label' => '通常会話',
-        'context_reference' => false
-    ];
-}
-
-
-/* ============================================================
- * 文脈対象の推定
- * ============================================================ */
-
-
-/**
- * 「それ」「その方法」などが何を指すか推定する。
- *
- * 現段階ではLLMではないため、
- * 直近のユーザー発言・AI回答・話題を組み合わせて
- * 「参照対象候補」を作る。
- */
-function resolveContextReference(
-    string $currentMessage,
-    array $history,
-    array $context
-): array {
-
-    if (!hasContextReference($currentMessage)) {
-        return [
-            'resolved' => false,
-            'subject' => '',
-            'source' => ''
-        ];
-    }
-
-
-    /*
-     * 直前のユーザー発言
-     */
-    $lastUser = getLastUserMessage($history);
-
-
-    /*
-     * 直前のAI回答
-     */
-    $lastAi = getLastAiMessage($history);
-
-
-    /*
-     * 「その方法」「この方法」など
-     *
-     * 直前のユーザー発言が質問・依頼なら、
-     * その内容を参照対象にする。
-     */
-    if (
-        containsAny($currentMessage, [
-            'その方法',
-            'この方法',
-            'そのやり方',
-            'このやり方'
-        ])
-    ) {
-
-        if ($lastUser !== '') {
-            return [
-                'resolved' => true,
-                'subject' => shortenText($lastUser, 120),
-                'source' => '直前のユーザー発言'
-            ];
-        }
-
-        if ($lastAi !== '') {
-            return [
-                'resolved' => true,
-                'subject' => shortenText($lastAi, 120),
-                'source' => '直前のAI回答'
-            ];
+        if (mb_stripos($message, $word) !== false) {
+            $containsReference = true;
+            break;
         }
     }
 
 
     /*
-     * 「その話」「この話」
+     * 指示語がなければ、
+     * 明示的な参照はない。
      */
-    if (
-        containsAny($currentMessage, [
-            'その話',
-            'この話',
-            'さっきの話',
-            '先ほどの話'
-        ])
-    ) {
+    if (!$containsReference) {
+        return '';
+    }
+
+
+    /*
+     * 直近のユーザー発言を探す。
+     */
+    for ($i = count($recentMessages) - 1; $i >= 0; $i--) {
+
+        $item = $recentMessages[$i];
 
         if (
-            isset($context['topic']) &&
-            $context['topic'] !== ''
+            isset($item['role']) &&
+            $item['role'] === 'user' &&
+            isset($item['content'])
         ) {
 
-            return [
-                'resolved' => true,
-                'subject' => (string)$context['topic'],
-                'source' => '現在の会話トピック'
-            ];
+            return $item['content'];
         }
     }
 
 
     /*
-     * 一般的な「それ」「これ」
-     *
-     * まず直前のAI回答を参照する。
-     */
-    if ($lastAi !== '') {
-
-        return [
-            'resolved' => true,
-            'subject' => shortenText($lastAi, 120),
-            'source' => '直前のAI回答'
-        ];
-    }
-
-
-    /*
-     * AI回答がない場合はユーザー発言
-     */
-    if ($lastUser !== '') {
-
-        return [
-            'resolved' => true,
-            'subject' => shortenText($lastUser, 120),
-            'source' => '直前のユーザー発言'
-        ];
-    }
-
-
-    /*
-     * 最後の保険
+     * 直近のユーザー発言がない場合、
+     * 前回の参照情報を利用する。
      */
     if (
-        isset($context['topic']) &&
-        $context['topic'] !== ''
+        is_array($previousContext) &&
+        !empty($previousContext['last_reference'])
     ) {
-
-        return [
-            'resolved' => true,
-            'subject' => (string)$context['topic'],
-            'source' => '現在の会話トピック'
-        ];
+        return $previousContext['last_reference'];
     }
 
-
-    return [
-        'resolved' => false,
-        'subject' => '',
-        'source' => ''
-    ];
-}
-
-
-/* ============================================================
- * 回答生成
- * ============================================================ */
-
-
-/**
- * 文脈を説明するための前置き
- */
-function contextPrefix(
-    array $context,
-    array $reference
-): string {
-
-    $topic = isset($context['topic'])
-        ? (string)$context['topic']
-        : '';
-
-    if (
-        $reference['resolved'] &&
-        $reference['subject'] !== ''
-    ) {
-
-        return
-            "先ほどの会話を踏まえると、" .
-            "「" . $reference['subject'] . "」についての話ですね。\n\n";
-    }
-
-    if ($topic !== '') {
-
-        return
-            "現在は「" . $topic . "」について話していますね。\n\n";
-    }
 
     return '';
 }
 
 
-/**
- * 文脈を利用して回答する。
+/*
+ * ============================================================
+ * 関連発言検索
+ * ============================================================
  */
-function generateContextAwareResponse(
-    string $message,
-    array $history,
-    array $context,
-    array $intent,
-    array $reference
-): string {
 
-    $intentName = (string)$intent['name'];
-
-    $topic = isset($context['topic'])
-        ? (string)$context['topic']
-        : '';
+function findRelatedMessages($message, $recentMessages, $topic)
+{
+    $results = [];
 
 
-    /* --------------------------------------------------------
+    /*
+     * 現在の発言から重要そうな語を抽出
+     */
+    $keywords = extractKeywords($message);
+
+
+    foreach ($recentMessages as $item) {
+
+        if (
+            !isset($item['content']) ||
+            !isset($item['role'])
+        ) {
+            continue;
+        }
+
+        $content = $item['content'];
+
+        $score = 0;
+
+
+        /*
+         * 話題一致
+         */
+        if (
+            $topic !== '' &&
+            mb_stripos($content, $topic) !== false
+        ) {
+            $score += 3;
+        }
+
+
+        /*
+         * キーワード一致
+         */
+        foreach ($keywords as $keyword) {
+
+            if (
+                $keyword !== '' &&
+                mb_stripos($content, $keyword) !== false
+            ) {
+                $score++;
+            }
+        }
+
+
+        /*
+         * 指示語を含む質問なら、
+         * 直近の発言を強く関連付ける。
+         */
+        if (
+            preg_match('/(それ|これ|その|あれ|続き)/u', $message) &&
+            $item['role'] === 'user'
+        ) {
+            $score += 2;
+        }
+
+
+        if ($score > 0) {
+
+            $results[] = [
+                'role' => $item['role'],
+                'content' => $content,
+                'score' => $score
+            ];
+        }
+    }
+
+
+    /*
+     * スコアの高い順に並べる
+     */
+    usort(
+        $results,
+        function ($a, $b) {
+            return $b['score'] <=> $a['score'];
+        }
+    );
+
+
+    /*
+     * 最大3件
+     */
+    return array_slice($results, 0, 3);
+}
+
+
+/*
+ * ============================================================
+ * キーワード抽出
+ * ============================================================
+ */
+
+function extractKeywords($text)
+{
+    /*
+     * 日本語では本格的な形態素解析をまだ行わない。
+     *
+     * Stage 2では、
+     * 明示的な重要語を簡易抽出する。
+     */
+
+    $knownKeywords = [
+        'AI',
+        '人工知能',
+        'PHP',
+        'Apache',
+        'プログラム',
+        'プログラミング',
+        'コード',
+        '会話',
+        '会話履歴',
+        '文脈',
+        '記憶',
+        '学習',
+        '知識',
+        'API',
+        'LLM',
+        'モデル',
+        'データベース',
+        'DB',
+        'モック',
+        '質問',
+        '回答'
+    ];
+
+
+    $found = [];
+
+
+    foreach ($knownKeywords as $keyword) {
+
+        if (mb_stripos($text, $keyword) !== false) {
+            $found[] = $keyword;
+        }
+    }
+
+
+    return array_values(array_unique($found));
+}
+
+
+/*
+ * ============================================================
+ * 文脈更新
+ * ============================================================
+ */
+
+function updateContext(
+    $previousContext,
+    $userMessage,
+    $aiMessage,
+    $analysis
+) {
+
+    $context = is_array($previousContext)
+        ? $previousContext
+        : [];
+
+
+    $context['topic'] =
+        $analysis['topic'] !== ''
+            ? $analysis['topic']
+            : ($context['topic'] ?? '');
+
+
+    $context['topic_keywords'] =
+        extractKeywords($userMessage);
+
+
+    $context['last_user_message'] =
+        $userMessage;
+
+
+    $context['last_ai_message'] =
+        $aiMessage;
+
+
+    /*
+     * 指示語が解決できた場合、
+     * その対象を保持する。
+     */
+    if (!empty($analysis['reference'])) {
+
+        $context['last_reference'] =
+            $analysis['reference'];
+
+    } elseif (
+        empty($context['last_reference']) &&
+        $userMessage !== ''
+    ) {
+
+        /*
+         * 最初の会話では現在の発言を
+         * 将来の参照対象候補として保持。
+         */
+        $context['last_reference'] =
+            $userMessage;
+    }
+
+
+    $context['turn_count'] =
+        (int)($context['turn_count'] ?? 0) + 1;
+
+
+    return $context;
+}
+
+
+/*
+ * ============================================================
+ * 文脈を利用した回答生成
+ * ============================================================
+ */
+
+function generateContextualResponse(
+    $message,
+    $history,
+    $analysis
+) {
+
+    $intent = $analysis['intent'];
+    $topic = $analysis['topic'];
+    $reference = $analysis['reference'];
+
+
+    /*
+     * --------------------------------------------------------
      * あいさつ
-     * -------------------------------------------------------- */
+     * --------------------------------------------------------
+     */
 
-    if ($intentName === 'greeting') {
+    if ($intent === 'greeting') {
 
         return
             "こんにちは！\n\n" .
-            "私はApache＋PHPだけで動作している自作AIの第2段階です。\n" .
-            "今は会話履歴から文脈を推定できるようになっています。\n\n" .
-            "例えば「それを詳しく教えて」のような、" .
-            "前の発言を参照する質問にも対応していきます。";
+            "私はApache＋PHPで作っている自作AIのモックです。\n" .
+            "現在は本物のAIモデルによる学習はしていません。\n\n" .
+            "この段階では、会話履歴を使って文脈を考える仕組みを実験しています。";
     }
 
 
-    /* --------------------------------------------------------
-     * 話題変更
-     * -------------------------------------------------------- */
+    /*
+     * --------------------------------------------------------
+     * 自己紹介
+     * --------------------------------------------------------
+     */
 
-    if ($intentName === 'change_topic') {
+    if ($intent === 'self_introduction') {
 
         return
-            "わかりました。\n\n" .
-            "ここまでの話題から切り替えましょう。\n" .
-            "新しいテーマを教えてください。";
+            "私はApache＋PHPだけで動かしている自作AIのプロトタイプです。\n\n" .
+            "現在はデータベースも外部AI APIも使用していません。\n\n" .
+            "第2段階として、過去の会話履歴を参照し、" .
+            "現在の発言との関係を推定する文脈エンジンを実装しています。\n\n" .
+            "まだ機械学習による「学習」はしていません。";
     }
 
 
-    /* --------------------------------------------------------
-     * 文脈参照
-     * -------------------------------------------------------- */
+    /*
+     * --------------------------------------------------------
+     * 「はい」「OK」など
+     *
+     * ここが重要。
+     *
+     * 現在の発言だけを見ると意味が曖昧。
+     * 直前のAI発言を参照して回答する。
+     * --------------------------------------------------------
+     */
 
-    if ($intentName === 'context_question') {
+    if ($intent === 'confirmation') {
 
-        if ($reference['resolved']) {
+        $lastAi = findLastMessageByRole(
+            $history,
+            'ai'
+        );
 
-            $subject = $reference['subject'];
 
-            if ($topic !== '') {
-
-                return
-                    "はい。先ほどの話を引き継いで回答します。\n\n" .
-                    "今回の文脈では、" .
-                    "「" . $subject . "」を指していると判断しました。\n\n" .
-                    "現在の話題は「" . $topic . "」です。\n\n" .
-                    "まだ本物のLLMではないため高度な意味理解ではありませんが、" .
-                    "過去の会話履歴を参照して、現在の発言との関係を判断しています。";
-            }
+        if ($lastAi !== '') {
 
             return
-                "先ほどの会話を参照していると判断しました。\n\n" .
-                "参照対象：\n" .
-                $subject . "\n\n" .
-                "このように、現在の発言だけではなく、" .
-                "過去の会話履歴を利用しています。";
+                "了解しました。\n\n" .
+                "直前の会話を引き継いで進めます。\n\n" .
+                "直前の私の回答は、\n" .
+                "「" . truncateText($lastAi, 120) . "」\n\n" .
+                "でした。\n\n" .
+                "この内容を現在の文脈として扱います。";
         }
+
+
+        return
+            "了解しました。\n\n" .
+            "まだ参照できる過去の会話はありません。";
+    }
+
+
+    /*
+     * --------------------------------------------------------
+     * 「違う」など
+     * --------------------------------------------------------
+     */
+
+    if ($intent === 'negative') {
+
+        $lastAi = findLastMessageByRole(
+            $history,
+            'ai'
+        );
+
+
+        if ($lastAi !== '') {
+
+            return
+                "わかりました。\n\n" .
+                "直前の回答とは異なる内容だったと判断します。\n" .
+                "もう少し具体的に教えてもらえれば、" .
+                "現在の文脈を修正して考え直します。";
+        }
+
+
+        return
+            "わかりました。\n" .
+            "どの部分が違っていたか教えてください。";
+    }
+
+
+    /*
+     * --------------------------------------------------------
+     * 文脈を使った追加質問
+     * --------------------------------------------------------
+     */
+
+    if ($intent === 'context_followup') {
+
+        if ($reference !== '') {
+
+            return
+                "はい。直前の会話にある\n\n" .
+                "「" . truncateText($reference, 180) . "」\n\n" .
+                "を「それ／これ」が指しているものとして解釈しました。\n\n" .
+                "このように、現在の発言だけではなく、" .
+                "過去の会話を参照して回答対象を推定しています。\n\n" .
+                "ただし、これはまだルールベースの文脈推定です。";
+        }
+
 
         return
             "「それ」が何を指しているのか、" .
-            "現在の会話履歴からは十分に判断できませんでした。\n\n" .
-            "もう少し具体的に指定してもらえると回答できます。";
+            "現在の会話履歴だけでは確実に判断できませんでした。\n\n" .
+            "もう少し具体的に教えてください。";
     }
 
 
-    /* --------------------------------------------------------
-     * 詳細説明
-     * -------------------------------------------------------- */
+    /*
+     * --------------------------------------------------------
+     * 「学習」「覚える」「記憶」
+     * --------------------------------------------------------
+     */
 
-    if ($intentName === 'expand') {
-
-        $prefix = contextPrefix(
-            $context,
-            $reference
-        );
-
-        if ($topic === 'PHP') {
-
-            return
-                $prefix .
-                "PHPについて詳しく説明します。\n\n" .
-                "今回の自作AIでは、PHPをAIそのものとして扱うのではなく、" .
-                "入力を受け取り、会話履歴を管理し、文脈を解析し、" .
-                "回答を生成するための制御役として使っています。\n\n" .
-                "次の段階では、この文脈処理に記憶機能を追加できます。";
-        }
-
-        if ($topic === 'AI' || $topic === '自作AI') {
-
-            return
-                $prefix .
-                "自作AIの構造を詳しくすると、次のようになります。\n\n" .
-                "1. ユーザー入力を受け取る\n" .
-                "2. 過去の会話を取得する\n" .
-                "3. 現在の話題を推定する\n" .
-                "4. ユーザーの意図を推定する\n" .
-                "5. 「それ」「これ」などの参照先を解決する\n" .
-                "6. 記憶や知識を検索する\n" .
-                "7. 回答を生成する\n\n" .
-                "現在はこのうち、会話履歴・話題・意図・参照先の推定までを実装しています。";
-        }
-
-        if ($topic === '文脈') {
-
-            return
-                $prefix .
-                "文脈理解では、現在の入力だけを見ません。\n\n" .
-                "直近のユーザー発言、AIの回答、過去の話題、" .
-                "現在の質問が追加質問なのか話題変更なのか、といった情報を組み合わせます。\n\n" .
-                "例えば「それを詳しく」という短い入力でも、" .
-                "直前の会話を参照して意味を補完します。";
-        }
+    if (
+        mb_stripos($message, '学習') !== false ||
+        mb_stripos($message, '覚え') !== false ||
+        mb_stripos($message, '記憶') !== false
+    ) {
 
         return
-            $prefix .
-            "直前までの会話を踏まえて、もう少し詳しく説明します。\n\n" .
-            "現在のモックAIでは、会話履歴・話題・質問形式を組み合わせて、" .
-            "回答の方向を決めています。\n\n" .
-            "さらに高度化するには、次に「記憶」と「知識検索」を追加するのが効果的です。";
+            "現在の私は、まだ機械学習による学習はしていません。\n\n" .
+            "今行っているのは「会話履歴を保持して、" .
+            "次の回答を作るときに参照する」という処理です。\n\n" .
+            "つまり、\n" .
+            "「会話を保存する」＝記憶の材料を持つ\n" .
+            "「文脈を参照する」＝過去の会話を回答に利用する\n" .
+            "「モデルを学習する」＝AIそのものの能力を変化させる\n\n" .
+            "という違いがあります。\n\n" .
+            "このプロトタイプでは、まず2番目の「文脈を参照する」部分を実装しています。";
     }
 
 
-    /* --------------------------------------------------------
-     * 肯定・継続
-     * -------------------------------------------------------- */
+    /*
+     * --------------------------------------------------------
+     * 文脈・会話履歴について
+     * --------------------------------------------------------
+     */
 
-    if ($intentName === 'affirm') {
+    if (
+        mb_stripos($message, '文脈') !== false ||
+        mb_stripos($message, '会話履歴') !== false
+    ) {
 
-        $prefix = contextPrefix(
-            $context,
-            $reference
-        );
-
-        if ($prefix === '') {
-
-            $prefix =
-                "はい。続きを説明します。\n\n";
-        }
+        $count = count($history);
 
         return
-            $prefix .
-            "このまま現在の話題を引き継ぎます。\n\n" .
-            "現在の私は会話履歴を短期記憶として利用しているため、" .
-            "直前の話題を維持したまま次の回答を生成できます。\n\n" .
-            "次の段階では、この短期記憶から重要な情報だけを抽出する仕組みを追加できます。";
+            "現在の文脈エンジンでは、過去の会話を最大 " .
+            CONTEXT_TURNS .
+            " 件程度参照しています。\n\n" .
+            "現在のセッションには " .
+            $count .
+            " 件のメッセージがあります。\n\n" .
+            "現在の話題としては「" .
+            ($topic !== '' ? $topic : 'まだ特定できていません') .
+            "」と推定しています。\n\n" .
+            "次の発言でも、今回までの会話を材料として利用します。";
     }
 
 
-    /* --------------------------------------------------------
-     * 方法・実装
-     * -------------------------------------------------------- */
+    /*
+     * --------------------------------------------------------
+     * PHP
+     * --------------------------------------------------------
+     */
 
-    if ($intentName === 'how_to') {
+    if ($topic === 'PHP') {
 
-        if ($topic === '自作AI' || $topic === 'AI') {
+        $previous = findLastMessageByRole(
+            $history,
+            'user'
+        );
+
+
+        if ($previous !== '' && $previous !== $message) {
 
             return
-                "自作AIを発展させるなら、まず文脈処理を安定させるのがよいです。\n\n" .
-                "現在のコードでは、\n" .
-                "・会話履歴\n" .
-                "・現在の話題\n" .
-                "・ユーザーの意図\n" .
-                "・指示語の参照先\n" .
-                "を分けて扱っています。\n\n" .
-                "次は「重要な情報だけを記憶する長期記憶」を追加できます。";
+                "PHPについての話ですね。\n\n" .
+                "今回の発言だけではなく、直前の会話も確認しています。\n\n" .
+                "直前のユーザー発言：\n" .
+                "「" . truncateText($previous, 160) . "」\n\n" .
+                "このように過去の発言を文脈として利用しています。\n\n" .
+                "まだPHPコードそのものを理解するAIモデルではなく、" .
+                "現在は文脈エンジンの実験段階です。";
         }
 
-        if ($topic === 'PHP') {
-
-            return
-                "PHPで実装する場合は、まず会話履歴を配列として保持し、" .
-                "その履歴を文脈解析関数へ渡します。\n\n" .
-                "今回のコードでは、" .
-                "detectContextTopic()、detectIntent()、" .
-                "resolveContextReference() を分けています。\n\n" .
-                "この分離によって、後からAIモデルを接続しやすくなります。";
-        }
 
         return
-            "方法を考えるには、まず現在の会話文脈を維持します。\n\n" .
-            "現在の話題：" . ($topic !== '' ? $topic : '未確定') . "\n\n" .
-            "その上で、具体的な処理を追加していく構造にしています。";
+            "PHPについてですね。\n\n" .
+            "このAIはApache＋PHP、データベースなし、" .
+            "index.php 1ファイルという条件で作っています。\n\n" .
+            "現在はPHPによるルールベースの文脈処理を実験しています。";
     }
 
 
-    /* --------------------------------------------------------
-     * 理由
-     * -------------------------------------------------------- */
+    /*
+     * --------------------------------------------------------
+     * AI
+     * --------------------------------------------------------
+     */
 
-    if ($intentName === 'why') {
-
-        $prefix = contextPrefix(
-            $context,
-            $reference
-        );
+    if ($topic === 'AI') {
 
         return
-            $prefix .
-            "理由を説明します。\n\n" .
-            "現在の自作AIでは、単純なキーワード判定だけに頼らず、" .
-            "会話履歴を使って現在の発言の意味を補完する必要があります。\n\n" .
-            "人間同士の会話では、毎回すべてを言い直さなくても話が通じます。" .
-            "その仕組みに近づけるため、会話履歴を文脈として利用しています。";
+            "AIについての話ですね。\n\n" .
+            "このプロトタイプでは、まだ本物の生成AIモデルは使用していません。\n\n" .
+            "現在実装しているのは、\n" .
+            "・会話履歴の保存\n" .
+            "・直近の会話の参照\n" .
+            "・話題の推定\n" .
+            "・意図の推定\n" .
+            "・指示語の簡易的な解決\n" .
+            "・文脈を利用した回答\n\n" .
+            "です。\n\n" .
+            "次の段階では、この仕組みに記憶や知識検索を追加できます。";
     }
 
 
-    /* --------------------------------------------------------
-     * 通常質問
-     * -------------------------------------------------------- */
+    /*
+     * --------------------------------------------------------
+     * 説明要求
+     * --------------------------------------------------------
+     */
 
-    if ($intentName === 'question') {
-
-        $prefix = contextPrefix(
-            $context,
-            $reference
-        );
+    if ($intent === 'explanation') {
 
         if ($topic !== '') {
 
             return
-                $prefix .
-                "現在の話題は「" . $topic . "」だと推定しています。\n\n" .
-                "質問を受け取りました。\n\n" .
-                "ただし、現在のAIはまだ外部の大規模言語モデルには接続していません。" .
-                "そのため、持っているモック知識の範囲で回答しています。\n\n" .
-                "今後はここに知識検索と推論処理を追加できます。";
+                "「" . $topic . "」についての説明ですね。\n\n" .
+                "今回の質問だけでなく、これまでの会話から話題を推定しています。\n\n" .
+                "ただし現在の私はまだ本格的な生成AIではありません。\n" .
+                "PHP側の文脈ルールを使って、過去の会話との関連を判断しています。\n\n" .
+                "そのため、複雑な意味理解についてはまだ限界があります。";
         }
 
+
         return
-            "質問を受け取りました。\n\n" .
-            "まだ十分な文脈を取得できていないため、" .
-            "現在の質問だけでは詳しく判断できません。\n\n" .
-            "会話を続けてもらえれば、その履歴を使って文脈を推定します。";
+            "説明を求めている質問として認識しました。\n\n" .
+            "現在の私は、会話履歴と簡易的な文脈情報を使って回答しています。\n\n" .
+            "具体的な対象を指定してもらえれば、" .
+            "現在の会話との関係を考慮して回答します。";
     }
 
 
-    /* --------------------------------------------------------
-     * 通常会話
-     * -------------------------------------------------------- */
+    /*
+     * --------------------------------------------------------
+     * 方法・手順
+     * --------------------------------------------------------
+     */
 
-    $prefix = contextPrefix(
-        $context,
-        $reference
-    );
+    if ($intent === 'how_to') {
 
-    if ($prefix !== '') {
+        if ($topic !== '') {
+
+            return
+                "「" . $topic . "」についての方法を聞いていますね。\n\n" .
+                "現在の文脈では、これまでの会話から話題を「" .
+                $topic .
+                "」と推定しています。\n\n" .
+                "この段階ではまだ専門知識を大量に持っているわけではないので、" .
+                "今後はここへ知識検索の仕組みを追加することで、" .
+                "より具体的な回答へ発展させられます。";
+        }
+
 
         return
-            $prefix .
-            "会話を続けましょう。\n\n" .
-            "現在の話題を「" . $topic . "」として保持しています。\n" .
-            "前の発言を踏まえて、この話題を継続できます。";
+            "方法を知りたい質問として認識しました。\n\n" .
+            "何についての方法なのか、もう少し具体的に教えてください。";
+    }
+
+
+    /*
+     * --------------------------------------------------------
+     * 一般質問
+     * --------------------------------------------------------
+     */
+
+    if ($intent === 'question') {
+
+        if ($topic !== '') {
+
+            return
+                "質問として受け取りました。\n\n" .
+                "現在の会話から、話題は「" .
+                $topic .
+                "」だと推定しています。\n\n" .
+                "現在のモックAIでは、ここから会話履歴を参照しながら回答を組み立てています。\n\n" .
+                "ただし、まだ本格的な知識検索やLLMによる推論は実装していません。";
+        }
+
+
+        return
+            "質問として受け取りました。\n\n" .
+            "現在の会話履歴から十分な文脈を特定できませんでした。\n\n" .
+            "質問の前後関係をもう少し具体的にすると、" .
+            "文脈エンジンがより正確に関連付けられます。";
+    }
+
+
+    /*
+     * --------------------------------------------------------
+     * 通常の発言
+     * --------------------------------------------------------
+     */
+
+    if ($topic !== '') {
+
+        return
+            "「" . $topic . "」についての発言として受け取りました。\n\n" .
+            "今回の入力だけでなく、過去の会話履歴も参照して、" .
+            "現在の話題を「" . $topic . "」と推定しています。\n\n" .
+            "これはまだ学習ではなく、会話履歴を使った文脈処理です。";
+    }
+
+
+    /*
+     * --------------------------------------------------------
+     * 文脈を特定できなかった場合
+     * --------------------------------------------------------
+     */
+
+    if (!empty($history)) {
+
+        $lastUser = findLastMessageByRole(
+            $history,
+            'user'
+        );
+
+
+        if ($lastUser !== '' && $lastUser !== $message) {
+
+            return
+                "入力を受け取りました。\n\n" .
+                "過去の会話も確認しましたが、" .
+                "今回の発言との明確な関連を特定できませんでした。\n\n" .
+                "直前の発言は、\n" .
+                "「" . truncateText($lastUser, 150) . "」\n\n" .
+                "です。\n\n" .
+                "話題が変わったのか、直前の話の続きなのかを" .
+                "判断できるようにすることが、今後の改善ポイントです。";
+        }
     }
 
 
     return
         "入力を受け取りました。\n\n" .
-        "まだ明確な話題を特定できませんでした。\n" .
-        "会話が続けば、履歴から話題と文脈を推定できるようになります。";
+        "まだ十分な文脈を取得できませんでした。\n\n" .
+        "私は現在、会話履歴を利用する第2段階のモックAIです。";
 }
 
 
-/* ============================================================
- * メインAI処理
- * ============================================================ */
-
-
-/**
- * AI処理全体
- *
- * ここが現在の「AIパイプライン」。
- *
- * 入力
- * ↓
- * 履歴
- * ↓
- * 文脈
- * ↓
- * 意図
- * ↓
- * 参照解決
- * ↓
- * 回答
+/*
+ * ============================================================
+ * 指定roleの最後のメッセージを取得
+ * ============================================================
  */
-function runAI(
-    string $userMessage,
-    array $history,
-    array $previousContext
-): array {
 
-    /*
-     * 1. 入力正規化
-     */
-    $normalized = normalizeText(
-        $userMessage
-    );
-
-
-    /*
-     * 2. 文脈解析
-     */
-    $contextResult = detectContextTopic(
-        $normalized,
-        $history,
-        $previousContext
-    );
-
-
-    /*
-     * 現在のAIコンテキスト
-     */
-    $context = [
-        'topic' => $contextResult['topic'],
-        'topic_score' => $contextResult['score'],
-        'last_subject' => '',
-        'last_intent' => '',
-        'turn' => (
-            isset($previousContext['turn'])
-                ? (int)$previousContext['turn']
-                : 0
-        ) + 1
-    ];
-
-
-    /*
-     * 3. 意図解析
-     */
-    $intent = detectIntent(
-        $normalized,
-        $context
-    );
-
-
-    /*
-     * 4. 文脈参照解決
-     */
-    $reference = resolveContextReference(
-        $normalized,
-        $history,
-        $context
-    );
-
-
-    /*
-     * 5. 参照対象をコンテキストへ保存
-     */
-    if ($reference['resolved']) {
-
-        $context['last_subject'] =
-            (string)$reference['subject'];
+function findLastMessageByRole($history, $role)
+{
+    if (!is_array($history)) {
+        return '';
     }
 
 
-    /*
-     * 6. 意図を保存
-     */
-    $context['last_intent'] =
-        (string)$intent['name'];
+    for ($i = count($history) - 1; $i >= 0; $i--) {
 
+        if (
+            isset($history[$i]['role']) &&
+            $history[$i]['role'] === $role &&
+            isset($history[$i]['content'])
+        ) {
 
-    /*
-     * 7. 回答生成
-     */
-    $response = generateContextAwareResponse(
-        $normalized,
-        $history,
-        $context,
-        $intent,
-        $reference
-    );
-
-
-    /*
-     * 8. AI状態を返す
-     */
-    return [
-        'response' => $response,
-        'context' => $context,
-        'intent' => $intent,
-        'reference' => $reference
-    ];
-}
-
-
-/* ============================================================
- * POST処理
- * ============================================================ */
-
-$error = '';
-
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-
-
-    /* --------------------------------------------------------
-     * リセット
-     * -------------------------------------------------------- */
-
-    if (isset($_POST['reset'])) {
-
-        $_SESSION['ai_messages'] = [];
-
-        $_SESSION['ai_context'] = [
-            'topic' => '',
-            'topic_score' => 0,
-            'last_subject' => '',
-            'last_intent' => '',
-            'turn' => 0
-        ];
-
-        header(
-            'Location: ' .
-            $_SERVER['PHP_SELF']
-        );
-
-        exit;
-    }
-
-
-    /* --------------------------------------------------------
-     * メッセージ
-     * -------------------------------------------------------- */
-
-    if (isset($_POST['message'])) {
-
-        $userMessage = trim(
-            (string)$_POST['message']
-        );
-
-
-        if ($userMessage === '') {
-
-            $error =
-                'メッセージを入力してください。';
-
-        } else {
-
-            /*
-             * 現在のAI状態を取得
-             */
-            $previousContext =
-                $_SESSION['ai_context'];
-
-
-            /*
-             * 現在までの履歴を取得
-             *
-             * ユーザー発言を追加する前に取得する。
-             *
-             * これにより「現在の入力」と
-             * 「過去の会話」を明確に分離できる。
-             */
-            $history =
-                $_SESSION['ai_messages'];
-
-
-            /*
-             * AIへ渡す
-             */
-            $result = runAI(
-                $userMessage,
-                $history,
-                $previousContext
-            );
-
-
-            /*
-             * ユーザー発言を保存
-             */
-            addMessage(
-                'user',
-                $userMessage
-            );
-
-
-            /*
-             * AI回答を保存
-             */
-            addMessage(
-                'ai',
-                $result['response']
-            );
-
-
-            /*
-             * AIの文脈状態を保存
-             */
-            $_SESSION['ai_context'] =
-                $result['context'];
+            return (string)$history[$i]['content'];
         }
     }
+
+
+    return '';
 }
 
 
-/* ============================================================
- * 表示用データ
- * ============================================================ */
+/*
+ * ============================================================
+ * 長文を短くする
+ * ============================================================
+ */
 
-$messages =
-    $_SESSION['ai_messages'];
+function truncateText($text, $length)
+{
+    $text = trim($text);
 
-$aiContext =
-    $_SESSION['ai_context'];
+    if (mb_strlen($text) <= $length) {
+        return $text;
+    }
+
+    return mb_substr($text, 0, $length) . '…';
+}
 
 
-/* ============================================================
- * HTML
- * ============================================================ */
+/*
+ * ============================================================
+ * HTMLエスケープ
+ * ============================================================
+ */
+
+function h($text)
+{
+    return htmlspecialchars(
+        (string)$text,
+        ENT_QUOTES,
+        'UTF-8'
+    );
+}
+
+
+/*
+ * ============================================================
+ * デバッグ表示用
+ * ============================================================
+ */
+
+$debugContext = $_SESSION['context'];
+
+$debugHistory = getRecentMessages(
+    $_SESSION['messages'],
+    CONTEXT_TURNS
+);
+
 ?>
 <!DOCTYPE html>
 <html lang="ja">
@@ -1475,11 +1343,9 @@ $aiContext =
 
 <meta
     name="viewport"
-    content="width=device-width, initial-scale=1.0"
->
+    content="width=device-width, initial-scale=1.0">
 
-<title>自作AI - Context Engine</title>
-
+<title>My AI - Context Engine</title>
 
 <style>
 
@@ -1489,15 +1355,14 @@ $aiContext =
 
 html,
 body {
-    width: 100%;
-    height: 100%;
     margin: 0;
+    padding: 0;
+    height: 100%;
 }
 
 body {
-    background: #f4f6f8;
-    color: #1f2937;
-
+    background: #f5f7fb;
+    color: #222;
     font-family:
         -apple-system,
         BlinkMacSystemFont,
@@ -1510,22 +1375,18 @@ body {
 
 
 /* ============================================================
-   アプリ
+   アプリ全体
    ============================================================ */
 
 .app {
-    width: 100%;
     max-width: 1000px;
-
     height: 100vh;
-    height: 100dvh;
-
     margin: 0 auto;
 
     display: flex;
     flex-direction: column;
 
-    background: #ffffff;
+    background: #fff;
 }
 
 
@@ -1534,89 +1395,49 @@ body {
    ============================================================ */
 
 .header {
-    flex: 0 0 auto;
+    min-height: 64px;
 
-    min-height: 70px;
-
-    padding: 12px 20px;
+    padding: 10px 20px;
 
     display: flex;
     align-items: center;
     justify-content: space-between;
 
+    gap: 15px;
+
     border-bottom: 1px solid #e5e7eb;
 
-    background: #ffffff;
+    background: #fff;
 }
 
-.header-left {
-    display: flex;
-    align-items: center;
-
-    gap: 12px;
-}
-
-.ai-logo {
-    width: 44px;
-    height: 44px;
-
-    border-radius: 13px;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    background:
-        linear-gradient(
-            135deg,
-            #2563eb,
-            #7c3aed
-        );
-
-    color: #ffffff;
-
+.logo {
+    font-size: 20px;
     font-weight: bold;
 }
 
-.title {
-    font-size: 17px;
-    font-weight: 700;
-}
-
-.subtitle {
+.status {
     margin-top: 3px;
 
-    color: #6b7280;
-
-    font-size: 11px;
-}
-
-.status {
+    font-size: 12px;
     color: #16a34a;
 }
 
-
-/* ============================================================
-   リセット
-   ============================================================ */
-
-.reset-button {
-    padding: 8px 12px;
-
+.reset {
     border: 1px solid #d1d5db;
+
+    background: #fff;
+
     border-radius: 8px;
 
-    background: #ffffff;
-
-    color: #374151;
+    padding: 8px 12px;
 
     cursor: pointer;
 
-    font-size: 13px;
+    white-space: nowrap;
 }
 
-.reset-button:hover {
-    background: #f9fafb;
+.reset:hover {
+    background: #f3f4f6;
 }
 
 
@@ -1627,11 +1448,9 @@ body {
 .chat {
     flex: 1;
 
-    min-height: 0;
-
     overflow-y: auto;
 
-    padding: 28px 20px;
+    padding: 30px 20px;
 }
 
 
@@ -1640,50 +1459,17 @@ body {
    ============================================================ */
 
 .welcome {
-    max-width: 680px;
-
-    margin: 55px auto;
-
     text-align: center;
-}
 
-.welcome-icon {
-    width: 70px;
-    height: 70px;
-
-    margin: 0 auto 20px;
-
-    border-radius: 20px;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    background:
-        linear-gradient(
-            135deg,
-            #2563eb,
-            #7c3aed
-        );
-
-    color: #ffffff;
-
-    font-size: 25px;
-    font-weight: bold;
+    padding: 80px 20px;
 }
 
 .welcome h1 {
-    margin: 0 0 12px;
-
-    font-size: 27px;
+    margin-bottom: 10px;
 }
 
 .welcome p {
-    margin: 7px 0;
-
     color: #6b7280;
-
-    line-height: 1.7;
 }
 
 
@@ -1705,156 +1491,142 @@ body {
     justify-content: flex-start;
 }
 
-.message-content {
-    display: flex;
-
-    max-width: 84%;
-}
-
-.message.user .message-content {
-    flex-direction: row-reverse;
-}
-
-
-/* ============================================================
-   アイコン
-   ============================================================ */
-
-.message-icon {
-    width: 34px;
-    height: 34px;
-
-    flex: 0 0 34px;
-
-    margin: 2px 9px 0;
-
-    border-radius: 50%;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    font-size: 10px;
-    font-weight: bold;
-}
-
-.ai-icon {
-    background: #111827;
-    color: #ffffff;
-}
-
-.user-icon {
-    background: #dbeafe;
-    color: #1d4ed8;
-}
-
-
-/* ============================================================
-   バブル
-   ============================================================ */
-
 .bubble {
-    padding: 13px 16px;
+    max-width: 75%;
+
+    padding: 14px 17px;
 
     border-radius: 16px;
 
-    line-height: 1.75;
+    line-height: 1.7;
 
     white-space: pre-wrap;
 
     overflow-wrap: anywhere;
-
-    font-size: 14px;
-}
-
-.ai .bubble {
-    background: #f1f5f9;
-
-    border-bottom-left-radius: 5px;
-
-    color: #1f2937;
 }
 
 .user .bubble {
     background: #2563eb;
 
-    border-bottom-right-radius: 5px;
+    color: #fff;
 
-    color: #ffffff;
+    border-bottom-right-radius: 5px;
+}
+
+.ai .bubble {
+    background: #f1f5f9;
+
+    color: #222;
+
+    border-bottom-left-radius: 5px;
 }
 
 
 /* ============================================================
-   文脈情報
+   AIアイコン
    ============================================================ */
 
-.context-panel {
-    max-width: 680px;
+.ai-icon {
+    width: 34px;
+    height: 34px;
 
-    margin: 0 auto 25px;
+    margin-right: 10px;
 
-    padding: 12px 14px;
+    border-radius: 50%;
 
-    border: 1px solid #e5e7eb;
+    background: #111827;
+
+    color: #fff;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    font-size: 12px;
+
+    flex-shrink: 0;
+}
+
+
+/* ============================================================
+   デバッグパネル
+   ============================================================ */
+
+.debug {
+    margin: 0 20px 15px;
+
+    border: 1px solid #dbeafe;
 
     border-radius: 10px;
 
-    background: #f8fafc;
+    background: #eff6ff;
 
-    color: #64748b;
-
-    font-size: 11px;
+    overflow: hidden;
 }
 
-.context-title {
-    margin-bottom: 6px;
+.debug summary {
+    padding: 10px 13px;
 
-    color: #334155;
+    cursor: pointer;
+
+    font-size: 13px;
 
     font-weight: bold;
+
+    color: #1e40af;
 }
 
-.context-row {
-    display: flex;
+.debug-body {
+    padding: 12px;
 
-    gap: 10px;
+    border-top: 1px solid #dbeafe;
 
-    margin: 3px 0;
+    font-size: 12px;
+
+    color: #334155;
 }
 
-.context-label {
-    width: 90px;
-
-    flex: 0 0 90px;
-
-    color: #94a3b8;
+.debug-row {
+    margin-bottom: 10px;
 }
 
-.context-value {
+.debug-label {
+    display: block;
+
+    margin-bottom: 3px;
+
+    font-weight: bold;
+
     color: #475569;
 }
 
+.debug-value {
+    padding: 8px;
 
-/* ============================================================
-   エラー
-   ============================================================ */
+    background: #fff;
 
-.error {
-    max-width: 680px;
+    border-radius: 6px;
 
-    margin: 0 auto 15px;
+    white-space: pre-wrap;
 
-    padding: 10px 14px;
+    overflow-wrap: anywhere;
+}
 
-    border: 1px solid #fecaca;
+.debug-history {
+    max-height: 180px;
 
-    border-radius: 8px;
+    overflow-y: auto;
+}
 
-    background: #fef2f2;
+.debug-history-item {
+    padding: 7px 0;
 
-    color: #b91c1c;
+    border-bottom: 1px solid #e5e7eb;
+}
 
-    font-size: 13px;
+.debug-history-item:last-child {
+    border-bottom: none;
 }
 
 
@@ -1863,165 +1635,101 @@ body {
    ============================================================ */
 
 .input-area {
-    flex: 0 0 auto;
-
-    padding: 14px 20px 18px;
+    padding: 15px 20px;
 
     border-top: 1px solid #e5e7eb;
 
-    background: #ffffff;
+    background: #fff;
 }
 
 .input-form {
     display: flex;
 
     gap: 10px;
-
-    max-width: 900px;
-
-    margin: 0 auto;
 }
 
-.message-input {
+.input-form textarea {
     flex: 1;
-
-    min-width: 0;
 
     min-height: 48px;
     max-height: 150px;
 
-    padding: 13px 15px;
-
     resize: vertical;
 
-    border: 1px solid #cbd5e1;
+    border: 1px solid #d1d5db;
 
     border-radius: 12px;
 
-    outline: none;
+    padding: 13px 14px;
 
-    font-family: inherit;
     font-size: 15px;
 
-    line-height: 1.5;
+    font-family: inherit;
+
+    outline: none;
 }
 
-.message-input:focus {
+.input-form textarea:focus {
     border-color: #2563eb;
 
     box-shadow:
-        0 0 0 3px rgba(
-            37,
-            99,
-            235,
-            .10
-        );
+        0 0 0 3px
+        rgba(37, 99, 235, .1);
 }
 
-.send-button {
-    flex: 0 0 78px;
+.send {
+    width: 80px;
 
-    border: 0;
+    border: none;
 
     border-radius: 12px;
 
     background: #2563eb;
 
-    color: #ffffff;
+    color: #fff;
+
+    font-size: 15px;
 
     cursor: pointer;
-
-    font-size: 14px;
-    font-weight: 600;
 }
 
-.send-button:hover {
+.send:hover {
     background: #1d4ed8;
-}
-
-.send-button:disabled {
-    background: #94a3b8;
-
-    cursor: wait;
-}
-
-.input-note {
-    max-width: 900px;
-
-    margin: 7px auto 0;
-
-    color: #9ca3af;
-
-    font-size: 10px;
-
-    text-align: center;
 }
 
 
 /* ============================================================
-   スマートフォン
+   スマホ
    ============================================================ */
 
 @media (max-width: 600px) {
+
+    .app {
+        height: 100dvh;
+    }
 
     .header {
         padding: 10px 12px;
     }
 
-    .title {
-        font-size: 15px;
-    }
-
-    .subtitle {
-        font-size: 10px;
-    }
-
-    .reset-button {
-        padding: 7px 9px;
-
-        font-size: 11px;
-    }
-
     .chat {
-        padding: 20px 10px;
-    }
-
-    .message-content {
-        max-width: 94%;
-    }
-
-    .message-icon {
-        margin-left: 5px;
-        margin-right: 5px;
+        padding: 20px 12px;
     }
 
     .bubble {
-        font-size: 14px;
+        max-width: 88%;
     }
 
     .input-area {
         padding: 10px;
     }
 
-    .send-button {
-        flex-basis: 62px;
+    .debug {
+        margin: 0 10px 10px;
     }
 
-    .welcome {
-        margin: 30px auto;
-    }
-
-    .welcome h1 {
-        font-size: 23px;
-    }
-
-    .context-panel {
-        font-size: 10px;
-    }
-
-    .context-label {
-        width: 75px;
-        flex-basis: 75px;
+    .send {
+        width: 60px;
     }
 }
 
@@ -2032,7 +1740,6 @@ body {
 
 <body>
 
-
 <div class="app">
 
 
@@ -2042,28 +1749,14 @@ body {
 
     <header class="header">
 
-        <div class="header-left">
+        <div>
 
-            <div class="ai-logo">
-                AI
+            <div class="logo">
+                🤖 My AI
             </div>
 
-            <div>
-
-                <div class="title">
-                    自作AI
-                </div>
-
-                <div class="subtitle">
-
-                    <span class="status">●</span>
-
-                    Context Engine /
-                    PHP Mock AI /
-                    第2段階
-
-                </div>
-
+            <div class="status">
+                ● Online / Stage 2 Context Engine
             </div>
 
         </div>
@@ -2074,10 +1767,10 @@ body {
             <button
                 type="submit"
                 name="reset"
-                value="1"
-                class="reset-button"
-            >
+                class="reset">
+
                 会話をリセット
+
             </button>
 
         </form>
@@ -2089,209 +1782,83 @@ body {
          チャット
          ====================================================== -->
 
-    <main
-        class="chat"
-        id="chat"
-    >
+    <main class="chat" id="chat">
 
 
-        <?php if (empty($messages)): ?>
+        <?php if (empty($_SESSION['messages'])): ?>
+
 
             <div class="welcome">
 
-                <div class="welcome-icon">
-                    AI
-                </div>
-
                 <h1>
-                    自作AI
+                    こんにちは 👋
                 </h1>
 
                 <p>
-                    第2段階：Context Engine
+                    Apache＋PHPで作っている自作AIです。
                 </p>
 
                 <p>
-                    会話履歴から文脈を推定します。
+                    現在は第2段階。
+                    会話履歴を使って文脈を考えます。
                 </p>
 
                 <p>
-                    例えば「それを詳しく教えて」と入力してみてください。
+                    まだ機械学習はしていません。
                 </p>
 
             </div>
 
-        <?php endif; ?>
+
+        <?php else: ?>
 
 
-        <?php if ($error !== ''): ?>
-
-            <div class="error">
-
-                <?= e($error) ?>
-
-            </div>
-
-        <?php endif; ?>
+            <?php foreach ($_SESSION['messages'] as $message): ?>
 
 
-        <?php foreach ($messages as $message): ?>
-
-            <?php
-
-            $role =
-                isset($message['role'])
-                    ? (string)$message['role']
-                    : 'ai';
-
-            $content =
-                isset($message['content'])
-                    ? (string)$message['content']
-                    : '';
-
-            ?>
+                <?php
+                $role = $message['role'] ?? 'ai';
+                $content = $message['content'] ?? '';
+                ?>
 
 
-            <?php if ($role === 'user'): ?>
+                <?php if ($role === 'user'): ?>
 
-                <div class="message user">
 
-                    <div class="message-content">
-
-                        <div class="message-icon user-icon">
-                            YOU
-                        </div>
+                    <div class="message user">
 
                         <div class="bubble">
 
-                            <?= e($content) ?>
+                            <?= h($content) ?>
 
                         </div>
 
                     </div>
 
-                </div>
 
-            <?php else: ?>
+                <?php else: ?>
 
-                <div class="message ai">
 
-                    <div class="message-content">
+                    <div class="message ai">
 
-                        <div class="message-icon ai-icon">
+                        <div class="ai-icon">
                             AI
                         </div>
 
                         <div class="bubble">
 
-                            <?= e($content) ?>
+                            <?= h($content) ?>
 
                         </div>
 
                     </div>
 
-                </div>
-
-            <?php endif; ?>
-
-        <?php endforeach; ?>
-
-
-        <?php if (!empty($messages)): ?>
-
-            <!-- ==================================================
-                 現在のAI文脈
-                 ================================================== -->
-
-            <div class="context-panel">
-
-                <div class="context-title">
-                    AIが現在保持している文脈
-                </div>
-
-                <div class="context-row">
-
-                    <div class="context-label">
-                        話題
-                    </div>
-
-                    <div class="context-value">
-
-                        <?= e(
-                            $aiContext['topic'] !== ''
-                                ? $aiContext['topic']
-                                : '未確定'
-                        ) ?>
-
-                    </div>
-
-                </div>
-
-
-                <div class="context-row">
-
-                    <div class="context-label">
-                        ターン
-                    </div>
-
-                    <div class="context-value">
-
-                        <?= e(
-                            (string)$aiContext['turn']
-                        ) ?>
-
-                    </div>
-
-                </div>
-
-
-                <div class="context-row">
-
-                    <div class="context-label">
-                        最後の意図
-                    </div>
-
-                    <div class="context-value">
-
-                        <?= e(
-                            $aiContext['last_intent'] !== ''
-                                ? $aiContext['last_intent']
-                                : '未確定'
-                        ) ?>
-
-                    </div>
-
-                </div>
-
-
-                <?php if (
-                    isset($aiContext['last_subject']) &&
-                    $aiContext['last_subject'] !== ''
-                ): ?>
-
-                    <div class="context-row">
-
-                        <div class="context-label">
-                            参照対象
-                        </div>
-
-                        <div class="context-value">
-
-                            <?= e(
-                                shortenText(
-                                    (string)$aiContext['last_subject'],
-                                    100
-                                )
-                            ) ?>
-
-                        </div>
-
-                    </div>
 
                 <?php endif; ?>
 
 
-            </div>
+            <?php endforeach; ?>
+
 
         <?php endif; ?>
 
@@ -2300,42 +1867,254 @@ body {
 
 
     <!-- ======================================================
-         入力
+         開発用文脈表示
          ====================================================== -->
 
-    <section class="input-area">
+    <?php if (DEBUG_MODE): ?>
+
+
+        <details class="debug">
+
+            <summary>
+                🔍 AI内部の文脈状態を確認
+            </summary>
+
+
+            <div class="debug-body">
+
+
+                <div class="debug-row">
+
+                    <span class="debug-label">
+                        現在の話題
+                    </span>
+
+                    <div class="debug-value">
+
+                        <?= h(
+                            $debugContext['topic']
+                                ?? '未特定'
+                        ) ?>
+
+                    </div>
+
+                </div>
+
+
+                <div class="debug-row">
+
+                    <span class="debug-label">
+                        話題キーワード
+                    </span>
+
+                    <div class="debug-value">
+
+                        <?php
+
+                        $keywords =
+                            $debugContext['topic_keywords']
+                            ?? [];
+
+                        echo h(
+                            empty($keywords)
+                                ? 'なし'
+                                : implode(
+                                    ' / ',
+                                    $keywords
+                                )
+                        );
+
+                        ?>
+
+                    </div>
+
+                </div>
+
+
+                <div class="debug-row">
+
+                    <span class="debug-label">
+                        ターン数
+                    </span>
+
+                    <div class="debug-value">
+
+                        <?= h(
+                            $debugContext['turn_count']
+                            ?? 0
+                        ) ?>
+
+                    </div>
+
+                </div>
+
+
+                <div class="debug-row">
+
+                    <span class="debug-label">
+                        最後のユーザー発言
+                    </span>
+
+                    <div class="debug-value">
+
+                        <?= h(
+                            $debugContext['last_user_message']
+                            ?? ''
+                        ) ?>
+
+                    </div>
+
+                </div>
+
+
+                <div class="debug-row">
+
+                    <span class="debug-label">
+                        AIが最後に回答した内容
+                    </span>
+
+                    <div class="debug-value">
+
+                        <?= h(
+                            $debugContext['last_ai_message']
+                            ?? ''
+                        ) ?>
+
+                    </div>
+
+                </div>
+
+
+                <div class="debug-row">
+
+                    <span class="debug-label">
+                        指示語などの最後の参照対象
+                    </span>
+
+                    <div class="debug-value">
+
+                        <?= h(
+                            $debugContext['last_reference']
+                            ?? ''
+                        ) ?>
+
+                    </div>
+
+                </div>
+
+
+                <div class="debug-row">
+
+                    <span class="debug-label">
+                        AIが参照可能な直近の会話
+                    </span>
+
+
+                    <div class="debug-value debug-history">
+
+
+                        <?php if (empty($debugHistory)): ?>
+
+
+                            まだ会話履歴はありません。
+
+
+                        <?php else: ?>
+
+
+                            <?php foreach ($debugHistory as $item): ?>
+
+
+                                <div class="debug-history-item">
+
+                                    <strong>
+                                        <?= h(
+                                            $item['role']
+                                            ?? ''
+                                        ) ?>
+                                    </strong>
+
+                                    ：
+
+
+                                    <?= h(
+                                        $item['content']
+                                        ?? ''
+                                    ) ?>
+
+                                </div>
+
+
+                            <?php endforeach; ?>
+
+
+                        <?php endif; ?>
+
+
+                    </div>
+
+                </div>
+
+
+                <div class="debug-row">
+
+                    <span class="debug-label">
+                        現在の段階
+                    </span>
+
+                    <div class="debug-value">
+
+                        Stage 2：
+                        会話履歴を利用した文脈エンジン
+
+                        <br><br>
+
+                        ※これは機械学習ではありません。
+                        PHPのルールを使って会話履歴との関連を推定しています。
+
+                    </div>
+
+                </div>
+
+
+            </div>
+
+        </details>
+
+
+    <?php endif; ?>
+
+
+    <!-- ======================================================
+         入力エリア
+         ====================================================== -->
+
+    <div class="input-area">
 
         <form
             method="post"
-            class="input-form"
-            autocomplete="off"
-        >
+            class="input-form">
+
 
             <textarea
                 name="message"
-                class="message-input"
-                placeholder="AIに話しかけてください..."
-                aria-label="メッセージ"
+                placeholder="メッセージを入力してください..."
                 required
-                autofocus
-            ></textarea>
+                autofocus></textarea>
 
 
             <button
                 type="submit"
-                class="send-button"
-            >
+                class="send">
+
                 送信
+
             </button>
+
 
         </form>
 
-
-        <div class="input-note">
-            Ctrl + Enter / Command + Enter でも送信できます
-        </div>
-
-    </section>
+    </div>
 
 
 </div>
@@ -2345,21 +2124,18 @@ body {
 
 /*
  * ============================================================
- * チャットを最下部へ
+ * チャットを一番下へ
  * ============================================================
  */
 
-(function () {
+const chat =
+    document.getElementById('chat');
 
-    const chat =
-        document.getElementById('chat');
+if (chat) {
 
-    if (chat) {
-        chat.scrollTop =
-            chat.scrollHeight;
-    }
-
-})();
+    chat.scrollTop =
+        chat.scrollHeight;
+}
 
 
 /*
@@ -2368,68 +2144,28 @@ body {
  * ============================================================
  */
 
-(function () {
+const textarea =
+    document.querySelector('textarea');
 
-    const textarea =
-        document.querySelector('.message-input');
-
-    if (!textarea) {
-        return;
-    }
+if (textarea) {
 
     textarea.addEventListener(
         'keydown',
-        function (event) {
+        function(e) {
 
             if (
-                (event.ctrlKey || event.metaKey) &&
-                event.key === 'Enter'
+                (e.ctrlKey || e.metaKey) &&
+                e.key === 'Enter'
             ) {
 
-                event.preventDefault();
+                this.form.submit();
 
-                if (this.form) {
-                    this.form.submit();
-                }
             }
 
         }
     );
 
-})();
-
-
-/*
- * ============================================================
- * 二重送信防止
- * ============================================================
- */
-
-(function () {
-
-    const form =
-        document.querySelector('.input-form');
-
-    const button =
-        document.querySelector('.send-button');
-
-    if (!form || !button) {
-        return;
-    }
-
-    form.addEventListener(
-        'submit',
-        function () {
-
-            button.disabled = true;
-
-            button.textContent =
-                '処理中...';
-
-        }
-    );
-
-})();
+}
 
 </script>
 
