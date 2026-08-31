@@ -1,195 +1,259 @@
 <?php
 declare(strict_types=1);
-session_set_cookie_params([
-    'httponly'=>true,'samesite'=>'Lax',
-    'secure'=>!empty($_SERVER['HTTPS'])
-]);
-session_start();
+date_default_timezone_set('Asia/Tokyo');
 
 const DATA=__DIR__.'/data';
+const SET=DATA.'/settings.json';
 const KEY=__DIR__.'/.secrets/アンケートアプリ/secret.key';
-if(!is_dir(DATA)) mkdir(DATA,0700,true);
-if(!is_dir(dirname(KEY))) mkdir(dirname(KEY),0700,true);
+const PRE='ENC:v1:';
+const KT=30;
+const ST=30;
 
-function h(string $v):string{return htmlspecialchars($v,ENT_QUOTES,'UTF-8');}
-function post(string $k,string $d=''):string{return trim((string)($_POST[$k]??$d));}
-function q(string $k,string $d=''):string{return trim((string)($_GET[$k]??$d));}
-function fileData(string $n,array $default=[]):array{
-    $f=DATA.'/'.$n.'.php';
-    if(!is_file($f)) return $default;
-    $v=include $f; return is_array($v)?$v:$default;
+function h(mixed $v):string{return htmlspecialchars((string)$v,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8');}
+function q(string $k,string $d=''):string{return is_scalar($_GET[$k]??null)?trim((string)$_GET[$k]):$d;}
+function p(string $k,string $d=''):string{return is_scalar($_POST[$k]??null)?trim((string)$_POST[$k]):$d;}
+function uid(string $p):string{return $p.'-'.bin2hex(random_bytes(8));}
+function url(array $a=[]):string{return ($_SERVER['SCRIPT_NAME']??'index.php').($a?'?'.http_build_query($a,'','&',PHP_QUERY_RFC3986):'');}
+function go(string $s,array $a=[]):never{header('Location: '.url(array_merge(['screen'=>$s],$a)),true,303);exit;}
+
+function session_start_safe():void{
+    if(session_status()===PHP_SESSION_ACTIVE)return;
+    $sd=sys_get_temp_dir().'/survey_app_sessions';
+    if(!is_dir($sd)&&!@mkdir($sd,0700,true))throw new RuntimeException('セッション保存領域を作成できません。');
+    if(!is_writable($sd))throw new RuntimeException('セッション保存領域へ書き込めません。');
+    session_save_path($sd);
+    ini_set('session.use_cookies','1');
+    ini_set('session.use_only_cookies','1');
+    ini_set('session.use_strict_mode','1');
+    $script=str_replace('\\','/',$_SERVER['SCRIPT_NAME']??'/index.php');
+    $path=dirname($script);$path=($path==='.'||$path==='/')?'/':rtrim($path,'/').'/';
+    $https=(!empty($_SERVER['HTTPS'])&&strtolower((string)$_SERVER['HTTPS'])!=='off')||(int)($_SERVER['SERVER_PORT']??0)===443;
+    session_name('survey_app_session');
+    session_set_cookie_params(['lifetime'=>0,'path'=>$path,'secure'=>$https,'httponly'=>true,'samesite'=>'Lax']);
+    if(session_start()!==true)throw new RuntimeException('PHPセッションを開始できません。');
 }
-function saveData(string $n,array $v):bool{
-    $f=DATA.'/'.$n.'.php';$tmp=$f.'.tmp';
-    $s="<?php\nreturn ".var_export($v,true).";\n";
-    return file_put_contents($tmp,$s,LOCK_EX)!==false && rename($tmp,$f);
+session_start_safe();
+
+function csrf():string{
+    if(empty($_SESSION['csrf'])||!is_string($_SESSION['csrf']))$_SESSION['csrf']=bin2hex(random_bytes(32));
+    return $_SESSION['csrf'];
 }
-function key32():string{
-    if(!is_file(KEY)||!is_readable(KEY)) throw new RuntimeException('暗号鍵が存在しません。');
-    $k=file_get_contents(KEY);
-    if(strlen($k)!==SODIUM_CRYPTO_SECRETBOX_KEYBYTES)
-        $k=base64_decode(trim($k),true)?:'';
-    if(strlen($k)!==SODIUM_CRYPTO_SECRETBOX_KEYBYTES) throw new RuntimeException('暗号鍵設定エラーです。');
-    return $k;
+function check_csrf():void{
+    $x=p('_csrf');
+    if($x===''||empty($_SESSION['csrf'])||!is_string($_SESSION['csrf'])||!hash_equals($_SESSION['csrf'],$x))
+        throw new RuntimeException('セッションが維持されていません。ページを再読み込みして再度実行してください。');
 }
-function enc(string $v):string{
-    $n=random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
-    return 'ENC:v1:'.base64_encode($n).':'.base64_encode(sodium_crypto_secretbox($v,$n,key32()));
-}
-function dec(string $v):string{
-    if(!str_starts_with($v,'ENC:v1:')) throw new RuntimeException('暗号化方式が不正です。');
-    $p=explode(':',$v,4);
-    if(count($p)!==4) throw new RuntimeException('暗号文形式が不正です。');
-    $x=sodium_crypto_secretbox_open(base64_decode($p[3],true),base64_decode($p[2],true),key32());
-    if($x===false) throw new RuntimeException('暗号化データを復号できません。');
-    return $x;
-}
-function redirect(string $s,string $id=''):never{
-    $u='index.php?screen='.rawurlencode($s).($id?'&id='.rawurlencode($id):'');
-    header('Location: '.$u, true, 303); exit;
-}
-function flash(string $m,string $type='success'):void{$_SESSION['flash']=[$m,$type];}
-function flashHtml():string{
+function flash(string $m,string $t='success'):void{$_SESSION['flash']=[$m,$t];}
+function flash_get():string{
     if(empty($_SESSION['flash']))return '';
     [$m,$t]=$_SESSION['flash'];unset($_SESSION['flash']);
-    return '<div class="alert alert-'.$t.'">'.h($m).'</div>';
+    return '<div class="alert '.$t.'">'.h($m).'</div>';
 }
-function api(string $url,string $method='GET',array $headers=[],?array $body=null):array{
-    $ctx=['http'=>[
-        'method'=>$method,'timeout'=>15,'ignore_errors'=>true,
-        'header'=>implode("\r\n",$headers)
-    ]];
-    if($body!==null){$ctx['http']['header'].="\r\nContent-Type: application/json";$ctx['http']['content']=json_encode($body,JSON_UNESCAPED_UNICODE);}
-    $c=stream_context_create($ctx);$r=@file_get_contents($url,false,$c);
-    $code=0;foreach(($http_response_header??[]) as $x)if(preg_match('/^HTTP\/\S+\s+(\d+)/',$x,$m))$code=(int)$m[1];
-    return ['code'=>$code,'body'=>$r===false?'':$r];
+
+function init():void{
+    if(!is_dir(DATA)&&!@mkdir(DATA,0770,true))throw new RuntimeException('データ保存領域を作成できません。');
 }
-function surveys():array{return fileData('surveys',[
- ['id'=>'survey-001','title'=>'2026年度 顧客満足度アンケート','description'=>'サービスについてのご意見をお聞かせください。',
- 'createdAt'=>'2026-08-01','updatedAt'=>'2026-08-25','startAt'=>'2026-08-01T09:00','endAt'=>'2026-09-20T18:00',
- 'status'=>'published','numbering'=>'global','groups'=>[
- ['id'=>'g1','title'=>'サービス全体について','questions'=>[
-  ['id'=>'q1','text'=>'サービス全体の満足度を教えてください。','type'=>'single','required'=>true,'options'=>['とても満足','満足','普通','不満']]
- ]]]]
- ]);}
-function saveSurvey(array $s):void{
-    $a=surveys();$found=false;
-    foreach($a as &$x)if($x['id']===$s['id']){$x=$s;$found=true;}
-    if(!$found)$a[]=$s;saveData('surveys',$a);
+function load(string $f,mixed $d=[]):mixed{
+    if(!is_file($f))return $d;
+    $x=@file_get_contents($f);if($x===false||trim($x)==='')return $d;
+    $v=json_decode($x,true);return $v===null?$d:$v;
 }
-function survey(string $id):?array{foreach(surveys() as $s)if($s['id']===$id)return $s;return null;}
-function normalizeStatus(array &$s):void{
-    if($s['status']==='published'&&!empty($s['endAt'])&&strtotime($s['endAt'])<time()){
-        $s['status']='ended';saveSurvey($s);
+function save(string $f,mixed $v):void{
+    init();$j=json_encode($v,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT|JSON_INVALID_UTF8_SUBSTITUTE);
+    if($j===false)throw new RuntimeException('データを生成できません。');
+    $t=$f.'.tmp.'.bin2hex(random_bytes(4));
+    if(@file_put_contents($t,$j,LOCK_EX)===false||!@rename($t,$f)){@unlink($t);throw new RuntimeException('データを保存できません。');}
+}
+function data():array{
+    $d=load(DATA.'/data.json',['surveys'=>[],'answers'=>[],'customers'=>[],'send_history'=>[]]);
+    foreach(['surveys','answers','customers','send_history'] as $k)if(!isset($d[$k])||!is_array($d[$k]))$d[$k]=[];
+    return $d;
+}
+function settings():array{
+    $d=['kintone'=>['subdomain'=>'','app_id'=>'','username'=>'','password'=>'','proxy'=>'','verify_ssl'=>false,'mapping'=>[],'fields'=>[]],
+        'mail'=>['host'=>'','port'=>587,'encryption'=>'tls','auth'=>true,'username'=>'','password'=>'','from_email'=>'','from_name'=>'','reply_to'=>'']];
+    return array_replace_recursive($d,load(SET,[]));
+}
+function survey(string $id):?array{foreach(data()['surveys'] as $s)if(($s['id']??'')===$id)return $s;return null;}
+function status(string $s):string{return ['draft'=>'下書き','published'=>'公開中','stopped'=>'停止','ended'=>'終了'][$s]??$s;}
+function normalize(array &$s):void{
+    if(($s['status']??'')==='published'&&!empty($s['endAt'])&&strtotime((string)$s['endAt'])<time())$s['status']='ended';
+}
+function renumber(array &$s):void{
+    $n=0;
+    foreach($s['groups'] as $gi=>&$g){
+        $gn=0;
+        foreach($g['questions'] as &$q){
+            $n++;$gn++;$q['number']=($s['numbering']??'global')==='group'?'Q'.($gi+1).'-'.$gn:'Q'.$n;
+        }
     }
 }
-function statusLabel(string $s):string{return ['draft'=>'下書き','published'=>'公開中','stopped'=>'停止','ended'=>'終了'][$s]??$s;}
-function csrf():string{if(empty($_SESSION['csrf']))$_SESSION['csrf']=bin2hex(random_bytes(16));return $_SESSION['csrf'];}
-function checkCsrf():void{if(!hash_equals(csrf(),post('_csrf')))throw new RuntimeException('セッションエラーです。');}
+function key32():string{
+    if(!extension_loaded('sodium'))throw new RuntimeException('PHP Sodium拡張が利用できません。');
+    if(!is_file(KEY)||!is_readable(KEY))throw new RuntimeException('暗号鍵が存在しないため既存の暗号化データを復号できません。');
+    $x=@file_get_contents(KEY);if($x===false)throw new RuntimeException('暗号鍵を読み込めません。');
+    if(strlen($x)!==SODIUM_CRYPTO_SECRETBOX_KEYBYTES)$x=base64_decode(trim($x),true)?:'';
+    if(strlen($x)!==SODIUM_CRYPTO_SECRETBOX_KEYBYTES)throw new RuntimeException('暗号鍵設定エラーです。');
+    return $x;
+}
+function enc(string $v):string{
+    if($v==='')return '';
+    $n=random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    return PRE.base64_encode($n).':'.base64_encode(sodium_crypto_secretbox($v,$n,key32()));
+}
+function dec(string $v):string{
+    if($v==='')return '';
+    $a=explode(':',$v,4);
+    if(count($a)!==4||$a[0]!=='ENC'||$a[1]!=='v1')throw new RuntimeException('保存済み認証情報が現在の暗号化方式ではありません。');
+    $n=base64_decode($a[2],true);$c=base64_decode($a[3],true);
+    if($n===false||$c===false||strlen($n)!==SODIUM_CRYPTO_SECRETBOX_NONCEBYTES)throw new RuntimeException('保存済み認証情報の形式が不正です。');
+    $x=sodium_crypto_secretbox_open($c,$n,key32());if($x===false)throw new RuntimeException('保存済み認証情報を復号できません。');
+    return $x;
+}
 
-$screen=q('screen','list');$id=q('id');
+function http_api(string $url,array $headers=[],?string $proxy=null,bool $verify=true):array{
+    $o=['http'=>['method'=>'GET','timeout'=>KT,'ignore_errors'=>true,'follow_location'=>0,'header'=>implode("\r\n",$headers)]];
+    if($proxy){$o['http']['proxy']='tcp://'.$proxy;$o['http']['request_fulluri']=true;}
+    $o['ssl']=['verify_peer'=>$verify,'verify_peer_name'=>$verify,'allow_self_signed'=>!$verify,'capture_peer_cert'=>false];
+    $c=stream_context_create($o);$body=@file_get_contents($url,false,$c);
+    $hs=$http_response_header??[];$code=0;
+    foreach($hs as $h)if(preg_match('/^HTTP\/\S+\s+(\d+)/',$h,$m))$code=(int)$m[1];
+    return ['code'=>$code,'body'=>$body===false?'':$body,'headers'=>$hs];
+}
+function kcfg():array{
+    $s=settings()['kintone'];$host=preg_replace('#^https?://#i','',trim((string)$s['subdomain']))??'';
+    $host=preg_replace('#/.*$#','',$host)??$host;
+    if(str_ends_with($host,'.cybozu.com'))$host=substr($host,0,-11);
+    if(!preg_match('/^[A-Za-z0-9][A-Za-z0-9-]*$/',$host))throw new RuntimeException('kintoneサブドメインの形式が不正です。');
+    $app=(int)$s['app_id'];if($app<1)throw new RuntimeException('kintoneアプリIDが不正です。');
+    $pw=dec((string)$s['password']);if($s['username']===''||$pw==='')throw new RuntimeException('kintone認証情報が未設定です。');
+    return [$host,$app,base64_encode($s['username'].':'.$pw),$s];
+}
+function kapi(string $path):array{
+    [$host,$app,$auth,$s]=kcfg();
+    $path=str_replace('{app}',(string)$app,$path);
+    $r=http_api('https://'.$host.'.cybozu.com'.$path,['X-Cybozu-Authorization: '.$auth,'Accept: application/json'],$s['proxy']?:null,(bool)$s['verify_ssl']);
+    if($r['code']<200||$r['code']>=300||in_array($r['code'],[302,303],true)){
+        $e=json_decode($r['body'],true);$msg=$e['message']??$r['body'];
+        throw new RuntimeException('kintone通信失敗 HTTP '.$r['code'].' '.trim((string)$msg));
+    }
+    if($r['body']==='')throw new RuntimeException('kintoneのレスポンスを取得できませんでした。');
+    $v=json_decode($r['body'],true);if(!is_array($v))throw new RuntimeException('kintoneレスポンスが不正です。');
+    return $v;
+}
+
+function smtp_open(array $s){
+    $host=$s['host'];$port=(int)$s['port'];$enc=$s['encryption'];
+    $target=($enc==='ssl'?'ssl://':'').$host.':'.$port;$e=0;$es='';
+    $fp=@stream_socket_client($target,$e,$es,ST,STREAM_CLIENT_CONNECT);
+    if(!$fp)throw new RuntimeException('SMTP接続失敗: '.$es);
+    stream_set_timeout($fp,ST);$read=function()use($fp){$r='';while(($x=fgets($fp,4096))!==false){$r.=$x;if(strlen($x)<4||$x[3]===' ')break;}return $r;};
+    $send=function($x)use($fp,$read){fwrite($fp,$x."\r\n");$r=$read();if(!preg_match('/^2\d\d|^3\d\d/m',$r))throw new RuntimeException('SMTP応答エラー: '.trim($r));return $r;};
+    $r=$read();if(!preg_match('/^220/m',$r))throw new RuntimeException('SMTPサーバーから正常な応答がありません。');
+    $send("EHLO survey-app");
+    if($enc==='tls'){$send('STARTTLS');if(!stream_socket_enable_crypto($fp,true,STREAM_CRYPTO_METHOD_TLS_CLIENT))throw new RuntimeException('SMTP TLS接続に失敗しました。');$send("EHLO survey-app");}
+    if($s['auth']){
+        $pw=dec((string)$s['password']);$send('AUTH LOGIN');$send(base64_encode($s['username']));$send(base64_encode($pw));
+    }
+    return [$fp,$send,$read];
+}
+
+function send_mail(array $s,string $to,string $subject,string $body):void{
+    [$fp,$send,$read]=smtp_open($s);$send('MAIL FROM:<'.$s['from_email'].'>');$send('RCPT TO:<'.$to.'>');$send('DATA');
+    $headers='From: '.mb_encode_mimeheader($s['from_name'],'UTF-8').' <'.$s['from_email'].'>'."\r\n";
+    if($s['reply_to'])$headers.='Reply-To: '.$s['reply_to']."\r\n";
+    $headers.='To: '.$to."\r\nSubject: '.mb_encode_mimeheader($subject,'UTF-8')."\r\nContent-Type: text/plain; charset=UTF-8\r\n";
+    $body=preg_replace('/^\./m','..',$body)??$body;fwrite($fp,$headers."\r\n".$body."\r\n.\r\n");$r=$read();fwrite($fp,"QUIT\r\n");fclose($fp);
+    if(!preg_match('/^250/m',$r))throw new RuntimeException('SMTP送信失敗: '.trim($r));
+}
+
+init();
+$screen=q('screen','list');$id=q('id');$error='';
 try{
- if($_SERVER['REQUEST_METHOD']==='POST'){
-    checkCsrf();$act=post('action');
-    if($act==='saveSurvey'){
-        $s=survey(post('id'))??['id'=>'survey-'.bin2hex(random_bytes(4)),'createdAt'=>date('Y-m-d'),'status'=>'draft','groups'=>[]];
-        $s['title']=post('title');$s['description']=post('description');$s['startAt']=post('startAt');
-        $s['endAt']=post('endAt');$s['numbering']=post('numbering','global');$s['updatedAt']=date('Y-m-d');
-        if($s['title']===''||strlen($s['title'])>200)throw new RuntimeException('タイトルを正しく入力してください。');
-        saveSurvey($s);flash('保存しました。');redirect('list');
+    if($_SERVER['REQUEST_METHOD']==='POST'){
+        check_csrf();$a=p('action');$d=data();
+        if($a==='save'){
+            $s=survey(p('id'))??['id'=>uid('survey'),'createdAt'=>now(),'status'=>'draft','groups'=>[]];
+            $s['title']=p('title');$s['description']=p('description');$s['startAt']=p('startAt');$s['endAt']=p('endAt');$s['numbering']=p('numbering','global');$s['updatedAt']=now();
+            if($s['title']===''||mb_strlen($s['title'])>200)throw new RuntimeException('タイトルを正しく入力してください。');
+            if(!$s['groups'])$s['groups']=[['id'=>uid('group'),'title'=>'グループ1','questions'=>[]]];
+            renumber($s);$found=false;foreach($d['surveys'] as &$x)if($x['id']===$s['id']){$x=$s;$found=true;}if(!$found)$d['surveys'][]=$s;save(DATA.'/data.json',$d);go('list');
+        }
+        if($a==='status'){
+            $s=survey(p('id'));if(!$s)throw new RuntimeException('アンケートが存在しません。');$to=p('to');
+            $ok=['draft'=>['published'],'published'=>['stopped'],'stopped'=>['published']];
+            if($s['status']==='ended'||!in_array($to,$ok[$s['status']]??[],true))throw new RuntimeException('状態変更できません。');
+            foreach($d['surveys'] as &$x)if($x['id']===$s['id']){$x['status']=$to;$x['updatedAt']=now();}save(DATA.'/data.json',$d);go('list');
+        }
+        if($a==='delete'||$a==='duplicate'){
+            $s=survey(p('id'));if(!$s)throw new RuntimeException('対象アンケートがありません。');
+            if($a==='delete')$d['surveys']=array_values(array_filter($d['surveys'],fn($x)=>$x['id']!==$s['id']));
+            else{$s['id']=uid('survey');$s['title'].='（コピー）';$s['status']='draft';$s['createdAt']=now();$s['updatedAt']=now();$d['surveys'][]=$s;}
+            save(DATA.'/data.json',$d);go('list');
+        }
+        if($a==='answer'){
+            $s=survey(p('id'));if(!$s)throw new RuntimeException('アンケートが存在しません。');normalize($s);
+            if($s['status']!=='published')throw new RuntimeException('このアンケートは現在回答できません。');
+            $_SESSION['answer']=$d['answers'][]=['id'=>uid('answer'),'survey'=>$s['id'],'createdAt'=>now(),'values'=>$_POST['answer']??[]];
+            save(DATA.'/data.json',$d);go('complete',['id'=>$s['id']]);
+        }
+        if(str_starts_with($a,'k_')){
+            $s=settings()['kintone'];
+            if($a==='k_save'){
+                $s['subdomain']=p('subdomain');$s['app_id']=(int)p('app_id');$s['username']=p('username');$s['proxy']=p('proxy');$s['verify_ssl']=p('verify_ssl')==='1';
+                if(p('password')!=='')$s['password']=enc(p('password'));$all=settings();$all['kintone']=$s;save(SET,$all);go('kintone');
+            }
+            if($a==='k_test'){kapi('/k/v1/app.json?id={app}');flash('kintone接続成功。');go('kintone');}
+            if($a==='k_fields'){$v=kapi('/k/v1/app/form/fields.json?app={app}');$all=settings();$all['kintone']['fields']=$v['properties']??[];save(SET,$all);flash('項目一覧を取得しました。');go('kintone');}
+            if($a==='k_sync'){
+                $v=kapi('/k/v1/records.json?app={app}&totalCount=true');$all=settings();$map=$all['kintone']['mapping']??[];$cs=[];
+                foreach($v['records']??[] as $r)$cs[]=array_filter(['id'=>$r['$id']['value']??uid('customer'),'name'=>$r[$map['name']??'']['value']??'','email'=>$r[$map['email']??'']['value']??'','department'=>$r[$map['department']??'']['value']??'','phone'=>$r[$map['phone']??'']['value']??'','address'=>$r[$map['address']??'']['value']??'']);
+                $dd=data();$dd['customers']=$cs;save(DATA.'/data.json',$dd);flash(count($cs).'件を同期しました。');go('kintone');
+            }
+        }
+        if($a==='m_save'){
+            $all=settings();$s=$all['mail'];foreach(['host','port','encryption','username','from_email','from_name','reply_to'] as $k)$s[$k]=p($k);$s['auth']=p('auth')==='1';if(p('password')!=='')$s['password']=enc(p('password'));$all['mail']=$s;save(SET,$all);go('mail');
+        }
+        if($a==='m_test'){[$fp,$send,$read]=smtp_open(settings()['mail']);fwrite($fp,"QUIT\r\n");fclose($fp);flash('SMTP接続・認証成功。');go('mail');}
+        if($a==='m_send'){ $s=settings()['mail'];send_mail($s,p('to'),p('subject'),str_replace(['{顧客名}','{アンケートURL}'],[p('name'),p('survey_url')],p('body')));flash('テストメールを送信しました。');go('mail');}
     }
-    if($act==='status'){
-        $s=survey(post('id'));if(!$s)throw new RuntimeException('アンケートが存在しません。');
-        $to=post('to');$ok=['draft'=>['published'],'published'=>['stopped'],'stopped'=>['published']];
-        if($s['status']==='ended'||!isset($ok[$s['status']])||!in_array($to,$ok[$s['status']],true))throw new RuntimeException('状態変更できません。');
-        $s['status']=$to;$s['updatedAt']=date('Y-m-d');saveSurvey($s);flash('状態を変更しました。');redirect('list');
-    }
-    if($act==='delete'){
-        $a=array_values(array_filter(surveys(),fn($x)=>$x['id']!==post('id')));saveData('surveys',$a);flash('削除しました。');redirect('list');
-    }
-    if($act==='duplicate'){
-        $s=survey(post('id'));if(!$s)throw new RuntimeException('対象がありません。');
-        $s['id']='survey-'.bin2hex(random_bytes(4));$s['title'].='（コピー）';$s['status']='draft';$s['createdAt']=date('Y-m-d');$s['updatedAt']=date('Y-m-d');saveSurvey($s);flash('複製しました。');redirect('list');
-    }
-    if($act==='answer'){
-        $s=survey(post('id'));if(!$s)throw new RuntimeException('アンケートが存在しません。');$ans=fileData('answers',[]);
-        $ans[]=['id'=>bin2hex(random_bytes(8)),'survey'=>$s['id'],'createdAt'=>date('c'),'values'=>$_POST['answer']??[]];
-        saveData('answers',$ans);redirect('complete',$s['id']);
-    }
-    if($act==='kintoneTest'||$act==='kintoneFields'||$act==='kintoneSync'){
-        $c=fileData('settings');
-        $host=preg_replace('#^https?://#','',post('subdomain',$c['subdomain']??''));$host=rtrim($host,'/');
-        if(!preg_match('/^[A-Za-z0-9.-]+\.cybozu\.com$/',$host))throw new RuntimeException('kintoneサブドメインが不正です。');
-        $app=(int)post('appId',$c['appId']??0);if($app<1)throw new RuntimeException('アプリIDが不正です。');
-        $user=post('username',$c['username']??'');$pw=post('password');
-        if($pw==='')$pw=$c['password']??'';if($user===''||$pw==='')throw new RuntimeException('認証情報が未設定です。');
-        $auth=base64_encode($user.':'.$pw);$base='https://'.$host;
-        $path=$act==='kintoneFields'?'/k/v1/app/form/fields.json?app='.$app:'/k/v1/app.json?id='.$app;
-        $r=api($base.$path,'GET',['X-Cybozu-Authorization: '.$auth]);
-        if($r['code']>=300||$r['code']<200||$r['body']==='')throw new RuntimeException('kintone通信失敗 HTTP '.$r['code'].' '.$r['body']);
-        if($act==='kintoneTest')flash('kintone接続成功。');
-        elseif($act==='kintoneFields'){saveData('kintone_fields',json_decode($r['body'],true)?:[]);flash('項目一覧を取得しました。');}
-        else{saveData('customers',[['id'=>'K001','name'=>'山田 太郎','email'=>'test@example.com','department'=>'営業部','phone'=>'03-0000-0000','address'=>'東京都']]);flash('顧客情報を同期しました。');}
-        redirect('kintone');
-    }
-    if($act==='kintoneSave'){
-        $c=fileData('settings');$c['subdomain']=preg_replace('#^https?://#','',rtrim(post('subdomain'),'/'));$c['appId']=(int)post('appId');
-        $c['username']=post('username');if(post('password')!=='')$c['password']=enc(post('password'));saveData('settings',$c);flash('設定を保存しました。');redirect('kintone');
-    }
-    if($act==='mailSave'){
-        $c=fileData('mail');foreach(['host','port','encryption','username','from','fromName','replyTo'] as $k)$c[$k]=post($k);
-        if(post('password')!=='')$c['password']=enc(post('password'));saveData('mail',$c);flash('SMTP設定を保存しました。');redirect('mail');
-    }
-    if($act==='mailTest'){
-        $c=fileData('mail');if(empty($c['host'])||empty($c['port']))throw new RuntimeException('SMTP設定が不足しています。');
-        $scheme=$c['encryption']==='ssl'?'ssl://':'';$fp=@stream_socket_client($scheme.$c['host'].':'.$c['port'],$e,$es,10);
-        if(!$fp)throw new RuntimeException('SMTP接続失敗: '.$es);fclose($fp);flash('SMTP接続成功。認証・TLS設定は環境に応じて確認してください。');redirect('mail');
-    }
- } 
-}catch(Throwable $e){flash($e->getMessage(),'danger');}
+}catch(Throwable $e){$error=$e->getMessage();}
 
-function shell(string $title,string $body,bool $admin=true):string{
- if(!$admin)return '<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.h($title).'</title><style>'.css().'</style><div class="respondent"><main class="rmain">'.$body.'</main></div>';
- return '<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.h($title).'</title><style>'.css().'</style><header><b>アンケート管理システム</b><nav><a href="?screen=list">一覧</a><a href="?screen=kintone">kintone</a><a href="?screen=mail">メール</a></nav></header><main>'.$body.'</main>';
-}
-function css():string{return <<<CSS
-:root{--p:#2563eb;--pd:#1d4ed8;--s:#16a34a;--w:#d97706;--d:#dc2626;--g:#64748b;--b:#dbe2ea;--t:#1e293b}*{box-sizing:border-box}body{margin:0;background:#f8fafc;color:var(--t);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP",Meiryo,sans-serif}header{height:64px;background:#0f172a;color:#fff;display:flex;align-items:center;padding:0 24px;gap:30px}header nav{display:flex;gap:6px}header a{color:#cbd5e1;text-decoration:none;padding:9px 13px;border-radius:7px}header a:hover{background:#1e293b;color:#fff}main{max-width:1500px;margin:auto;padding:28px}.card{background:#fff;border:1px solid var(--b);border-radius:12px;box-shadow:0 4px 18px #0f172a14;padding:20px;margin-bottom:20px}.bar,.actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}.full{grid-column:1/-1}input,textarea,select{width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:7px}textarea{min-height:100px}.btn{display:inline-block;padding:9px 14px;border:1px solid var(--b);border-radius:7px;background:#fff;color:var(--t);cursor:pointer;text-decoration:none}.primary{background:var(--p);border-color:var(--p);color:#fff}.success{background:var(--s);border-color:var(--s);color:#fff}.danger{background:var(--d);border-color:var(--d);color:#fff}.warning{background:var(--w);border-color:var(--w);color:#fff}.badge{padding:4px 9px;border-radius:99px;font-size:12px;background:#e2e8f0}.published{background:#dcfce7;color:#166534}.stopped{background:#fef3c7;color:#92400e}.ended{background:#fee2e2;color:#991b1b}.alert{padding:12px;border-radius:8px;margin-bottom:16px}.alert-success{background:#dcfce7;color:#166534}.alert-danger{background:#fee2e2;color:#991b1b}table{width:100%;border-collapse:collapse;min-width:1050px}th,td{padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;font-size:13px}.table{overflow:auto}.rmain{max-width:760px;margin:25px auto}.q{background:#fff;border:1px solid var(--b);border-radius:12px;padding:20px;margin:15px 0}.option{display:block;padding:12px;border:1px solid #cbd5e1;border-radius:8px;margin:8px 0}@media(max-width:800px){.grid{grid-template-columns:1fr}header{height:auto;min-height:60px;flex-wrap:wrap;padding:10px 14px}.table{overflow-x:auto}main{padding:16px}}
+function css():string{return <<<'CSS'
+:root{--p:#2563eb;--pd:#1d4ed8;--s:#16a34a;--w:#d97706;--d:#dc2626;--g:#64748b;--b:#dbe2ea;--t:#1e293b;--bg:#f8fafc}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--t);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP","Hiragino Kaku Gothic ProN",Meiryo,sans-serif}header{background:#0f172a;color:white;padding:16px 24px;display:flex;gap:25px;align-items:center;flex-wrap:wrap}header a{color:#cbd5e1;text-decoration:none}main{max-width:1500px;margin:auto;padding:24px}.card{background:white;border:1px solid var(--b);border-radius:12px;padding:20px;margin-bottom:18px;box-shadow:0 4px 18px #0f172a14}.bar{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:15px}.full{grid-column:1/-1}input,textarea,select{width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:7px;background:white}textarea{min-height:100px}.btn{display:inline-block;border:1px solid var(--b);border-radius:7px;padding:9px 13px;background:white;color:var(--t);cursor:pointer;text-decoration:none}.primary{background:var(--p);color:white;border-color:var(--p)}.success{background:var(--s);color:white}.danger{background:var(--d);color:white}.warning{background:var(--w);color:white}.badge{padding:4px 9px;border-radius:99px;font-size:12px;background:#e2e8f0}.alert{padding:12px;border-radius:8px;margin-bottom:16px}.alert.success{background:#dcfce7;color:#166534}.alert.danger{background:#fee2e2;color:#991b1b}.table{overflow:auto}table{width:100%;min-width:1050px;border-collapse:collapse}th,td{padding:11px;border-bottom:1px solid #e2e8f0;text-align:left;font-size:13px}.q{border:1px solid var(--b);border-radius:10px;padding:15px;margin:10px 0}.option{display:block;padding:12px;border:1px solid #cbd5e1;border-radius:8px;margin:7px 0}.respondent{max-width:760px;margin:auto}.muted{color:var(--g)}@media(max-width:800px){main{padding:14px}.grid{grid-template-columns:1fr}.full{grid-column:auto}header{padding:13px}.respondent{width:100%}}
 CSS;}
-$body=flashHtml();
-
+function shell(string $body,bool $admin=true):string{
+    $head='<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>'.css().'</style>';
+    if(!$admin)return '<!doctype html><html lang="ja"><head>'.$head.'</head><body><main class="respondent">'.$body.'</main></body></html>';
+    return '<!doctype html><html lang="ja"><head>'.$head.'</head><body><header><b>アンケート管理システム</b><a href="?screen=list">一覧</a><a href="?screen=kintone">kintone</a><a href="?screen=mail">メール</a></header><main>'.$body.'</main></body></html>';
+}
+$body=flash_get().($error?'<div class="alert danger">'.h($error).'</div>':'');
 if($screen==='list'){
- $ss=surveys();$search=q('q');if($search!=='')$ss=array_values(array_filter($ss,fn($s)=>mb_stripos($s['title'],$search)!==false));
- foreach($ss as &$s)normalizeStatus($s);
- $body.='<div class="bar" style="justify-content:space-between"><div><h1>アンケート一覧</h1><p>アンケートの作成・公開・集計・送信を管理します。</p></div><a class="btn primary" href="?screen=edit">＋ 新規作成</a></div><div class="card"><form class="bar"><input name="q" value="'.h($search).'" placeholder="タイトルを検索（Enter）"><input type="hidden" name="screen" value="list"><select name="status"><option value="">すべて</option><option>公開中</option><option>下書き</option><option>停止</option><option>終了</option></select></form><div class="table"><table><tr><th>タイトル</th><th>作成日</th><th>更新日</th><th>期間</th><th>状態</th><th>回答数</th><th>操作</th></tr>';
- foreach($ss as $s){$cnt=count(array_filter(fileData('answers',[]),fn($a)=>$a['survey']===$s['id']));$body.='<tr><td><b>'.h($s['title']).'</b></td><td>'.h($s['createdAt']).'</td><td>'.h($s['updatedAt']).'</td><td>'.h($s['startAt']).' ～ '.h($s['endAt']).'</td><td><span class="badge '.h($s['status']).'">'.h(statusLabel($s['status'])).'</span></td><td>'.$cnt.'</td><td class="bar"><a class="btn" href="?screen=edit&id='.h($s['id']).'">確認・編集</a><a class="btn" href="?screen=analytics&id='.h($s['id']).'">集計</a><a class="btn" href="?screen=send&id='.h($s['id']).'">送信</a><a class="btn" href="?screen=preview&id='.h($s['id']).'">プレビュー</a></td></tr>';}
- $body.='</table></div></div>';
+    $d=data();$ss=$d['surveys'];$kw=q('q');$st=q('status');
+    foreach($ss as &$s)normalize($s);
+    if($kw!=='')$ss=array_values(array_filter($ss,fn($s)=>mb_stripos($s['title']??'',$kw)!==false));
+    if($st!=='')$ss=array_values(array_filter($ss,fn($s)=>status($s['status']??'')===$st));
+    usort($ss,fn($a,$b)=>strcmp($b['updatedAt']??'',$a['updatedAt']??''));
+    $body.='<div class="bar"><div><h1>アンケート一覧</h1><p>アンケートの作成・公開・集計・送信を管理します。</p></div><a class="btn primary" href="?screen=edit">＋ 新規作成</a></div><div class="card"><form class="bar"><input name="q" value="'.h($kw).'" placeholder="タイトルを検索（Enter）"><select name="status"><option value="">すべて</option><option>公開中</option><option>下書き</option><option>停止</option><option>終了</option></select><input type="hidden" name="screen" value="list"></form><div class="table"><table><tr><th>タイトル</th><th>作成日</th><th>更新日</th><th>期間</th><th>状態</th><th>回答数</th><th>操作</th></tr>';
+    foreach($ss as $s){$n=count(array_filter($d['answers'],fn($a)=>($a['survey']??'')===$s['id']));$body.='<tr><td><b>'.h($s['title']).'</b></td><td>'.h($s['createdAt']??'').'</td><td>'.h($s['updatedAt']??'').'</td><td>'.h($s['startAt']??'').' ～ '.h($s['endAt']??'').'</td><td>'.h(status($s['status']??'')).'</td><td>'.$n.'</td><td><a class="btn" href="?screen=edit&id='.h($s['id']).'">確認・編集</a> <a class="btn" href="?screen=preview&id='.h($s['id']).'">プレビュー</a> <a class="btn" href="?screen=analytics&id='.h($s['id']).'">集計</a> <a class="btn" href="?screen=send&id='.h($s['id']).'">送信</a></td></tr>';}
+    $body.='</table></div></div>';
 }elseif($screen==='edit'){
- $s=$id?survey($id):['id'=>'','title'=>'','description'=>'','startAt'=>'','endAt'=>'','numbering'=>'global','status'=>'draft','groups'=>[['id'=>'g1','title'=>'グループ1','questions'=>[]]]];
- if(!$s)$body.='<div class="alert alert-danger">アンケートが存在しません。</div>';else{
- $body.='<div class="card"><form method="post"><input type="hidden" name="_csrf" value="'.csrf().'"><input type="hidden" name="action" value="saveSurvey"><input type="hidden" name="id" value="'.h($s['id']).'"><div class="bar" style="justify-content:space-between"><h1>アンケート作成・編集</h1><span class="badge '.h($s['status']).'">'.h(statusLabel($s['status'])).'</span></div><div class="grid"><label>アンケートタイトル<input name="title" value="'.h($s['title']).'" required></label><label>質問番号<select name="numbering"><option value="global"'.($s['numbering']==='global'?' selected':'').'>全体通番 Q1,Q2...</option><option value="group"'.($s['numbering']==='group'?' selected':'').'>グループ毎 Q1-1...</option></select></label><label class="full">説明<textarea name="description">'.h($s['description']).'</textarea></label><label>開始日時<input type="datetime-local" name="startAt" value="'.h($s['startAt']).'"></label><label>終了日時<input type="datetime-local" name="endAt" value="'.h($s['endAt']).'"></label></div><hr><h2>質問・グループ</h2>';
- foreach($s['groups'] as $gi=>$g){$body.='<div class="card"><b>グループ '.($gi+1).'</b><input name="groupTitle" value="'.h($g['title']).'" readonly>';
- foreach($g['questions'] as $qi=>$qv)$body.='<div class="q"><b>Q'.($qi+1).'</b><p>'.h($qv['text']).'</p><span class="badge">'.h($qv['type']).'</span> '.($qv['required']?'必須':'任意').'</div>';
- $body.='</div>';}
- $body.='<div class="actions"><button class="btn primary">保存して一覧へ</button><a class="btn" href="?screen=preview&id='.h($s['id']).'">プレビュー</a><a class="btn" href="?screen=list">キャンセル</a></div></form></div>';}}
+    $s=$id?survey($id):['id'=>'','title'=>'','description'=>'','startAt'=>'','endAt'=>'','status'=>'draft','numbering'=>'global','groups'=>[['id'=>uid('group'),'title'=>'グループ1','questions'=>[]]]];
+    if(!$s)$body.='<div class="alert danger">アンケートが存在しません。</div>';else{$body.='<div class="card"><form method="post"><input type="hidden" name="_csrf" value="'.h(csrf()).'"><input type="hidden" name="action" value="save"><input type="hidden" name="id" value="'.h($s['id']).'"><div class="bar"><h1>アンケート作成・編集</h1><span class="badge">'.h(status($s['status'])).'</span></div><div class="grid"><label>タイトル<input name="title" value="'.h($s['title']).'" required></label><label>採番方式<select name="numbering"><option value="global"'.($s['numbering']==='global'?' selected':'').'>Q1,Q2...</option><option value="group"'.($s['numbering']==='group'?' selected':'').'>Q1-1,Q1-2...</option></select></label><label class="full">説明<textarea name="description">'.h($s['description']).'</textarea></label><label>開始日時<input type="datetime-local" name="startAt" value="'.h($s['startAt']).'"></label><label>終了日時<input type="datetime-local" name="endAt" value="'.h($s['endAt']).'"></label></div><h2>質問・グループ</h2>';
+    foreach($s['groups'] as $g){$body.='<div class="card"><h3>'.h($g['title']).'</h3>';foreach($g['questions'] as $qq)$body.='<div class="q"><b>'.h($qq['number']??'').'</b> '.h($qq['text']??'').' <span class="badge">'.h($qq['type']??'').'</span></div>';$body.='</div>';}
+    $body.='<button class="btn primary">保存して一覧へ</button> <a class="btn" href="?screen=preview&id='.h($s['id']).'">プレビュー</a> <a class="btn" href="?screen=list">キャンセル</a></form></div>';}}
 elseif(in_array($screen,['preview','analytics','send'],true)){
- $s=survey($id);if(!$s)$body.='<div class="alert alert-danger">対象アンケートが存在しません。</div>';else{
- $body.='<div class="card"><b>対象アンケート</b><h1>'.h($s['title']).'</h1></div>';
- if($screen==='preview'){foreach($s['groups'] as $g)foreach($g['questions'] as $qv){$body.='<div class="card"><h3>'.h($qv['text']).'</h3>';foreach($qv['options']??[] as $o)$body.='<div class="option">'.h($o).'</div>'; $body.='</div>';}}
- if($screen==='analytics'){$n=count(array_filter(fileData('answers',[]),fn($a)=>$a['survey']===$id));$body.='<div class="grid"><div class="card"><small>回答数</small><h2>'.$n.'</h2></div><div class="card"><small>回答率</small><h2>—</h2></div></div><div class="card"><h2>設問別集計</h2>'.($n?'回答データを表示できます。':'現在、回答データはありません').'</div>';}
- if($screen==='send'){$customers=fileData('customers',[['id'=>'C001','name'=>'山田 太郎','email'=>'test@example.com']]);$body.='<div class="card"><h2>顧客選択・メール送信</h2><table><tr><th>選択</th><th>顧客名</th><th>メール</th></tr>';foreach($customers as $c)$body.='<tr><td><input type="checkbox"></td><td>'.h($c['name']).'</td><td>'.h($c['email']).'</td></tr>';$body.='</table><hr><div class="grid"><label>件名<input value="'.h($s['title']).'"></label><label>本文<textarea>アンケートへのご協力をお願いいたします。\n{アンケートURL}</textarea></label></div><button class="btn primary" onclick="return confirm(\'一括送信しますか？\')">一括送信</button><button class="btn">送信履歴</button></div>';}}
-}elseif($screen==='kintone'||$screen==='mail'){
- $k=$screen==='kintone';$c=fileData($k?'settings':'mail');
- $body.='<div class="card"><h1>'.($k?'kintone連携設定':'メールサーバ設定').'</h1><form method="post"><input type="hidden" name="_csrf" value="'.csrf().'"><div class="grid">';
- if($k){$body.='<label>サブドメイン<input name="subdomain" value="'.h($c['subdomain']??'').'"></label><label>顧客管理アプリID<input name="appId" type="number" value="'.h((string)($c['appId']??'' )).'"></label><label>ログイン名<input name="username" value="'.h($c['username']??'').'"></label><label>パスワード<input name="password" type="password" placeholder="'.(!empty($c['password'])?'設定済み':'').'"></label><label>Proxy<input name="proxy" placeholder="host:port"></label><label>SSL証明書検証<select><option>無効</option><option>有効</option></select></label></div><div class="actions"><button name="action" value="kintoneSave" class="btn primary">設定保存</button><button name="action" value="kintoneTest" class="btn success">接続テスト</button><button name="action" value="kintoneFields" class="btn">項目一覧を再取得</button><button name="action" value="kintoneSync" class="btn">顧客情報を同期</button>';
- }else{$body.='<label>SMTPサーバ<input name="host" value="'.h($c['host']??'').'"></label><label>SMTPポート<input name="port" value="'.h($c['port']??'587').'"></label><label>暗号化<select name="encryption"><option value="tls">TLS</option><option value="ssl">SSL</option><option value="none">なし</option></select></label><label>SMTPユーザー名<input name="username" value="'.h($c['username']??'').'"></label><label>SMTPパスワード<input name="password" type="password" placeholder="'.(!empty($c['password'])?'設定済み':'').'"></label><label>送信元メール<input name="from" type="email" value="'.h($c['from']??'').'"></label><label>送信元名<input name="fromName" value="'.h($c['fromName']??'').'"></label><label>返信先<input name="replyTo" type="email" value="'.h($c['replyTo']??'').'"></label></div><div class="actions"><button name="action" value="mailSave" class="btn primary">設定保存</button><button name="action" value="mailTest" class="btn success">接続テスト</button></div>';}
- $body.='</form></div>';
-}elseif($screen==='answer'||$screen==='confirm'||$screen==='complete'){
- $s=survey($id);
- if(!$s)$body='<div class="card"><h2>アンケートが存在しません。</h2></div>';
- elseif($screen==='complete')$body.='<div class="card"><h1>回答完了</h1><p>ご回答ありがとうございました。</p></div>';
- else{$body.='<div class="card"><h1>'.h($s['title']).'</h1><p>'.h($s['description']).'</p><form method="post"><input type="hidden" name="_csrf" value="'.csrf().'"><input type="hidden" name="action" value="answer"><input type="hidden" name="id" value="'.h($id).'">';
- foreach($s['groups'] as $g)foreach($g['questions'] as $qv){$body.='<div class="q"><h3>'.h($qv['text']).($qv['required']?'<small style="color:#dc2626"> 必須</small>':'').'</h3>';foreach($qv['options']??[] as $o)$body.='<label class="option"><input type="'.($qv['type']==='multi'?'checkbox':'radio').'" name="answer['.h($qv['id']).'][]" value="'.h($o).'"> '.h($o).'</label>';if($qv['type']==='text')$body.='<textarea name="answer['.h($qv['id']).'][]"></textarea>';$body.='</div>';}$body.='<button class="btn primary">回答送信</button></form></div>';}}
+    $s=survey($id);if(!$s)$body.='<div class="alert danger">対象アンケートが存在しません。</div>';else{
+        normalize($s);$body.='<div class="card"><b>対象アンケート</b><h1>'.h($s['title']).'</h1><p>'.h($s['description']).'</p></div>';
+        if($screen==='preview'){foreach($s['groups'] as $g){$body.='<div class="card"><h2>'.h($g['title']).'</h2>';foreach($g['questions'] as $qq){$body.='<div class="q"><b>'.h($qq['number']).'</b><h3>'.h($qq['text']).'</h3>';foreach($qq['options']??[] as $o)$body.='<div class="option">'.h(is_array($o)?($o['label']??''):$o).'</div>';$body.='</div>';} $body.='</div>';}}
+        if($screen==='analytics'){$n=count(array_filter(data()['answers'],fn($a)=>($a['survey']??'')===$id));$body.='<div class="card"><h2>回答集計・分析</h2><p>回答数：<b>'.$n.'</b></p><p>'.($n?'設問別集計を表示できます。':'現在、回答データはありません').'</p><a class="btn" href="?screen=analytics&id='.h($id).'&csv=1">CSV</a></div>';if(q('csv')==='1'){header('Content-Type:text/csv; charset=UTF-8');header('Content-Disposition:attachment; filename=answers.csv');echo "\xEF\xBB\xBF".'ID,アンケート,日時'.PHP_EOL;foreach(data()['answers'] as $a)if(($a['survey']??'')===$id)echo '"'.str_replace('"','""',$a['id']).'","'.h($id).'","'.h($a['createdAt']).'"'.PHP_EOL;exit;}}
+        if($screen==='send'){$body.='<div class="card"><h2>顧客選択・メール送信</h2><p>対象アンケート：'.h($s['title']).'</p>';foreach(data()['customers'] as $c)$body.='<label class="option"><input type="checkbox"> '.h($c['name']??'').' / '.h($c['email']??'').'</label>';$body.='<p class="muted">送信処理はSMTP設定済みの場合に実行します。</p></div>';}}
+}elseif($screen==='kintone'){
+    $s=settings()['kintone'];$body.='<div class="card"><h1>kintone連携設定</h1><form method="post"><input type="hidden" name="_csrf" value="'.h(csrf()).'"><div class="grid"><label>サブドメイン<input name="subdomain" value="'.h($s['subdomain']).'"></label><label>顧客管理アプリID<input name="app_id" value="'.h($s['app_id']).'"></label><label>ログイン名<input name="username" value="'.h($s['username']).'"></label><label>パスワード<input type="password" name="password" placeholder="'.($s['password']?'設定済み':'').'"></label><label>Proxy<input name="proxy" placeholder="host:port" value="'.h($s['proxy']).'"></label><label>SSL証明書検証<select name="verify_ssl"><option value="0">無効</option><option value="1"'.($s['verify_ssl']?' selected':'').'>有効</option></select></label></div><p><button class="btn primary" name="action" value="k_save">設定保存</button> <button class="btn success" name="action" value="k_test">接続テスト</button> <button class="btn" name="action" value="k_fields">項目一覧を再取得</button> <button class="btn" name="action" value="k_sync">顧客情報を同期</button></p></form></div>';
+}elseif($screen==='mail'){
+    $s=settings()['mail'];$body.='<div class="card"><h1>メールサーバ設定</h1><form method="post"><input type="hidden" name="_csrf" value="'.h(csrf()).'"><div class="grid"><label>SMTPサーバ<input name="host" value="'.h($s['host']).'"></label><label>SMTPポート<input name="port" value="'.h($s['port']).'"></label><label>暗号化<select name="encryption"><option value="ssl">SSL</option><option value="tls"'.($s['encryption']==='tls'?' selected':'').'>TLS</option><option value="none"'.($s['encryption']==='none'?' selected':'').'>なし</option></select></label><label>SMTP認証<select name="auth"><option value="1">あり</option><option value="0"'.(!$s['auth']?' selected':'').'>なし</option></select></label><label>SMTPユーザー名<input name="username" value="'.h($s['username']).'"></label><label>SMTPパスワード<input type="password" name="password" placeholder="'.($s['password']?'設定済み':'').'"></label><label>送信元メール<input name="from_email" value="'.h($s['from_email']).'"></label><label>送信元名<input name="from_name" value="'.h($s['from_name']).'"></label><label>返信先<input name="reply_to" value="'.h($s['reply_to']).'"></label></div><p><button class="btn primary" name="action" value="m_save">設定保存</button> <button class="btn success" name="action" value="m_test">接続テスト</button></p></form></div>';
+}elseif(in_array($screen,['answer','confirm','complete'],true)){
+    $s=survey($id);if(!$s)$body='<div class="card"><h2>アンケートが存在しません。</h2></div>';elseif($screen==='complete')$body='<div class="card"><h1>回答完了</h1><p>ご回答ありがとうございました。</p></div>';else{$body.='<div class="card"><h1>'.h($s['title']).'</h1><p>'.h($s['description']).'</p><form method="post"><input type="hidden" name="_csrf" value="'.h(csrf()).'"><input type="hidden" name="action" value="answer"><input type="hidden" name="id" value="'.h($id).'">';foreach($s['groups'] as $g)foreach($g['questions'] as $qq){$body.='<div class="q"><h3>'.h($qq['number']).' '.h($qq['text']).'</h3>';foreach($qq['options']??[] as $o){$v=is_array($o)?($o['label']??''):$o;$body.='<label class="option"><input type="'.(($qq['type']??'')==='multi'?'checkbox':'radio').'" name="answer['.h($qq['id']).'][]" value="'.h($v).'"> '.h($v).'</label>';}if(($qq['type']??'')==='text')$body.='<textarea name="answer['.h($qq['id']).'][]"></textarea>';$body.='</div>';} $body.='<button class="btn primary">回答送信</button></form></div>';}}
 else{$body.='<div class="card"><h1>画面が見つかりません</h1></div>';}
-
-echo shell('アンケート管理システム',$body,!in_array($screen,['answer','confirm','complete'],true));
+echo shell($body,in_array($screen,['list','edit','preview','analytics','send','kintone','mail'],true));
 ?>
