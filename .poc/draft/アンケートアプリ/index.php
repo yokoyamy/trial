@@ -2567,7 +2567,15 @@ function renderSend(array $data, array $survey, ?array $result=null): string {
           $data['sendHistory'],
           static fn($x)=>($x['surveyId']??'')===$survey['id']
       )));
-      ?>
+function renderSend(array $data, array $survey, ?array $result=null): string {
+    $search=trim((string)($_GET['customerQ']??''));
+    $customers=$data['customers'];
+
+    if($search!==''){
+        $customers=array_values(array_filter($customers,static fn($c)=>
+            mb_stripos(($c['name']??'').' '.($c['org']??').' '.($c['email']??''),$search)!==false
+        ));
+    }
       <?php if(!$hist): ?><p class="muted">送信履歴はありません。</p>
       <?php else: ?>
         <div class="table-wrap"><table>
