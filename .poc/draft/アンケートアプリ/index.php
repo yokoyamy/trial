@@ -737,7 +737,6 @@ function answerUrl(string $surveyId, ?string $customerId = null): string {
     }
     return $url;
 }
-<?php
 /* ---------------------------------------------------------
  * HTTPストリーム通信
  * --------------------------------------------------------- */
