@@ -586,13 +586,7 @@ SMTP認証情報をブラウザ、URL、ログへ出力しない。
 PHPのpassword_hash() / password_verify()を使用する。
 
 外部サービス接続時に元の値が必要なパスワード、
-APIキー、トークン等はSodiumで可逆暗号化して保存する。
 
-暗号化には、
-
-    sodium_crypto_secretbox()
-
-を使用する。
 
 Base64、URLエンコード、独自難読化、MD5、SHA-1、
 単純なSHA-256等を暗号化・パスワード保存の代用にしない。
