@@ -1,0 +1,94 @@
+{
+    "surveys": [
+        {
+            "id": "survey-001",
+            "title": "顧客満足度アンケート",
+            "description": "サービスについてのご意見をお聞かせください。",
+            "startAt": "2026-08-28T11:36",
+            "endAt": "2026-09-27T11:36",
+            "status": "published",
+            "numbering": "global",
+            "createdAt": "2026-08-28 11:36:11",
+            "updatedAt": "2026-08-28 11:36:11",
+            "groups": [
+                {
+                    "id": "group-001",
+                    "title": "基本アンケート",
+                    "questions": [
+                        {
+                            "id": "question-001",
+                            "number": "Q1",
+                            "text": "サービスの満足度を教えてください。",
+                            "type": "single",
+                            "required": true,
+                            "options": [
+                                {
+                                    "id": "option-001",
+                                    "label": "非常に満足",
+                                    "nextQuestionId": ""
+                                },
+                                {
+                                    "id": "option-002",
+                                    "label": "満足",
+                                    "nextQuestionId": ""
+                                },
+                                {
+                                    "id": "option-003",
+                                    "label": "普通",
+                                    "nextQuestionId": ""
+                                },
+                                {
+                                    "id": "option-004",
+                                    "label": "不満",
+                                    "nextQuestionId": ""
+                                }
+                            ]
+                        },
+                        {
+                            "id": "question-002",
+                            "number": "Q2",
+                            "text": "ご意見・ご要望があれば入力してください。",
+                            "type": "text",
+                            "required": false,
+                            "options": []
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+    "answers": [],
+    "customers": [
+        {
+            "id": "customer-1",
+            "organization": "",
+            "name": "",
+            "email": "",
+            "department": "",
+            "phone": "",
+            "address": "",
+            "updatedAt": "2026-08-28 11:37:06"
+        },
+        {
+            "id": "customer-2",
+            "organization": "",
+            "name": "",
+            "email": "",
+            "department": "",
+            "phone": "",
+            "address": "",
+            "updatedAt": "2026-08-28 11:37:06"
+        },
+        {
+            "id": "customer-3",
+            "organization": "",
+            "name": "",
+            "email": "",
+            "department": "",
+            "phone": "",
+            "address": "",
+            "updatedAt": "2026-08-28 11:37:06"
+        }
+    ],
+    "send_history": []
+}

@@ -1,0 +1,138 @@
+{
+    "kintone": {
+        "subdomain": "jacic",
+        "app_id": "2931",
+        "username": "yokoyamy",
+        "password_encrypted": "zaWVPNg6qpEE9roSiHzLCForzdiU1LY23tLJpf888ag=",
+        "proxy": "192.168.81.81:8080",
+        "verify_ssl": false,
+        "mapping": {
+            "organization": "",
+            "name": "",
+            "email": "",
+            "department": "",
+            "phone": "",
+            "address": []
+        },
+        "fields": {
+            "備考": {
+                "code": "備考",
+                "label": "備考",
+                "type": "MULTI_LINE_TEXT"
+            },
+            "レコード番号": {
+                "code": "レコード番号",
+                "label": "レコード番号",
+                "type": "RECORD_NUMBER"
+            },
+            "作業者": {
+                "code": "作業者",
+                "label": "作業者",
+                "type": "STATUS_ASSIGNEE"
+            },
+            "更新者": {
+                "code": "更新者",
+                "label": "更新者",
+                "type": "MODIFIER"
+            },
+            "作成者": {
+                "code": "作成者",
+                "label": "作成者",
+                "type": "CREATOR"
+            },
+            "ステータス": {
+                "code": "ステータス",
+                "label": "ステータス",
+                "type": "STATUS"
+            },
+            "郵便番号": {
+                "code": "郵便番号",
+                "label": "郵便番号(数字のみ)",
+                "type": "SINGLE_LINE_TEXT"
+            },
+            "会社ロゴ": {
+                "code": "会社ロゴ",
+                "label": "会社ロゴ",
+                "type": "FILE"
+            },
+            "部署名": {
+                "code": "部署名",
+                "label": "部署名",
+                "type": "SINGLE_LINE_TEXT"
+            },
+            "担当者名": {
+                "code": "担当者名",
+                "label": "担当者名",
+                "type": "SINGLE_LINE_TEXT"
+            },
+            "メールアドレス": {
+                "code": "メールアドレス",
+                "label": "メールアドレス",
+                "type": "SINGLE_LINE_TEXT"
+            },
+            "更新日時": {
+                "code": "更新日時",
+                "label": "更新日時",
+                "type": "UPDATED_TIME"
+            },
+            "顧客ランク": {
+                "code": "顧客ランク",
+                "label": "顧客ランク",
+                "type": "DROP_DOWN"
+            },
+            "カテゴリー": {
+                "code": "カテゴリー",
+                "label": "カテゴリー",
+                "type": "CATEGORY"
+            },
+            "住所": {
+                "code": "住所",
+                "label": "住所",
+                "type": "SINGLE_LINE_TEXT"
+            },
+            "TEL": {
+                "code": "TEL",
+                "label": "TEL(数字のみ)",
+                "type": "SINGLE_LINE_TEXT"
+            },
+            "FAX": {
+                "code": "FAX",
+                "label": "FAX(数字のみ)",
+                "type": "SINGLE_LINE_TEXT"
+            },
+            "作成日時": {
+                "code": "作成日時",
+                "label": "作成日時",
+                "type": "CREATED_TIME"
+            },
+            "会社名": {
+                "code": "会社名",
+                "label": "会社名",
+                "type": "SINGLE_LINE_TEXT"
+            }
+        },
+        "last_test": {
+            "at": "2026-08-28 11:36:47",
+            "ok": true,
+            "status": 200,
+            "code": "",
+            "id": ""
+        },
+        "last_sync": {
+            "at": "2026-08-28 11:37:06",
+            "count": 3
+        }
+    },
+    "mail": {
+        "server": "",
+        "port": "587",
+        "encryption": "tls",
+        "auth": true,
+        "username": "",
+        "password_encrypted": "",
+        "from_email": "",
+        "from_name": "",
+        "reply_to": "",
+        "last_test": null
+    }
+}
