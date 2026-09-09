@@ -6060,183 +6060,238 @@ if (
 }
 
 
-(function () {
-    'use strict';
+/* ==========================================================
+ * GOJACIC リサイザー
+ *
+ * 実際の index.php のDOM構造に合わせた版
+ *
+ * resizer-1               公開中 ↔ 作成中
+ * resizer-2               作成中 ↔ メイン
+ * resizer-v               プレビュー ↕ 下部
+ * resizer-prompt-history-v プロンプト ↕ 履歴
+ * resizer-4               プロンプト ↔ 結果反映
+ * resizer-3               Pro左 ↔ Pro右
+ * resizer-github-v        メイン ↕ GitHub
+ * ========================================================== */
 
-    let active = null;
+(function(){
+'use strict';
 
-    function start(el, type, e, a, b) {
-        if (!el || !a || !b) return;
+let resize=null;
 
+const $=id=>document.getElementById(id);
+
+function bindX(id,leftId,rightId){
+    const bar=$(id);
+    const left=$(leftId);
+    const right=$(rightId);
+
+    if(!bar||!left||!right||bar.dataset.rz)return;
+
+    bar.dataset.rz='1';
+
+    bar.addEventListener('mousedown',function(e){
         e.preventDefault();
+        e.stopPropagation();
 
-        active = {
-            el,
-            type,
-            x: e.clientX,
-            y: e.clientY,
-            a,
-            b,
-            aw: a.getBoundingClientRect().width,
-            bw: b.getBoundingClientRect().width,
-            ah: a.getBoundingClientRect().height,
-            bh: b.getBoundingClientRect().height
+        resize={
+            type:'x',
+            bar:bar,
+            left:left,
+            right:right,
+            start:e.clientX,
+            leftStart:left.getBoundingClientRect().width,
+            rightStart:right.getBoundingClientRect().width
         };
 
-        el.classList.add('dragging');
-        document.body.style.userSelect = 'none';
-        document.body.style.cursor =
-            type === 'x' ? 'col-resize' : 'row-resize';
+        document.body.style.userSelect='none';
+        document.body.style.cursor='col-resize';
+    });
+}
 
-        const cover = document.getElementById('iframe-cover');
-        if (cover) cover.style.display = 'block';
-    }
+function bindY(id,top,bottom){
+    const bar=$(id);
 
-    function move(e) {
-        if (!active) return;
+    if(!bar||bar.dataset.rz)return;
 
+    bar.dataset.rz='1';
+
+    bar.addEventListener('mousedown',function(e){
         e.preventDefault();
+        e.stopPropagation();
 
-        if (active.type === 'x') {
-            const d = e.clientX - active.x;
-            const aw = Math.max(150, active.aw + d);
-            const bw = Math.max(150, active.bw - d);
+        resize={
+            type:'y',
+            bar:bar,
+            top:top,
+            bottom:bottom,
+            start:e.clientY,
+            topStart:top.getBoundingClientRect().height,
+            bottomStart:bottom.getBoundingClientRect().height
+        };
 
-            active.a.style.flex = '0 0 auto';
-            active.b.style.flex = '0 0 auto';
-            active.a.style.width = aw + 'px';
-            active.b.style.width = bw + 'px';
-        } else {
-            const d = e.clientY - active.y;
-            const ah = Math.max(80, active.ah + d);
-            const bh = Math.max(60, active.bh - d);
+        document.body.style.userSelect='none';
+        document.body.style.cursor='row-resize';
+    });
+}
 
-            active.a.style.flex = '0 0 auto';
-            active.b.style.flex = '0 0 auto';
-            active.a.style.height = ah + 'px';
-            active.b.style.height = bh + 'px';
-        }
+function bindGithub(){
+    const bar=$('resizer-github-v');
+    const card=$('github-fixed-card');
+
+    if(!bar||!card||bar.dataset.rz)return;
+
+    bar.dataset.rz='1';
+
+    bar.addEventListener('mousedown',function(e){
+        e.preventDefault();
+        e.stopPropagation();
+
+        resize={
+            type:'github',
+            bar:bar,
+            card:card,
+            start:e.clientY,
+            startHeight:card.getBoundingClientRect().height
+        };
+
+        document.body.style.userSelect='none';
+        document.body.style.cursor='row-resize';
+    });
+}
+
+document.addEventListener('mousemove',function(e){
+    if(!resize)return;
+
+    e.preventDefault();
+
+    if(resize.type==='x'){
+        const d=e.clientX-resize.start;
+
+        const leftWidth=Math.max(
+            120,
+            resize.leftStart+d
+        );
+
+        const rightWidth=Math.max(
+            120,
+            resize.rightStart-d
+        );
+
+        resize.left.style.flexBasis=leftWidth+'px';
+        resize.left.style.width=leftWidth+'px';
+
+        resize.right.style.flexBasis=rightWidth+'px';
+        resize.right.style.width=rightWidth+'px';
+
+        return;
     }
 
-    function end() {
-        if (!active) return;
+    if(resize.type==='y'){
+        const d=e.clientY-resize.start;
 
-        active.el.classList.remove('dragging');
-        active = null;
+        const topHeight=Math.max(
+            80,
+            resize.topStart+d
+        );
 
-        document.body.style.userSelect = '';
-        document.body.style.cursor = '';
+        const bottomHeight=Math.max(
+            60,
+            resize.bottomStart-d
+        );
 
-        const cover = document.getElementById('iframe-cover');
-        if (cover) cover.style.display = 'none';
+        resize.top.style.flexBasis=topHeight+'px';
+        resize.top.style.height=topHeight+'px';
+
+        resize.bottom.style.flexBasis=bottomHeight+'px';
+        resize.bottom.style.height=bottomHeight+'px';
+
+        return;
     }
 
-    function bind(id, type, a, b) {
-        const el = document.getElementById(id);
-        if (!el || !a || !b) return;
+    if(resize.type==='github'){
+        const d=resize.start-e.clientY;
 
-        el.addEventListener('mousedown', e => {
-            start(el, type, e, a, b);
-        });
+        const height=Math.max(
+            60,
+            Math.min(
+                500,
+                resize.startHeight+d
+            )
+        );
+
+        resize.card.style.flexBasis=height+'px';
+        resize.card.style.height=height+'px';
     }
+},{passive:false});
 
-    function init() {
-        const colPublic = document.getElementById('col-public');
-        const colDraft = document.getElementById('col-draft');
-        const mainCol = document.querySelector('.main-col');
+function stop(){
+    if(!resize)return;
 
-        const preview = document.getElementById('preview-area');
-        const bottom = document.getElementById('bottom-container');
+    resize=null;
 
-        const promptHistory =
-            document.getElementById('prompt-history-wrapper');
+    document.body.style.userSelect='';
+    document.body.style.cursor='';
+}
 
-        const promptContent =
-            document.getElementById('prompt-content-wrapper');
+document.addEventListener('mouseup',stop);
+document.addEventListener('mouseleave',stop);
 
-        const editorHolder =
-            document.getElementById('editor-holder-split');
+function init(){
 
-        const splitArea =
-            document.getElementById('split-area');
-
-        const editorArea =
-            document.getElementById('editor-area');
-
-        const github =
-            document.getElementById('github-fixed-card');
-
-        bind(
-            'resizer-1',
-            'x',
-            colPublic,
-            colDraft
-        );
-
-        bind(
-            'resizer-2',
-            'x',
-            colDraft,
-            mainCol
-        );
-
-        bind(
-            'resizer-v',
-            'y',
-            preview,
-            bottom
-        );
-
-        bind(
-            'resizer-prompt-history-v',
-            'y',
-            promptContent,
-            promptHistory
-        );
-
-        bind(
-            'resizer-4',
-            'x',
-            promptContent,
-            editorArea
-        );
-
-        bind(
-            'resizer-3',
-            'x',
-            editorHolder,
-            splitArea
-        );
-
-        bind(
-            'resizer-github-v',
-            'y',
-            bottom,
-            github
-        );
-    }
-
-    document.addEventListener(
-        'mousemove',
-        move,
-        { passive: false }
+    bindX(
+        'resizer-1',
+        'col-public',
+        'col-draft'
     );
 
-    document.addEventListener(
-        'mouseup',
-        end
+    bindX(
+        'resizer-2',
+        'col-draft',
+        'main-col'
     );
 
-    if (document.readyState === 'loading') {
-        document.addEventListener(
-            'DOMContentLoaded',
-            init,
-            { once: true }
-        );
-    } else {
-        init();
-    }
+    bindY(
+        'resizer-v',
+        $('preview-area'),
+        $('bottom-container')
+    );
+
+    bindY(
+        'resizer-prompt-history-v',
+        $('prompt-content-wrapper'),
+        $('prompt-history-wrapper')
+    );
+
+    bindX(
+        'resizer-4',
+        'prompt-content-wrapper',
+        'editor-area'
+    );
+
+    bindX(
+        'resizer-3',
+        'editor-holder-split',
+        'split-area'
+    );
+
+    bindGithub();
+}
+
+if(document.readyState==='loading'){
+    document.addEventListener(
+        'DOMContentLoaded',
+        init,
+        {once:true}
+    );
+}else{
+    init();
+}
+
 })();
+
+
+
 
 </script>
 </body>
