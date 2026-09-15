@@ -1,1 +1,0 @@
-POC_TAB_CONFIG
