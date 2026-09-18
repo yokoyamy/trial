@@ -1,120 +1,63 @@
-// ==========================================================
-// B. 保存 ＆ チェックポイント作成 (saveFile)
-// ==========================================================
-async function saveFile() {
-    const editorEl = document.getElementById('editor-content');
-    const memoEl = document.getElementById('editor-memo');
-    const promptEl = document.getElementById('prompt-content');
-    const saveBtn = document.getElementById('btn-save-current') || document.getElementById('btn-save');
+(function() {
+    console.log("%c=== DEBUG TRACER INITIALIZED ===", "background: #222; color: #bada55; font-size: 14px;");
 
-    const editorContent = editorEl ? editorEl.value : '';
-    const memo = memoEl ? memoEl.value.trim() : '';
-    const prompt = promptEl ? promptEl.value : '';
-    
-    // 現在選択中のタブキー
-    const activeTab = window.currentPocTab || window.currentActiveTab || 'spec-business_ui';
-    
-    // POC_TAB_CONFIG から設定を取得
-    const config = window.POC_TAB_CONFIG?.[activeTab];
-
-    if (!config || !config.targetFile) {
-        alert('対象ファイルが特定できません。（現在のタブ: ' + activeTab + '）');
-        return;
-    }
-
-    // targetFile の取得（impement.md のタイポを正規化）
-    let targetFile = config.targetFile;
-    if (targetFile === 'spec/impement.md') {
-        targetFile = 'spec/implement.md';
-    }
-
-    const appName = typeof currentAppName !== 'undefined' ? currentAppName : (typeof getActiveAppPath === 'function' ? getActiveAppPath() : '');
-
-    if (!appName) {
-        alert('アプリ/パスが選択されていません。');
-        return;
-    }
-
-    // 1. ローカル保存 ＆ スナップショット作成
-    const saveRes = await apiCall('create_checkpoint', {
-        app_name: appName,
-        target_file: targetFile,
-        type: activeTab,
-        content: editorContent,
-        memo: memo,
-        prompt: prompt
-    });
-
-    if (!saveRes || !saveRes.success) {
-        alert('保存に失敗しました: ' + (saveRes ? saveRes.error : 'エラーが発生しました'));
-        return;
-    }
-
-    // ----------------------------------------------------
-    // 2. GitHub同期判定（画面の実ID: app-github-sync-toggle を参照）
-    // ----------------------------------------------------
-    const syncCheckbox = document.getElementById('app-github-sync-toggle');
-    const isSyncEnabled = syncCheckbox ? syncCheckbox.checked : false;
-
-    if (isSyncEnabled) {
-        const githubRes = await apiCall('github_sync', {
-            app_name: appName,
-            target_file: targetFile,
-            path: `.poc/${appName}/${targetFile}`,
-            content: editorContent,
-            label: memo || `Update ${targetFile}`,
-            stage: activeTab
-        });
-
-        if (!githubRes || !githubRes.success) {
-            alert('ローカル保存完了、GitHub同期失敗: ' + (githubRes ? githubRes.error : 'エラーが発生しました'));
-            return;
+    // 1. 全クリックイベントの追跡
+    document.addEventListener('click', function(e) {
+        const target = e.target.closest('[onclick], button, a, li, tr, .item, .folder, .app-item');
+        if (target) {
+            console.groupCollapsed("%c[CLICK DETECTED]", "color: #00f; font-weight: bold;", target);
+            console.log("Element:", target);
+            console.log("ID:", target.id);
+            console.log("Classes:", target.className);
+            console.log("onclick attribute:", target.getAttribute('onclick'));
+            console.log("Dataset:", target.dataset);
+            console.groupEnd();
         }
+    }, true);
 
-        // 同期成功時に画面のRAW URL要素を更新
-        const rawUrl = githubRes.raw_url || githubRes.download_url;
-        if (rawUrl) {
-            const targetIdMap = {
-                'spec-business_ui':    'tpl-spec-business-url',
-                'spec/business_ui.md': 'tpl-spec-business-url',
-                'spec-implement':      'tpl-spec-implement-url',
-                'spec/implement.md':   'tpl-spec-implement-url',
-                'mock':                'tpl-mock-url',
-                'mock/index.php':      'tpl-mock-url',
-                'draft':               'tpl-draft-url',
-                'draft/index.php':     'tpl-draft-url'
-            };
-            const elemId = targetIdMap[activeTab] || targetIdMap[targetFile];
-            if (elemId) {
-                const el = document.getElementById(elemId);
-                if (el) el.innerText = rawUrl;
+    // 2. apiCall の追跡
+    if (typeof window.apiCall === 'function') {
+        const _origApiCall = window.apiCall;
+        window.apiCall = async function(action, params) {
+            console.group(`%c[API CALL] %c${action}`, "color: #e91e63; font-weight: bold;", "color: #333; font-weight: bold;");
+            console.log("Action:", action);
+            console.log("Params:", params);
+            try {
+                const res = await _origApiCall(action, params);
+                console.log("Response:", res);
+                console.groupEnd();
+                return res;
+            } catch (err) {
+                console.error("API Error:", err);
+                console.groupEnd();
+                throw err;
             }
-        }
-
-        alert('ローカル保存 ＆ GitHub同期が完了しました');
+        };
     } else {
-        alert('ローカル保存が完了しました');
+        console.warn("[DEBUG] window.apiCall is not defined globally.");
     }
 
-    // 3. 保存完了後のUIリセット
-    if (saveBtn) {
-        saveBtn.style.setProperty('display', 'none', 'important');
-    }
-    if (memoEl) {
-        memoEl.value = '';
-        memoEl.style.setProperty('display', 'none', 'important');
-    }
-    if (typeof window.originalEditorContent !== 'undefined') {
-        window.originalEditorContent = editorContent;
-    }
+    // 3. fetch の追跡（apiCall を経由しない通信のキャッチ）
+    const _origFetch = window.fetch;
+    window.fetch = async function(...args) {
+        console.log("%c[FETCH REQUEST]", "color: #ff9800; font-weight: bold;", args);
+        try {
+            const res = await _origFetch.apply(this, args);
+            console.log("%c[FETCH RESPONSE STATUS]", "color: #ff9800;", res.status, args[0]);
+            return res;
+        } catch (err) {
+            console.error("[FETCH ERROR]", err, args[0]);
+            throw err;
+        }
+    };
 
-    // 履歴リストなどの再読み込み
-    if (typeof loadHistoryList === 'function') {
-        loadHistoryList();
-    }
-
-    // 4. プレビュー領域の自動リロード
-    if (typeof reloadPreview === 'function') {
-        reloadPreview();
-    }
-}
+    // 4. グローバル変数の現状チェック
+    console.group("%c[CURRENT STATE DUMP]", "color: #673ab7; font-weight: bold;");
+    console.log("currentAppName:", typeof currentAppName !== 'undefined' ? currentAppName : 'undefined');
+    console.log("currentPocTab:", typeof currentPocTab !== 'undefined' ? currentPocTab : 'undefined');
+    console.log("currentActiveTab:", typeof currentActiveTab !== 'undefined' ? currentActiveTab : 'undefined');
+    console.log("POC_TAB_CONFIG:", typeof POC_TAB_CONFIG !== 'undefined' ? POC_TAB_CONFIG : 'undefined');
+    console.log("preview-frame DOM:", document.getElementById('preview-frame'));
+    console.log("folder-status-overlay DOM:", document.getElementById('folder-status-overlay'));
+    console.groupEnd();
+})();
