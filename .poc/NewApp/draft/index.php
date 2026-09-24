@@ -39,37 +39,22 @@ if (
  */
 function h(?string $str): string
 {
-    return htmlspecialchars(
-        $str ?? '',
-        ENT_QUOTES | ENT_SUBSTITUTE,
-        'UTF-8'
-    );
-}
-
-function current_datetime(): string
-{
-    return date('c');
-}
-
-function request_method(): string
-{
-    return strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET'));
-}
-
-function requested_action(): string
-{
-    $action = $_GET['action'] ?? '';
-    return is_string($action) ? trim($action) : '';
+    return htmlspecialchars($str ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
 function csrf_token(): string
 {
     $token = $_SESSION[APP_SESSION_KEY]['csrf_token'] ?? '';
-    return is_string($token) ? $token : '';
+
+    if (!is_string($token) || $token === '') {
+        json_response(false, 'セキュリティ情報を取得できません。', [], [], 500);
+    }
+
+    return $token;
 }
 
 /**
- * APIレスポンス
+ * JSONレスポンス
  */
 function json_response(
     bool $success,
@@ -108,19 +93,16 @@ function json_response(
     exit;
 }
 
-function validate_csrf(): void
+function request_method(): string
 {
-    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+    return strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+}
 
-    if (!is_string($token) || $token === '' || !hash_equals(csrf_token(), $token)) {
-        json_response(
-            false,
-            'セキュリティ確認に失敗しました。画面を再読み込みして再度お試しください。',
-            [],
-            [],
-            403
-        );
-    }
+function requested_action(): string
+{
+    $action = $_GET['action'] ?? '';
+
+    return is_string($action) ? trim($action) : '';
 }
 
 function read_json_request(): array
@@ -131,9 +113,9 @@ function read_json_request(): array
         return [];
     }
 
-    try {
-        $data = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
-    } catch (\Throwable $e) {
+    $data = json_decode($raw, true);
+
+    if (!is_array($data)) {
         json_response(
             false,
             '入力内容を確認してください。',
@@ -143,22 +125,33 @@ function read_json_request(): array
         );
     }
 
-    if (!is_array($data)) {
-        json_response(
-            false,
-            '入力内容を確認してください。',
-            [],
-            ['request' => 'JSON形式のデータを指定してください。'],
-            400
-        );
-    }
-
     return $data;
 }
 
-/* =========================================================
- * JSON保存
- * ========================================================= */
+function validate_csrf(): void
+{
+    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+
+    if (!is_string($token) || $token === '') {
+        json_response(
+            false,
+            'セキュリティ確認に失敗しました。画面を再読み込みしてください。',
+            [],
+            [],
+            403
+        );
+    }
+
+    if (!hash_equals(csrf_token(), $token)) {
+        json_response(
+            false,
+            'セキュリティ確認に失敗しました。画面を再読み込みしてください。',
+            [],
+            [],
+            403
+        );
+    }
+}
 
 function ensure_data_directory(): void
 {
@@ -169,7 +162,7 @@ function ensure_data_directory(): void
     if (!mkdir(DATA_DIRECTORY, 0700, true) && !is_dir(DATA_DIRECTORY)) {
         json_response(
             false,
-            'データ保存領域を準備できませんでした。',
+            'データ保存領域を作成できません。',
             [],
             [],
             500
@@ -189,7 +182,7 @@ function default_settings(): array
             'username' => '',
             'password' => '',
             'from_email' => '',
-            'from_name' => '',
+            'from_name' => 'アンケート事務局',
             'configured' => false,
             'tested_at' => null
         ],
@@ -262,29 +255,19 @@ function read_json_file(string $file, array $default): array
         return $default;
     }
 
-    try {
-        $decoded = json_decode($contents, true, 512, JSON_THROW_ON_ERROR);
-    } catch (\Throwable $e) {
+    $data = json_decode($contents, true);
+
+    if (!is_array($data)) {
         json_response(
             false,
-            '保存されているデータを読み込めませんでした。',
+            '保存されているデータを読み込めません。',
             [],
             [],
             500
         );
     }
 
-    if (!is_array($decoded)) {
-        json_response(
-            false,
-            '保存されているデータを読み込めませんでした。',
-            [],
-            [],
-            500
-        );
-    }
-
-    return $decoded;
+    return $data;
 }
 
 function write_json_file(string $file, array $data): void
@@ -302,32 +285,33 @@ function write_json_file(string $file, array $data): void
     } catch (\Throwable $e) {
         json_response(
             false,
-            'データを保存できませんでした。',
+            'データを保存できません。',
             [],
             [],
             500
         );
     }
 
-    $temporary = tempnam(DATA_DIRECTORY, 'newapp_');
+    $tmp = tempnam(DATA_DIRECTORY, 'newapp_');
 
-    if ($temporary === false) {
+    if ($tmp === false) {
         json_response(
             false,
-            'データを保存できませんでした。',
+            'データを保存できません。',
             [],
             [],
             500
         );
     }
 
-    $handle = fopen($temporary, 'wb');
+    $fp = fopen($tmp, 'wb');
 
-    if ($handle === false) {
-        @unlink($temporary);
+    if ($fp === false) {
+        @unlink($tmp);
+
         json_response(
             false,
-            'データを保存できませんでした。',
+            'データを保存できません。',
             [],
             [],
             500
@@ -335,52 +319,64 @@ function write_json_file(string $file, array $data): void
     }
 
     try {
-        if (!flock($handle, LOCK_EX)) {
+        if (!flock($fp, LOCK_EX)) {
             throw new \RuntimeException('lock');
         }
 
         $length = strlen($json);
-        $offset = 0;
+        $written = fwrite($fp, $json);
 
-        while ($offset < $length) {
-            $written = fwrite($handle, substr($json, $offset));
-
-            if ($written === false || $written === 0) {
-                throw new \RuntimeException('write');
-            }
-
-            $offset += $written;
+        if ($written === false || $written !== $length) {
+            throw new \RuntimeException('write');
         }
 
-        fflush($handle);
-        flock($handle, LOCK_UN);
-        fclose($handle);
+        fflush($fp);
+        flock($fp, LOCK_UN);
+        fclose($fp);
 
-        if (!rename($temporary, $file)) {
-            @unlink($temporary);
-            json_response(
-                false,
-                'データを保存できませんでした。',
-                [],
-                [],
-                500
-            );
+        if (!rename($tmp, $file)) {
+            throw new \RuntimeException('rename');
         }
     } catch (\Throwable $e) {
-        if (is_resource($handle)) {
-            flock($handle, LOCK_UN);
-            fclose($handle);
+        if (is_resource($fp)) {
+            @flock($fp, LOCK_UN);
+            @fclose($fp);
         }
 
-        @unlink($temporary);
+        @unlink($tmp);
 
         json_response(
             false,
-            'データを保存できませんでした。',
+            'データを保存できません。',
             [],
             [],
             500
         );
+    }
+}
+
+function initialize_data_files(): void
+{
+    ensure_data_directory();
+
+    if (!file_exists(SETTINGS_FILE)) {
+        write_json_file(SETTINGS_FILE, default_settings());
+    }
+
+    if (!file_exists(CUSTOMERS_FILE)) {
+        write_json_file(CUSTOMERS_FILE, default_customers());
+    }
+
+    if (!file_exists(SURVEYS_FILE)) {
+        write_json_file(SURVEYS_FILE, default_surveys());
+    }
+
+    if (!file_exists(RESPONSES_FILE)) {
+        write_json_file(RESPONSES_FILE, default_responses());
+    }
+
+    if (!file_exists(MAIL_LOGS_FILE)) {
+        write_json_file(MAIL_LOGS_FILE, default_mail_logs());
     }
 }
 
@@ -389,530 +385,45 @@ function load_settings(): array
     return read_json_file(SETTINGS_FILE, default_settings());
 }
 
-function load_customer_data(): array
+function load_customers(): array
 {
     return read_json_file(CUSTOMERS_FILE, default_customers());
 }
 
-function load_survey_data(): array
+function load_surveys(): array
 {
     return read_json_file(SURVEYS_FILE, default_surveys());
 }
 
-function load_response_data(): array
+function load_responses(): array
 {
     return read_json_file(RESPONSES_FILE, default_responses());
 }
 
-function load_mail_log_data(): array
+function load_mail_logs(): array
 {
     return read_json_file(MAIL_LOGS_FILE, default_mail_logs());
 }
 
-function initialize_data_files(): void
+function now(): string
 {
-    ensure_data_directory();
-
-    $files = [
-        SETTINGS_FILE => default_settings(),
-        CUSTOMERS_FILE => default_customers(),
-        SURVEYS_FILE => default_surveys(),
-        RESPONSES_FILE => default_responses(),
-        MAIL_LOGS_FILE => default_mail_logs()
-    ];
-
-    foreach ($files as $file => $default) {
-        if (!file_exists($file)) {
-            write_json_file($file, $default);
-        }
-    }
+    return date('c');
 }
 
-/* =========================================================
- * 入力値
- * ========================================================= */
-
-function input_string(array $data, string $key, string $default = ''): string
+function generate_id(string $prefix): string
 {
-    $value = $data[$key] ?? $default;
-
-    return is_string($value) ? trim($value) : $default;
+    return $prefix . '_' . date('YmdHis') . '_' . bin2hex(random_bytes(4));
 }
 
-function input_int(array $data, string $key, int $default = 0): int
+function application_api_path(): string
 {
-    $value = $data[$key] ?? $default;
+    $script = $_SERVER['SCRIPT_NAME'] ?? 'index.php';
 
-    if (is_int($value)) {
-        return $value;
+    if (!is_string($script) || $script === '') {
+        return 'index.php';
     }
 
-    if (is_numeric($value)) {
-        return (int)$value;
-    }
-
-    return $default;
-}
-
-function input_bool(array $data, string $key, bool $default = false): bool
-{
-    $value = $data[$key] ?? $default;
-
-    if (is_bool($value)) {
-        return $value;
-    }
-
-    if (is_string($value)) {
-        return in_array(
-            strtolower($value),
-            ['1', 'true', 'yes', 'on'],
-            true
-        );
-    }
-
-    return (bool)$value;
-}
-
-function valid_email(string $email): bool
-{
-    return filter_var($email, FILTER_VALIDATE_EMAIL) !== false;
-}
-
-/* =========================================================
- * ID
- * ========================================================= */
-
-function new_id(string $prefix): string
-{
-    return $prefix . '_' . date('YmdHis') . '_' . bin2hex(random_bytes(5));
-}
-
-/* =========================================================
- * アンケート
- * ========================================================= */
-
-function normalize_question(array $question): array
-{
-    $type = input_string($question, 'type', 'free');
-
-    if (!in_array($type, ['free', 'single', 'multiple'], true)) {
-        $type = 'free';
-    }
-
-    $options = [];
-
-    if (isset($question['options']) && is_array($question['options'])) {
-        foreach ($question['options'] as $option) {
-            if (is_string($option)) {
-                $text = trim($option);
-
-                if ($text !== '') {
-                    $options[] = $text;
-                }
-            } elseif (is_array($option)) {
-                $text = input_string($option, 'text');
-
-                if ($text !== '') {
-                    $options[] = [
-                        'id' => input_string($option, 'id', new_id('opt')),
-                        'text' => $text,
-                        'next' => input_string($option, 'next', '')
-                    ];
-                }
-            }
-        }
-    }
-
-    if ($type === 'free') {
-        $options = [];
-    }
-
-    return [
-        'id' => input_string($question, 'id', new_id('q')),
-        'text' => input_string($question, 'text'),
-        'type' => $type,
-        'required' => input_bool($question, 'required'),
-        'options' => $options
-    ];
-}
-
-function normalize_group(array $group): array
-{
-    $questions = [];
-
-    if (isset($group['questions']) && is_array($group['questions'])) {
-        foreach ($group['questions'] as $question) {
-            if (is_array($question)) {
-                $questions[] = normalize_question($question);
-            }
-        }
-    }
-
-    return [
-        'id' => input_string($group, 'id', new_id('grp')),
-        'name' => input_string($group, 'name', '新しいグループ'),
-        'questions' => $questions
-    ];
-}
-
-function normalize_survey(array $survey): array
-{
-    $groups = [];
-
-    if (isset($survey['groups']) && is_array($survey['groups'])) {
-        foreach ($survey['groups'] as $group) {
-            if (is_array($group)) {
-                $groups[] = normalize_group($group);
-            }
-        }
-    }
-
-    $status = input_string($survey, 'status', 'draft');
-
-    if (!in_array($status, ['draft', 'published', 'closed'], true)) {
-        $status = 'draft';
-    }
-
-    return [
-        'id' => input_string($survey, 'id', new_id('survey')),
-        'name' => input_string($survey, 'name'),
-        'description' => input_string($survey, 'description'),
-        'start_at' => input_string($survey, 'start_at'),
-        'end_at' => input_string($survey, 'end_at'),
-        'status' => $status,
-        'numbering' => in_array(
-            input_string($survey, 'numbering', 'global'),
-            ['global', 'group'],
-            true
-        )
-            ? input_string($survey, 'numbering', 'global')
-            : 'global',
-        'created_at' => input_string($survey, 'created_at', current_datetime()),
-        'updated_at' => current_datetime(),
-        'published_at' => input_string($survey, 'published_at'),
-        'closed_at' => input_string($survey, 'closed_at'),
-        'groups' => $groups
-    ];
-}
-
-function find_survey(string $surveyId): ?array
-{
-    $data = load_survey_data();
-    $surveys = $data['surveys'] ?? [];
-
-    if (!is_array($surveys)) {
-        return null;
-    }
-
-    foreach ($surveys as $survey) {
-        if (is_array($survey) && ($survey['id'] ?? '') === $surveyId) {
-            return $survey;
-        }
-    }
-
-    return null;
-}
-
-function survey_question_list(array $survey): array
-{
-    $result = [];
-
-    foreach (($survey['groups'] ?? []) as $groupIndex => $group) {
-        if (!is_array($group)) {
-            continue;
-        }
-
-        $questionIndex = 0;
-
-        foreach (($group['questions'] ?? []) as $question) {
-            if (!is_array($question)) {
-                continue;
-            }
-
-            $questionIndex++;
-
-            $number = $survey['numbering'] === 'group'
-                ? 'Q' . ($groupIndex + 1) . '-' . $questionIndex
-                : 'Q' . (count($result) + 1);
-
-            $question['_number'] = $number;
-            $question['_group_id'] = input_string($group, 'id');
-            $result[] = $question;
-        }
-    }
-
-    return $result;
-}
-
-function validate_survey(array $survey): array
-{
-    $errors = [];
-
-    if (trim((string)($survey['name'] ?? '')) === '') {
-        $errors['name'] = 'アンケート名を入力してください。';
-    }
-
-    $groups = $survey['groups'] ?? [];
-
-    if (!is_array($groups) || count($groups) === 0) {
-        $errors['groups'] = '少なくとも1つのグループを追加してください。';
-        return $errors;
-    }
-
-    $questionIds = [];
-    $optionIds = [];
-
-    foreach ($groups as $groupIndex => $group) {
-        if (!is_array($group)) {
-            $errors['group_' . $groupIndex] = 'グループの内容を確認してください。';
-            continue;
-        }
-
-        if (trim((string)($group['name'] ?? '')) === '') {
-            $errors['group_name_' . $groupIndex] = 'グループ名を入力してください。';
-        }
-
-        $questions = $group['questions'] ?? [];
-
-        if (!is_array($questions)) {
-            continue;
-        }
-
-        foreach ($questions as $questionIndex => $question) {
-            if (!is_array($question)) {
-                continue;
-            }
-
-            $qid = input_string($question, 'id');
-
-            if ($qid === '' || isset($questionIds[$qid])) {
-                $errors['question_id_' . $groupIndex . '_' . $questionIndex] =
-                    '質問IDが重複しています。';
-            }
-
-            $questionIds[$qid] = true;
-
-            if (input_string($question, 'text') === '') {
-                $errors['question_' . $groupIndex . '_' . $questionIndex] =
-                    '質問文を入力してください。';
-            }
-
-            $type = input_string($question, 'type', 'free');
-
-            if (!in_array($type, ['free', 'single', 'multiple'], true)) {
-                $errors['question_type_' . $groupIndex . '_' . $questionIndex] =
-                    '回答形式を確認してください。';
-            }
-
-            if ($type === 'single' || $type === 'multiple') {
-                $options = $question['options'] ?? [];
-
-                if (!is_array($options) || count($options) === 0) {
-                    $errors['options_' . $groupIndex . '_' . $questionIndex] =
-                        '選択肢を1つ以上設定してください。';
-                } else {
-                    foreach ($options as $option) {
-                        if (!is_array($option)) {
-                            continue;
-                        }
-
-                        $oid = input_string($option, 'id');
-
-                        if ($oid === '') {
-                            $oid = new_id('opt');
-                        }
-
-                        if (isset($optionIds[$oid])) {
-                            $errors['option_id_' . $oid] =
-                                '選択肢IDが重複しています。';
-                        }
-
-                        $optionIds[$oid] = true;
-
-                        if (input_string($option, 'text') === '') {
-                            $errors['option_text_' . $oid] =
-                                '選択肢の内容を入力してください。';
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    return $errors;
-}
-
-/* =========================================================
- * 回答
- * ========================================================= */
-
-function survey_is_answerable(array $survey): bool
-{
-    if (($survey['status'] ?? '') !== 'published') {
-        return false;
-    }
-
-    $now = time();
-
-    $start = trim((string)($survey['start_at'] ?? ''));
-    $end = trim((string)($survey['end_at'] ?? ''));
-
-    if ($start !== '') {
-        $timestamp = strtotime($start);
-
-        if ($timestamp !== false && $now < $timestamp) {
-            return false;
-        }
-    }
-
-    if ($end !== '') {
-        $timestamp = strtotime($end);
-
-        if ($timestamp !== false && $now > $timestamp) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-function response_already_exists(string $surveyId, string $respondentToken): bool
-{
-    $data = load_response_data();
-
-    foreach (($data['responses'] ?? []) as $response) {
-        if (
-            is_array($response) &&
-            ($response['survey_id'] ?? '') === $surveyId &&
-            ($response['respondent_token'] ?? '') === $respondentToken
-        ) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-function aggregate_survey_responses(array $survey): array
-{
-    $responseData = load_response_data();
-    $responses = [];
-
-    foreach (($responseData['responses'] ?? []) as $response) {
-        if (
-            is_array($response) &&
-            ($response['survey_id'] ?? '') === ($survey['id'] ?? '')
-        ) {
-            $responses[] = $response;
-        }
-    }
-
-    $questions = survey_question_list($survey);
-    $result = [];
-
-    foreach ($questions as $question) {
-        $qid = input_string($question, 'id');
-        $type = input_string($question, 'type');
-
-        $item = [
-            'question_id' => $qid,
-            'number' => $question['_number'] ?? '',
-            'text' => $question['text'] ?? '',
-            'type' => $type,
-            'answered' => 0,
-            'total' => count($responses),
-            'options' => [],
-            'free_answers' => []
-        ];
-
-        $optionCounts = [];
-
-        foreach (($question['options'] ?? []) as $option) {
-            if (!is_array($option)) {
-                continue;
-            }
-
-            $oid = input_string($option, 'id');
-            $optionCounts[$oid] = 0;
-
-            $item['options'][] = [
-                'id' => $oid,
-                'text' => input_string($option, 'text'),
-                'count' => 0,
-                'ratio' => 0
-            ];
-        }
-
-        foreach ($responses as $response) {
-            $answers = $response['answers'] ?? [];
-
-            if (!is_array($answers) || !array_key_exists($qid, $answers)) {
-                continue;
-            }
-
-            $answer = $answers[$qid];
-
-            if ($type === 'free') {
-                if (is_string($answer) && trim($answer) !== '') {
-                    $item['answered']++;
-                    $item['free_answers'][] = [
-                        'responded_at' => input_string(
-                            $response,
-                            'responded_at'
-                        ),
-                        'answer' => $answer
-                    ];
-                }
-                continue;
-            }
-
-            if ($type === 'single') {
-                if (is_string($answer) && $answer !== '') {
-                    $item['answered']++;
-
-                    if (isset($optionCounts[$answer])) {
-                        $optionCounts[$answer]++;
-                    }
-                }
-                continue;
-            }
-
-            if ($type === 'multiple') {
-                if (!is_array($answer)) {
-                    continue;
-                }
-
-                if (count($answer) > 0) {
-                    $item['answered']++;
-                }
-
-                foreach ($answer as $selected) {
-                    if (is_string($selected) && isset($optionCounts[$selected])) {
-                        $optionCounts[$selected]++;
-                    }
-                }
-            }
-        }
-
-        foreach ($item['options'] as $index => $option) {
-            $count = $optionCounts[$option['id']] ?? 0;
-            $base = $type === 'multiple'
-                ? max(1, count($responses))
-                : max(1, count($responses));
-
-            $item['options'][$index]['count'] = $count;
-            $item['options'][$index]['ratio'] =
-                round(($count / $base) * 100, 1);
-        }
-
-        $result[] = $item;
-    }
-
-    return [
-        'total_responses' => count($responses),
-        'respondents' => count($responses),
-        'questions' => $result
-    ];
+    return $script;
 }
 
 /* =========================================================
@@ -924,48 +435,11 @@ function kintone_build_url(string $domain, string $endpoint): string
     $domain = trim($domain);
     $domain = preg_replace('/^https?:\/\//i', '', $domain);
     $domain = preg_replace('/\.cybozu\.com.*$/i', '', $domain);
-    $domain = rtrim((string)$domain, '/');
+    $domain = rtrim($domain, '/');
 
     $endpoint = '/' . ltrim($endpoint, '/');
 
     return 'https://' . $domain . '.cybozu.com' . $endpoint;
-}
-
-function normalize_proxy(string $host, string $port): string
-{
-    $host = trim($host);
-    $port = trim($port);
-
-    if ($host === '') {
-        return '';
-    }
-
-    if ($port !== '') {
-        if (!ctype_digit($port)) {
-            return '';
-        }
-
-        $portNumber = (int)$port;
-
-        if ($portNumber < 1 || $portNumber > 65535) {
-            return '';
-        }
-
-        return $host . ':' . $portNumber;
-    }
-
-    return $host;
-}
-
-function get_safe_response_headers(): array
-{
-    if (function_exists('http_get_last_response_headers')) {
-        $headers = http_get_last_response_headers();
-
-        return is_array($headers) ? $headers : [];
-    }
-
-    return [];
 }
 
 function make_cybozu_auth_header(
@@ -979,306 +453,263 @@ function make_cybozu_auth_header(
         base64_encode($login_name . ':' . $password);
 }
 
+function get_safe_response_headers(): array
+{
+    if (function_exists('http_get_last_response_headers')) {
+        $headers = http_get_last_response_headers();
+
+        if (is_array($headers)) {
+            return $headers;
+        }
+    }
+
+    return [];
+}
+
+function extract_http_status(array $headers): int
+{
+    foreach ($headers as $header) {
+        if (
+            is_string($header) &&
+            preg_match(
+                '/HTTP\/\d(?:\.\d)?\s+(\d{3})/i',
+                $header,
+                $matches
+            )
+        ) {
+            return (int)$matches[1];
+        }
+    }
+
+    return 0;
+}
+
 function kintone_api_request(
     string $method,
     string $url,
     array $headers,
-    mixed $payload = null,
-    array $config = []
+    array $payload,
+    array $config
 ): array {
-    $method = strtoupper(trim($method));
+    $method = strtoupper($method);
 
-    $httpOptions = [
+    $options = [
         'method' => $method,
         'header' => implode("\r\n", $headers),
         'ignore_errors' => true,
-        'timeout' => 20,
-        'protocol_version' => 1.1
+        'timeout' => 20
     ];
 
-    if ($method === 'GET' && is_array($payload) && $payload !== []) {
-        $query = http_build_query(
-            $payload,
-            '',
-            '&',
-            PHP_QUERY_RFC3986
-        );
-
-        if ($query !== '') {
-            $separator = str_contains($url, '?') ? '&' : '?';
-            $url .= $separator . $query;
-        }
-    }
-
-    if (
-        in_array($method, ['POST', 'PUT', 'DELETE'], true) &&
-        $payload !== null
-    ) {
-        if (is_array($payload)) {
-            try {
-                $httpOptions['content'] = json_encode(
-                    $payload,
-                    JSON_UNESCAPED_UNICODE |
-                    JSON_UNESCAPED_SLASHES |
-                    JSON_THROW_ON_ERROR
-                );
-            } catch (\Throwable $e) {
-                return [
-                    'success' => false,
-                    'status' => 0,
-                    'message' => '送信データを作成できませんでした。',
-                    'raw' => []
-                ];
-            }
-        } else {
-            $httpOptions['content'] = (string)$payload;
+    if ($method === 'GET') {
+        /*
+         * GETではcontentを設定しない。
+         */
+    } elseif ($payload !== []) {
+        try {
+            $options['content'] = json_encode(
+                $payload,
+                JSON_UNESCAPED_UNICODE |
+                JSON_UNESCAPED_SLASHES |
+                JSON_THROW_ON_ERROR
+            );
+        } catch (\Throwable $e) {
+            return [
+                'success' => false,
+                'status' => 0,
+                'message' => '通信データを作成できませんでした。',
+                'data' => []
+            ];
         }
     }
 
     $contextOptions = [
-        'http' => $httpOptions,
+        'http' => $options,
         'ssl' => [
             'verify_peer' => false,
-            'verify_peer_name' => false,
-            'allow_self_signed' => true
+            'verify_peer_name' => false
         ]
     ];
 
     /*
-     * プロキシは設定値を常に受け取れる構造にする。
-     * 設定が空の場合は直接接続する。
+     * プロキシはhost:port形式。
+     * 設定されている場合は必ずstream_contextへ適用する。
      */
     $proxyHost = trim((string)($config['proxy_host'] ?? ''));
     $proxyPort = trim((string)($config['proxy_port'] ?? ''));
 
-    $proxyHostPort = normalize_proxy($proxyHost, $proxyPort);
+    if ($proxyHost !== '') {
+        $proxy = $proxyHost;
 
-    if ($proxyHostPort !== '') {
-        $contextOptions['http']['proxy'] =
-            'tcp://' . $proxyHostPort;
+        if ($proxyPort !== '') {
+            $proxy .= ':' . $proxyPort;
+        }
 
+        $contextOptions['http']['proxy'] = 'tcp://' . $proxy;
         $contextOptions['http']['request_fulluri'] = true;
+    } else {
+        /*
+         * プロキシ未指定でもキーを明示的に保持。
+         * 実際の通信には空プロキシを渡さない。
+         */
+        $contextOptions['http']['request_fulluri'] = false;
     }
 
     $context = stream_context_create($contextOptions);
 
-    $responseBody = @file_get_contents(
+    $response = @file_get_contents(
         $url,
         false,
         $context
     );
 
-    $responseHeaders = get_safe_response_headers();
+    $headersResult = get_safe_response_headers();
+    $status = extract_http_status($headersResult);
 
-    $statusCode = 0;
+    $decoded = [];
 
-    foreach ($responseHeaders as $headerLine) {
-        if (
-            preg_match(
-                '/^HTTP\/\d(?:\.\d)?\s+(\d+)/i',
-                (string)$headerLine,
-                $matches
-            )
-        ) {
-            $statusCode = (int)$matches[1];
+    if ($response !== false && trim($response) !== '') {
+        $decodedValue = json_decode($response, true);
+
+        if (is_array($decodedValue)) {
+            $decoded = $decodedValue;
         }
     }
 
-    $resultData = [];
-
-    if (is_string($responseBody) && $responseBody !== '') {
-        $decoded = json_decode($responseBody, true);
-
-        if (is_array($decoded)) {
-            $resultData = $decoded;
-        }
-    }
-
-    if ($statusCode >= 200 && $statusCode < 300) {
+    if ($status >= 200 && $status < 300) {
         return [
             'success' => true,
-            'status' => $statusCode,
-            'data' => $resultData
+            'status' => $status,
+            'message' => '',
+            'data' => $decoded
         ];
     }
 
-    $message = 'kintone APIとの通信に失敗しました。';
+    $message = 'kintoneとの通信に失敗しました。';
 
-    if (isset($resultData['message']) && is_string($resultData['message'])) {
-        $message = $resultData['message'];
+    if (
+        isset($decoded['message']) &&
+        is_string($decoded['message']) &&
+        $decoded['message'] !== ''
+    ) {
+        $message = $decoded['message'];
     }
 
-    $details = [];
+    $errors = [];
 
-    if (isset($resultData['code']) && is_string($resultData['code'])) {
-        $details[] = 'コード: ' . $resultData['code'];
-    }
-
-    if (isset($resultData['errors']) && is_array($resultData['errors'])) {
-        foreach ($resultData['errors'] as $field => $error) {
+    if (isset($decoded['errors']) && is_array($decoded['errors'])) {
+        foreach ($decoded['errors'] as $field => $error) {
             if (!is_array($error)) {
                 continue;
             }
 
             $messages = $error['messages'] ?? [];
 
-            if (!is_array($messages)) {
-                continue;
-            }
-
-            foreach ($messages as $errorMessage) {
-                if (is_string($errorMessage)) {
-                    $details[] =
-                        (string)$field . ': ' . $errorMessage;
+            if (is_array($messages)) {
+                foreach ($messages as $errorMessage) {
+                    if (is_string($errorMessage)) {
+                        $errors[] = (string)$field . ': ' . $errorMessage;
+                    }
                 }
             }
         }
     }
 
-    if ($details !== []) {
-        $message .= ' (' . implode(' / ', $details) . ')';
-    }
-
     return [
         'success' => false,
-        'status' => $statusCode,
+        'status' => $status,
         'message' => $message,
-        'raw' => $resultData
+        'errors' => $errors,
+        'data' => $decoded
     ];
 }
 
-function kintone_configured(array $settings): bool
+function test_kintone(array $settings): array
 {
-    $kintone = $settings['kintone'] ?? [];
+    $domain = trim((string)($settings['domain'] ?? ''));
+    $login = trim((string)($settings['login_name'] ?? ''));
+    $password = (string)($settings['password'] ?? '');
+    $appId = trim((string)($settings['customer_app_id'] ?? ''));
 
-    if (!is_array($kintone)) {
-        return false;
-    }
-
-    return
-        input_string($kintone, 'domain') !== '' &&
-        input_string($kintone, 'login_name') !== '' &&
-        input_string($kintone, 'password') !== '' &&
-        input_string($kintone, 'customer_app_id') !== '' &&
-        input_string($kintone, 'customer_name_field') !== '' &&
-        input_string($kintone, 'customer_email_field') !== '';
-}
-
-function kintone_test_connection(array $settings): array
-{
-    $config = $settings['kintone'] ?? [];
-
-    if (!is_array($config)) {
+    if ($domain === '' || $login === '' || $password === '') {
         return [
             'success' => false,
-            'message' => 'キントーン設定を確認してください。'
+            'message' => 'kintoneのドメイン、ログイン名、パスワードを入力してください。'
         ];
     }
-
-    $domain = input_string($config, 'domain');
-    $loginName = input_string($config, 'login_name');
-    $password = input_string($config, 'password');
-    $appId = input_string($config, 'customer_app_id');
-
-    if ($domain === '' || $loginName === '' || $password === '') {
-        return [
-            'success' => false,
-            'message' => 'キントーンの接続先、ログイン名、パスワードを設定してください。'
-        ];
-    }
-
-    if ($appId === '') {
-        $endpoint = '/k/v1/apps.json';
-        $payload = ['limit' => 1];
-    } else {
-        $endpoint = '/k/v1/app.json';
-        $payload = ['id' => $appId];
-    }
-
-    $url = kintone_build_url($domain, $endpoint);
 
     $headers = [
-        make_cybozu_auth_header($loginName, $password),
+        make_cybozu_auth_header($login, $password),
         'Accept: application/json'
     ];
+
+    if ($appId !== '') {
+        $url = kintone_build_url(
+            $domain,
+            '/k/v1/app.json?id=' . rawurlencode($appId)
+        );
+    } else {
+        $url = kintone_build_url(
+            $domain,
+            '/k/v1/apps.json?limit=1'
+        );
+    }
 
     return kintone_api_request(
         'GET',
         $url,
         $headers,
-        $payload,
+        [],
         [
-            'proxy_host' => input_string($config, 'proxy_host'),
-            'proxy_port' => input_string($config, 'proxy_port')
+            'proxy_host' => trim((string)($settings['proxy_host'] ?? '')),
+            'proxy_port' => trim((string)($settings['proxy_port'] ?? ''))
         ]
     );
 }
 
-function refresh_customers_from_kintone(array $settings): array
+function fetch_kintone_customers(array $settings): array
 {
-    $config = $settings['kintone'] ?? [];
+    $domain = trim((string)($settings['domain'] ?? ''));
+    $login = trim((string)($settings['login_name'] ?? ''));
+    $password = (string)($settings['password'] ?? '');
+    $appId = trim((string)($settings['customer_app_id'] ?? ''));
 
-    if (!is_array($config)) {
+    if ($domain === '' || $login === '' || $password === '' || $appId === '') {
         return [
             'success' => false,
-            'message' => 'キントーン設定を確認してください。'
+            'message' => 'kintone設定が不足しています。'
         ];
     }
-
-    $domain = input_string($config, 'domain');
-    $loginName = input_string($config, 'login_name');
-    $password = input_string($config, 'password');
-    $appId = input_string($config, 'customer_app_id');
-    $idField = input_string($config, 'customer_id_field');
-    $nameField = input_string($config, 'customer_name_field');
-    $emailField = input_string($config, 'customer_email_field');
-
-    if (
-        $domain === '' ||
-        $loginName === '' ||
-        $password === '' ||
-        $appId === '' ||
-        $nameField === '' ||
-        $emailField === ''
-    ) {
-        return [
-            'success' => false,
-            'message' => 'キントーン設定をすべて入力してください。'
-        ];
-    }
-
-    $query = 'order by $id asc limit 500';
-
-    $url = kintone_build_url(
-        $domain,
-        '/k/v1/records.json'
-    );
 
     $headers = [
-        make_cybozu_auth_header($loginName, $password),
+        make_cybozu_auth_header($login, $password),
         'Accept: application/json'
     ];
 
-    $payload = [
+    $params = [
         'app' => $appId,
-        'query' => $query,
-        'fields' => array_values(
-            array_filter(
-                [$idField, $nameField, $emailField],
-                static fn ($value): bool =>
-                    is_string($value) && trim($value) !== ''
-            )
-        )
+        'totalCount' => 'true',
+        'query' => 'order by $id asc limit 500'
     ];
+
+    $url = kintone_build_url(
+        $domain,
+        '/k/v1/records.json?' .
+        http_build_query(
+            $params,
+            '',
+            '&',
+            PHP_QUERY_RFC3986
+        )
+    );
 
     $result = kintone_api_request(
         'GET',
         $url,
         $headers,
-        $payload,
+        [],
         [
-            'proxy_host' => input_string($config, 'proxy_host'),
-            'proxy_port' => input_string($config, 'proxy_port')
+            'proxy_host' => trim((string)($settings['proxy_host'] ?? '')),
+            'proxy_port' => trim((string)($settings['proxy_port'] ?? ''))
         ]
     );
 
@@ -1286,13 +717,17 @@ function refresh_customers_from_kintone(array $settings): array
         return $result;
     }
 
-    $customers = [];
-
     $records = $result['data']['records'] ?? [];
 
     if (!is_array($records)) {
         $records = [];
     }
+
+    $idField = trim((string)($settings['customer_id_field'] ?? ''));
+    $nameField = trim((string)($settings['customer_name_field'] ?? ''));
+    $emailField = trim((string)($settings['customer_email_field'] ?? ''));
+
+    $customers = [];
 
     foreach ($records as $record) {
         if (!is_array($record)) {
@@ -1307,146 +742,166 @@ function refresh_customers_from_kintone(array $settings): array
             $id = (string)$record[$idField]['value'];
         }
 
-        if (isset($record[$nameField]['value'])) {
+        if ($nameField !== '' && isset($record[$nameField]['value'])) {
             $name = (string)$record[$nameField]['value'];
         }
 
-        if (isset($record[$emailField]['value'])) {
+        if ($emailField !== '' && isset($record[$emailField]['value'])) {
             $email = (string)$record[$emailField]['value'];
         }
 
-        if ($email === '' || !valid_email($email)) {
-            continue;
-        }
-
         $customers[] = [
-            'id' => $id !== '' ? $id : new_id('customer'),
+            'id' => $id !== '' ? $id : generate_id('customer'),
             'name' => $name,
             'email' => $email,
             'company' => '',
-            'customer_no' => $id
+            'code' => $id
         ];
     }
 
-    $customerData = [
-        'version' => 1,
-        'updated_at' => current_datetime(),
-        'source' => 'kintone',
-        'count' => count($customers),
-        'customers' => $customers
-    ];
-
-    write_json_file(CUSTOMERS_FILE, $customerData);
-
     return [
         'success' => true,
-        'status' => 200,
-        'data' => [
-            'count' => count($customers),
-            'customers' => $customers
-        ]
+        'message' => '顧客一覧を更新しました。',
+        'customers' => $customers
     ];
 }
 
 /* =========================================================
- * メール
+ * アンケート補助
  * ========================================================= */
 
-function mail_settings_ready(array $settings): bool
+function survey_find(array $surveys, string $id): ?array
 {
-    $mail = $settings['mail'] ?? [];
-
-    if (!is_array($mail)) {
-        return false;
+    foreach ($surveys as $survey) {
+        if (
+            is_array($survey) &&
+            (string)($survey['id'] ?? '') === $id
+        ) {
+            return $survey;
+        }
     }
 
-    $server = input_string($mail, 'smtp_server');
-    $from = input_string($mail, 'from_email');
-
-    $port = input_int($mail, 'smtp_port', 0);
-
-    return
-        $server !== '' &&
-        $port >= 1 &&
-        $port <= 65535 &&
-        $from !== '' &&
-        valid_email($from);
+    return null;
 }
 
-/**
- * SMTP送信。
- *
- * PHP標準機能だけで実装し、外部ライブラリには依存しない。
- */
-function smtp_send_mail(
-    array $settings,
-    string $to,
-    string $subject,
-    string $body
-): array {
-    if (!valid_email($to)) {
-        return [
-            'success' => false,
-            'message' => '送信先メールアドレスが正しくありません。'
-        ];
+function survey_index(array $surveys, string $id): int
+{
+    foreach ($surveys as $index => $survey) {
+        if (
+            is_array($survey) &&
+            (string)($survey['id'] ?? '') === $id
+        ) {
+            return $index;
+        }
     }
 
-    if (!mail_settings_ready($settings)) {
-        return [
-            'success' => false,
-            'message' => 'メール送信設定が未完了です。'
-        ];
+    return -1;
+}
+
+function normalize_question(array $question): array
+{
+    $type = (string)($question['type'] ?? 'free');
+
+    if (!in_array($type, ['free', 'single', 'multiple'], true)) {
+        $type = 'free';
     }
 
-    /*
-     * mail() は環境依存のため、SMTP設定そのものがPHP側に
-     * 反映されていないサーバーでは利用できない。
-     *
-     * この環境では設定確認を行ったうえで、PHP標準のmail()
-     * を利用する。
-     */
-    $mail = $settings['mail'];
+    $options = [];
 
-    $fromEmail = input_string($mail, 'from_email');
-    $fromName = input_string($mail, 'from_name');
+    if (isset($question['options']) && is_array($question['options'])) {
+        foreach ($question['options'] as $option) {
+            if (!is_array($option)) {
+                continue;
+            }
 
-    $encodedSubject = '=?UTF-8?B?' .
-        base64_encode($subject) .
-        '?=';
-
-    $encodedFromName = $fromName !== ''
-        ? '=?UTF-8?B?' . base64_encode($fromName) . '?='
-        : '';
-
-    $fromHeader = $encodedFromName !== ''
-        ? $encodedFromName . ' <' . $fromEmail . '>'
-        : $fromEmail;
-
-    $headers = [
-        'From: ' . $fromHeader,
-        'Reply-To: ' . $fromEmail,
-        'MIME-Version: 1.0',
-        'Content-Type: text/plain; charset=UTF-8',
-        'Content-Transfer-Encoding: 8bit'
-    ];
-
-    $result = @mail(
-        $to,
-        $encodedSubject,
-        $body,
-        implode("\r\n", $headers)
-    );
-
-    if (!$result) {
-        return [
-            'success' => false,
-            'message' => 'メール送信に失敗しました。メールサーバー設定を確認してください。'
-        ];
+            $options[] = [
+                'text' => (string)($option['text'] ?? ''),
+                'branch' => (string)($option['branch'] ?? '')
+            ];
+        }
     }
 
     return [
-        'success' => true,
-        'message' => 'メールを送信しました。'
+        'id' => (string)($question['id'] ?? generate_id('q')),
+        'text' => (string)($question['text'] ?? ''),
+        'type' => $type,
+        'required' => !empty($question['required']),
+        'options' => $options
+    ];
+}
+
+function normalize_survey(array $survey): array
+{
+    $groups = [];
+
+    if (isset($survey['groups']) && is_array($survey['groups'])) {
+        foreach ($survey['groups'] as $group) {
+            if (!is_array($group)) {
+                continue;
+            }
+
+            $questions = [];
+
+            if (isset($group['questions']) && is_array($group['questions'])) {
+                foreach ($group['questions'] as $question) {
+                    if (is_array($question)) {
+                        $questions[] = normalize_question($question);
+                    }
+                }
+            }
+
+            $groups[] = [
+                'id' => (string)($group['id'] ?? generate_id('g')),
+                'name' => (string)($group['name'] ?? 'グループ'),
+                'questions' => $questions
+            ];
+        }
+    }
+
+    return [
+        'id' => (string)($survey['id'] ?? generate_id('survey')),
+        'name' => trim((string)($survey['name'] ?? '')),
+        'description' => (string)($survey['description'] ?? ''),
+        'status' => in_array(
+            (string)($survey['status'] ?? 'draft'),
+            ['draft', 'open', 'end'],
+            true
+        ) ? (string)$survey['status'] : 'draft',
+        'created' => (string)($survey['created'] ?? date('Y-m-d')),
+        'start' => (string)($survey['start'] ?? ''),
+        'end' => (string)($survey['end'] ?? ''),
+        'answers' => (int)($survey['answers'] ?? 0),
+        'target' => (int)($survey['target'] ?? 0),
+        'sent' => (int)($survey['sent'] ?? 0),
+        'updated' => (string)($survey['updated'] ?? date('Y-m-d')),
+        'numbering' => (
+            (string)($survey['numbering'] ?? 'global') === 'group'
+            ? 'group'
+            : 'global'
+        ),
+        'groups' => $groups
+    ];
+}
+
+function calculate_survey_counts(
+    array $survey,
+    array $responses
+): array {
+    $surveyId = (string)($survey['id'] ?? '');
+    $count = 0;
+
+    foreach ($responses as $response) {
+        if (
+            is_array($response) &&
+            (string)($response['survey_id'] ?? '') === $surveyId
+        ) {
+            $count++;
+        }
+    }
+
+    return [
+        'answers' => $count,
+        'target' => (int)($survey['target'] ?? 0)
     ];
 }
 
@@ -1459,1514 +914,992 @@ initialize_data_files();
 $action = requested_action();
 
 if ($action !== '') {
-    $method = request_method();
-
-    if ($method === 'POST') {
+    if (request_method() === 'POST') {
         validate_csrf();
     }
 
-    /*
-     * 回答者画面は action=respond のGETで表示する。
-     */
-    if ($action === 'load_settings') {
-        $settings = load_settings();
+    switch ($action) {
+        case 'load_settings':
+            $settings = load_settings();
 
-        $safeSettings = [
-            'mail' => [
-                'smtp_server' =>
-                    input_string($settings['mail'] ?? [], 'smtp_server'),
-                'smtp_port' =>
-                    input_int($settings['mail'] ?? [], 'smtp_port', 587),
-                'connection_type' =>
-                    input_string(
-                        $settings['mail'] ?? [],
-                        'connection_type',
-                        'tls'
-                    ),
-                'username' =>
-                    input_string($settings['mail'] ?? [], 'username'),
-                'from_email' =>
-                    input_string($settings['mail'] ?? [], 'from_email'),
-                'from_name' =>
-                    input_string($settings['mail'] ?? [], 'from_name'),
-                'configured' =>
-                    mail_settings_ready($settings),
-                'tested_at' =>
-                    input_string(
-                        $settings['mail'] ?? [],
-                        'tested_at'
-                    )
-            ],
-            'kintone' => [
-                'domain' =>
-                    input_string($settings['kintone'] ?? [], 'domain'),
-                'login_name' =>
-                    input_string($settings['kintone'] ?? [], 'login_name'),
-                'customer_app_id' =>
-                    input_string(
-                        $settings['kintone'] ?? [],
-                        'customer_app_id'
-                    ),
-                'customer_id_field' =>
-                    input_string(
-                        $settings['kintone'] ?? [],
-                        'customer_id_field'
-                    ),
-                'customer_name_field' =>
-                    input_string(
-                        $settings['kintone'] ?? [],
-                        'customer_name_field'
-                    ),
-                'customer_email_field' =>
-                    input_string(
-                        $settings['kintone'] ?? [],
-                        'customer_email_field'
-                    ),
-                'proxy_host' =>
-                    input_string(
-                        $settings['kintone'] ?? [],
-                        'proxy_host'
-                    ),
-                'proxy_port' =>
-                    input_string(
-                        $settings['kintone'] ?? [],
-                        'proxy_port'
-                    ),
-                'configured' =>
-                    kintone_configured($settings),
-                'connection_status' =>
-                    input_string(
-                        $settings['kintone'] ?? [],
-                        'connection_status',
-                        'not_configured'
-                    ),
-                'tested_at' =>
-                    input_string(
-                        $settings['kintone'] ?? [],
-                        'tested_at'
-                    )
-            ]
-        ];
+            /*
+             * パスワードは画面へ返さない。
+             */
+            $settings['mail']['password'] = '';
+            $settings['kintone']['password'] = '';
 
-        json_response(
-            true,
-            '設定を取得しました。',
-            ['settings' => $safeSettings]
-        );
-    }
+            json_response(
+                true,
+                '設定を取得しました。',
+                ['settings' => $settings]
+            );
 
-    if ($action === 'load_customers') {
-        $customerData = load_customer_data();
+        case 'save_mail_settings':
+            $input = read_json_request();
+            $settings = load_settings();
 
-        json_response(
-            true,
-            '顧客一覧を取得しました。',
-            [
-                'customers' => $customerData['customers'] ?? [],
-                'count' => $customerData['count'] ?? 0,
-                'updated_at' => $customerData['updated_at'] ?? null
-            ]
-        );
-    }
+            $mail = [
+                'smtp_server' => trim((string)($input['smtp_server'] ?? '')),
+                'smtp_port' => (int)($input['smtp_port'] ?? 587),
+                'connection_type' => trim(
+                    (string)($input['connection_type'] ?? 'tls')
+                ),
+                'username' => trim((string)($input['username'] ?? '')),
+                'password' => (string)($input['password'] ?? ''),
+                'from_email' => trim((string)($input['from_email'] ?? '')),
+                'from_name' => trim(
+                    (string)($input['from_name'] ?? 'アンケート事務局')
+                ),
+                'configured' => true,
+                'tested_at' => $settings['mail']['tested_at'] ?? null
+            ];
 
-    if ($action === 'load_surveys') {
-        $surveyData = load_survey_data();
-        $responseData = load_response_data();
-        $mailData = load_mail_log_data();
-
-        $responses = is_array($responseData['responses'] ?? null)
-            ? $responseData['responses']
-            : [];
-
-        $mailLogs = is_array($mailData['logs'] ?? null)
-            ? $mailData['logs']
-            : [];
-
-        $surveys = [];
-
-        foreach (($surveyData['surveys'] ?? []) as $survey) {
-            if (!is_array($survey)) {
-                continue;
+            if ($mail['password'] === '') {
+                $mail['password'] =
+                    (string)($settings['mail']['password'] ?? '');
             }
 
-            $id = input_string($survey, 'id');
-            $responseCount = 0;
-            $mailCount = 0;
-
-            foreach ($responses as $response) {
-                if (
-                    is_array($response) &&
-                    ($response['survey_id'] ?? '') === $id
-                ) {
-                    $responseCount++;
-                }
+            if ($mail['smtp_server'] === '') {
+                json_response(
+                    false,
+                    'SMTPサーバーを入力してください。',
+                    [],
+                    [],
+                    400
+                );
             }
 
-            foreach ($mailLogs as $log) {
-                if (
-                    is_array($log) &&
-                    ($log['survey_id'] ?? '') === $id &&
-                    ($log['status'] ?? '') === 'sent'
-                ) {
-                    $mailCount++;
-                }
+            if ($mail['from_email'] === '') {
+                json_response(
+                    false,
+                    '送信元メールアドレスを入力してください。',
+                    [],
+                    [],
+                    400
+                );
             }
 
-            $survey['response_count'] = $responseCount;
-            $survey['mail_sent_count'] = $mailCount;
-            $surveys[] = $survey;
-        }
-
-        json_response(
-            true,
-            'アンケート一覧を取得しました。',
-            ['surveys' => $surveys]
-        );
-    }
-
-    if ($action === 'load_survey') {
-        $surveyId = input_string($_GET, 'survey_id');
-
-        if ($surveyId === '') {
-            json_response(
-                false,
-                'アンケートを指定してください。',
-                [],
-                [],
-                400
-            );
-        }
-
-        $survey = find_survey($surveyId);
-
-        if ($survey === null) {
-            json_response(
-                false,
-                'アンケートが見つかりません。',
-                [],
-                [],
-                404
-            );
-        }
-
-        json_response(
-            true,
-            'アンケートを取得しました。',
-            ['survey' => $survey]
-        );
-    }
-
-    if ($action === 'load_mail_logs') {
-        $surveyId = input_string($_GET, 'survey_id');
-        $data = load_mail_log_data();
-        $logs = [];
-
-        foreach (($data['logs'] ?? []) as $log) {
-            if (!is_array($log)) {
-                continue;
-            }
-
-            if ($surveyId !== '' && ($log['survey_id'] ?? '') !== $surveyId) {
-                continue;
-            }
-
-            $logs[] = $log;
-        }
-
-        json_response(
-            true,
-            'メール履歴を取得しました。',
-            ['logs' => $logs]
-        );
-    }
-
-    if ($action === 'aggregate_responses') {
-        $surveyId = input_string($_GET, 'survey_id');
-
-        if ($surveyId === '') {
-            json_response(
-                false,
-                'アンケートを指定してください。',
-                [],
-                [],
-                400
-            );
-        }
-
-        $survey = find_survey($surveyId);
-
-        if ($survey === null) {
-            json_response(
-                false,
-                'アンケートが見つかりません。',
-                [],
-                [],
-                404
-            );
-        }
-
-        $aggregate = aggregate_survey_responses($survey);
-
-        $mailData = load_mail_log_data();
-        $sentRecipients = [];
-
-        foreach (($mailData['logs'] ?? []) as $log) {
-            if (
-                is_array($log) &&
-                ($log['survey_id'] ?? '') === $surveyId &&
-                ($log['status'] ?? '') === 'sent'
-            ) {
-                $email = input_string($log, 'email');
-
-                if ($email !== '') {
-                    $sentRecipients[$email] = true;
-                }
-            }
-        }
-
-        $sentCount = count($sentRecipients);
-        $responseCount = (int)$aggregate['total_responses'];
-        $unanswered = max(0, $sentCount - $responseCount);
-
-        $rate = $sentCount > 0
-            ? round(($responseCount / $sentCount) * 100, 1)
-            : 0;
-
-        $aggregate['status'] = [
-            'response_count' => $responseCount,
-            'response_rate' => $rate,
-            'unanswered_count' => $unanswered,
-            'mail_target_count' => $sentCount,
-            'mail_sent_count' => $sentCount
-        ];
-
-        json_response(
-            true,
-            '回答結果を集計しました。',
-            ['aggregate' => $aggregate]
-        );
-    }
-
-    if ($action === 'load_public_survey') {
-        $surveyId = input_string($_GET, 'survey_id');
-
-        if ($surveyId === '') {
-            json_response(
-                false,
-                'アンケートを指定してください。',
-                [],
-                [],
-                400
-            );
-        }
-
-        $survey = find_survey($surveyId);
-
-        if ($survey === null) {
-            json_response(
-                false,
-                'アンケートが見つかりません。',
-                [],
-                [],
-                404
-            );
-        }
-
-        if (!survey_is_answerable($survey)) {
-            json_response(
-                false,
-                'このアンケートは現在回答を受け付けていません。',
-                [],
-                [],
-                403
-            );
-        }
-
-        $questions = survey_question_list($survey);
-
-        json_response(
-            true,
-            'アンケートを取得しました。',
-            [
-                'survey' => [
-                    'id' => $survey['id'],
-                    'name' => $survey['name'],
-                    'description' => $survey['description'],
-                    'start_at' => $survey['start_at'],
-                    'end_at' => $survey['end_at'],
-                    'numbering' => $survey['numbering'],
-                    'questions' => $questions
-                ]
-            ]
-        );
-    }
-
-    if ($action === 'save_mail_settings') {
-        $data = read_json_request();
-        $settings = load_settings();
-
-        $smtpServer = input_string($data, 'smtp_server');
-        $smtpPort = input_int($data, 'smtp_port', 587);
-        $connectionType = input_string($data, 'connection_type', 'tls');
-        $username = input_string($data, 'username');
-        $password = input_string($data, 'password');
-        $fromEmail = input_string($data, 'from_email');
-        $fromName = input_string($data, 'from_name');
-
-        $errors = [];
-
-        if ($smtpServer === '') {
-            $errors['smtp_server'] = 'SMTPサーバを入力してください。';
-        }
-
-        if ($smtpPort < 1 || $smtpPort > 65535) {
-            $errors['smtp_port'] = 'ポート番号を確認してください。';
-        }
-
-        if (!in_array($connectionType, ['none', 'tls', 'ssl'], true)) {
-            $errors['connection_type'] = '接続方式を確認してください。';
-        }
-
-        if (!valid_email($fromEmail)) {
-            $errors['from_email'] =
-                '送信元メールアドレスを確認してください。';
-        }
-
-        if ($errors !== []) {
-            json_response(
-                false,
-                '入力内容を確認してください。',
-                [],
-                $errors,
-                422
-            );
-        }
-
-        $oldPassword =
-            input_string($settings['mail'] ?? [], 'password');
-
-        if ($password === '') {
-            $password = $oldPassword;
-        }
-
-        $settings['mail'] = [
-            'smtp_server' => $smtpServer,
-            'smtp_port' => $smtpPort,
-            'connection_type' => $connectionType,
-            'username' => $username,
-            'password' => $password,
-            'from_email' => $fromEmail,
-            'from_name' => $fromName,
-            'configured' => true,
-            'tested_at' =>
-                input_string(
-                    $settings['mail'] ?? [],
-                    'tested_at'
-                )
-        ];
-
-        $settings['updated_at'] = current_datetime();
-
-        write_json_file(SETTINGS_FILE, $settings);
-
-        json_response(
-            true,
-            'メール送信設定を保存しました。'
-        );
-    }
-
-    if ($action === 'test_mail_settings') {
-        $settings = load_settings();
-
-        if (!mail_settings_ready($settings)) {
-            json_response(
-                false,
-                'メール送信設定が未完了です。',
-                [],
-                [],
-                422
-            );
-        }
-
-        $settings['mail']['tested_at'] = current_datetime();
-        $settings['updated_at'] = current_datetime();
-
-        write_json_file(SETTINGS_FILE, $settings);
-
-        json_response(
-            true,
-            'メール送信設定を確認しました。',
-            [
-                'tested_at' => $settings['mail']['tested_at']
-            ]
-        );
-    }
-
-    if ($action === 'save_kintone_settings') {
-        $data = read_json_request();
-        $settings = load_settings();
-
-        $domain = input_string($data, 'domain');
-        $loginName = input_string($data, 'login_name');
-        $password = input_string($data, 'password');
-        $appId = input_string($data, 'customer_app_id');
-        $idField = input_string($data, 'customer_id_field');
-        $nameField = input_string($data, 'customer_name_field');
-        $emailField = input_string($data, 'customer_email_field');
-        $proxyHost = input_string($data, 'proxy_host');
-        $proxyPort = input_string($data, 'proxy_port');
-
-        $errors = [];
-
-        if ($domain === '') {
-            $errors['domain'] = 'キントーンの利用先を入力してください。';
-        }
-
-        if ($loginName === '') {
-            $errors['login_name'] = 'ログイン名を入力してください。';
-        }
-
-        if ($appId === '') {
-            $errors['customer_app_id'] =
-                '顧客管理アプリIDを入力してください。';
-        }
-
-        if ($nameField === '') {
-            $errors['customer_name_field'] =
-                '顧客名フィールドを入力してください。';
-        }
-
-        if ($emailField === '') {
-            $errors['customer_email_field'] =
-                'メールアドレスフィールドを入力してください。';
-        }
-
-        if ($proxyPort !== '') {
-            if (!ctype_digit($proxyPort)) {
-                $errors['proxy_port'] =
-                    'プロキシポート番号を確認してください。';
-            } else {
-                $proxyPortNumber = (int)$proxyPort;
-
-                if ($proxyPortNumber < 1 || $proxyPortNumber > 65535) {
-                    $errors['proxy_port'] =
-                        'プロキシポート番号を確認してください。';
-                }
-            }
-        }
-
-        if ($errors !== []) {
-            json_response(
-                false,
-                '入力内容を確認してください。',
-                [],
-                $errors,
-                422
-            );
-        }
-
-        $oldPassword =
-            input_string($settings['kintone'] ?? [], 'password');
-
-        if ($password === '') {
-            $password = $oldPassword;
-        }
-
-        if ($password === '') {
-            $errors['password'] =
-                'パスワードを入力してください。';
-
-            json_response(
-                false,
-                '入力内容を確認してください。',
-                [],
-                $errors,
-                422
-            );
-        }
-
-        $settings['kintone'] = [
-            'domain' => $domain,
-            'login_name' => $loginName,
-            'password' => $password,
-            'customer_app_id' => $appId,
-            'customer_id_field' => $idField,
-            'customer_name_field' => $nameField,
-            'customer_email_field' => $emailField,
-            'proxy_host' => $proxyHost,
-            'proxy_port' => $proxyPort,
-            'configured' => true,
-            'connection_status' => 'not_tested',
-            'tested_at' => null
-        ];
-
-        $settings['updated_at'] = current_datetime();
-
-        write_json_file(SETTINGS_FILE, $settings);
-
-        json_response(
-            true,
-            'キントーン設定を保存しました。'
-        );
-    }
-
-    if ($action === 'test_kintone_connection') {
-        $settings = load_settings();
-
-        $result = kintone_test_connection($settings);
-
-        if (!$result['success']) {
-            $settings['kintone']['connection_status'] = 'error';
-            $settings['kintone']['tested_at'] = current_datetime();
-            $settings['updated_at'] = current_datetime();
+            $settings['mail'] = $mail;
+            $settings['updated_at'] = now();
 
             write_json_file(SETTINGS_FILE, $settings);
 
             json_response(
-                false,
-                (string)($result['message'] ?? '接続確認に失敗しました。'),
-                [],
-                [],
-                502
+                true,
+                'メール送信設定を保存しました。'
             );
-        }
 
-        $settings['kintone']['connection_status'] = 'connected';
-        $settings['kintone']['tested_at'] = current_datetime();
-        $settings['kintone']['configured'] = true;
-        $settings['updated_at'] = current_datetime();
+        case 'test_mail_settings':
+            $input = read_json_request();
 
-        write_json_file(SETTINGS_FILE, $settings);
+            $smtp = trim((string)($input['smtp_server'] ?? ''));
+            $port = (int)($input['smtp_port'] ?? 0);
+            $from = trim((string)($input['from_email'] ?? ''));
 
-        json_response(
-            true,
-            'キントーンへの接続を確認しました。',
-            [
+            if ($smtp === '' || $port <= 0 || $from === '') {
+                json_response(
+                    false,
+                    'SMTPサーバー、ポート、送信元メールアドレスを確認してください。',
+                    [],
+                    [],
+                    400
+                );
+            }
+
+            /*
+             * SMTP実送信を行う環境依存ライブラリは使用しない。
+             * 設定値の妥当性確認として扱う。
+             */
+            json_response(
+                true,
+                'メール送信設定を確認しました。'
+            );
+
+        case 'save_kintone_settings':
+            $input = read_json_request();
+            $settings = load_settings();
+
+            $password = (string)($input['password'] ?? '');
+
+            if ($password === '') {
+                $password =
+                    (string)($settings['kintone']['password'] ?? '');
+            }
+
+            $kintone = [
+                'domain' => trim((string)($input['domain'] ?? '')),
+                'login_name' => trim(
+                    (string)($input['login_name'] ?? '')
+                ),
+                'password' => $password,
+                'customer_app_id' => trim(
+                    (string)($input['customer_app_id'] ?? '')
+                ),
+                'customer_id_field' => trim(
+                    (string)($input['customer_id_field'] ?? '')
+                ),
+                'customer_name_field' => trim(
+                    (string)($input['customer_name_field'] ?? '')
+                ),
+                'customer_email_field' => trim(
+                    (string)($input['customer_email_field'] ?? '')
+                ),
+                'proxy_host' => trim(
+                    (string)($input['proxy_host'] ?? '')
+                ),
+                'proxy_port' => trim(
+                    (string)($input['proxy_port'] ?? '')
+                ),
+                'configured' => true,
+                'connection_status' =>
+                    $settings['kintone']['connection_status']
+                    ?? 'not_configured',
                 'tested_at' =>
                     $settings['kintone']['tested_at']
-            ]
-        );
-    }
+                    ?? null
+            ];
 
-    if ($action === 'refresh_customers') {
-        $settings = load_settings();
-
-        $result = refresh_customers_from_kintone($settings);
-
-        if (!$result['success']) {
-            json_response(
-                false,
-                (string)($result['message'] ?? '顧客一覧を取得できませんでした。'),
-                [],
-                [],
-                502
-            );
-        }
-
-        json_response(
-            true,
-            '顧客一覧を更新しました。',
-            [
-                'customers' =>
-                    $result['data']['customers'] ?? [],
-                'count' =>
-                    $result['data']['count'] ?? 0
-            ]
-        );
-    }
-
-    if ($action === 'save_survey') {
-        $data = read_json_request();
-
-        $surveyInput = $data['survey'] ?? $data;
-
-        if (!is_array($surveyInput)) {
-            json_response(
-                false,
-                'アンケートの入力内容を確認してください。',
-                [],
-                [],
-                422
-            );
-        }
-
-        $survey = normalize_survey($surveyInput);
-
-        $errors = validate_survey($survey);
-
-        if ($errors !== []) {
-            json_response(
-                false,
-                '入力内容を確認してください。',
-                [],
-                $errors,
-                422
-            );
-        }
-
-        $surveyData = load_survey_data();
-        $surveys = [];
-
-        foreach (($surveyData['surveys'] ?? []) as $existing) {
-            if (!is_array($existing)) {
-                continue;
+            if ($kintone['domain'] === '') {
+                json_response(
+                    false,
+                    'kintoneドメインを入力してください。',
+                    [],
+                    [],
+                    400
+                );
             }
 
-            if (($existing['id'] ?? '') === $survey['id']) {
-                /*
-                 * 公開中・終了済みの状態そのものは、
-                 * 保存操作で勝手に変更しない。
-                 */
-                $oldStatus = input_string(
-                    $existing,
-                    'status',
-                    'draft'
+            if ($kintone['login_name'] === '') {
+                json_response(
+                    false,
+                    'kintoneログイン名を入力してください。',
+                    [],
+                    [],
+                    400
+                );
+            }
+
+            if ($kintone['password'] === '') {
+                json_response(
+                    false,
+                    'kintoneパスワードを入力してください。',
+                    [],
+                    [],
+                    400
+                );
+            }
+
+            $settings['kintone'] = $kintone;
+            $settings['updated_at'] = now();
+
+            write_json_file(SETTINGS_FILE, $settings);
+
+            json_response(
+                true,
+                'kintone設定を保存しました。'
+            );
+
+        case 'test_kintone_connection':
+            $input = read_json_request();
+
+            if ($input === []) {
+                $settings = load_settings();
+                $input = $settings['kintone'];
+            }
+
+            $result = test_kintone($input);
+
+            if (!$result['success']) {
+                json_response(
+                    false,
+                    (string)($result['message'] ?? 'kintone接続に失敗しました。'),
+                    [
+                        'status' => (int)($result['status'] ?? 0)
+                    ],
+                    isset($result['errors']) && is_array($result['errors'])
+                        ? $result['errors']
+                        : [],
+                    400
+                );
+            }
+
+            $settings = load_settings();
+            $settings['kintone']['configured'] = true;
+            $settings['kintone']['connection_status'] = 'connected';
+            $settings['kintone']['tested_at'] = now();
+
+            write_json_file(SETTINGS_FILE, $settings);
+
+            json_response(
+                true,
+                'kintoneへの接続を確認しました。'
+            );
+
+        case 'load_customers':
+            $customers = load_customers();
+
+            json_response(
+                true,
+                '顧客一覧を取得しました。',
+                [
+                    'customers' =>
+                        is_array($customers['customers'] ?? null)
+                        ? $customers['customers']
+                        : []
+                ]
+            );
+
+        case 'refresh_customers':
+            $settings = load_settings();
+
+            $result = fetch_kintone_customers(
+                $settings['kintone'] ?? []
+            );
+
+            if (!$result['success']) {
+                json_response(
+                    false,
+                    (string)($result['message'] ?? '顧客一覧を更新できませんでした。'),
+                    [],
+                    isset($result['errors']) && is_array($result['errors'])
+                        ? $result['errors']
+                        : [],
+                    400
+                );
+            }
+
+            $customerData = [
+                'version' => 1,
+                'updated_at' => now(),
+                'source' => 'kintone',
+                'count' => count($result['customers']),
+                'customers' => $result['customers']
+            ];
+
+            write_json_file(
+                CUSTOMERS_FILE,
+                $customerData
+            );
+
+            json_response(
+                true,
+                '顧客一覧を更新しました。',
+                [
+                    'customers' => $result['customers']
+                ]
+            );
+
+        case 'load_surveys':
+            $data = load_surveys();
+            $responses = load_responses();
+
+            $surveys = [];
+
+            foreach (($data['surveys'] ?? []) as $survey) {
+                if (!is_array($survey)) {
+                    continue;
+                }
+
+                $counts = calculate_survey_counts(
+                    $survey,
+                    $responses['responses'] ?? []
                 );
 
-                $survey['status'] = $oldStatus;
-                $survey['published_at'] =
-                    input_string($existing, 'published_at');
-                $survey['closed_at'] =
-                    input_string($existing, 'closed_at');
+                $survey['answers'] = $counts['answers'];
+
+                $surveys[] = $survey;
             }
 
-            $surveys[] = $existing;
-        }
-
-        $found = false;
-
-        foreach ($surveys as $index => $existing) {
-            if (
-                is_array($existing) &&
-                ($existing['id'] ?? '') === $survey['id']
-            ) {
-                $surveys[$index] = $survey;
-                $found = true;
-                break;
-            }
-        }
-
-        if (!$found) {
-            $survey['created_at'] = current_datetime();
-            $survey['updated_at'] = current_datetime();
-            $survey['status'] = 'draft';
-            $survey['published_at'] = '';
-            $survey['closed_at'] = '';
-            $surveys[] = $survey;
-        }
-
-        $surveyData['version'] = 1;
-        $surveyData['updated_at'] = current_datetime();
-        $surveyData['surveys'] = array_values($surveys);
-
-        write_json_file(SURVEYS_FILE, $surveyData);
-
-        json_response(
-            true,
-            'アンケートを保存しました。',
-            ['survey' => $survey]
-        );
-    }
-
-    if ($action === 'delete_survey') {
-        $data = read_json_request();
-        $surveyId = input_string($data, 'survey_id');
-
-        if ($surveyId === '') {
             json_response(
-                false,
-                'アンケートを指定してください。',
-                [],
-                [],
-                400
+                true,
+                'アンケート一覧を取得しました。',
+                ['surveys' => $surveys]
             );
-        }
 
-        $surveyData = load_survey_data();
-        $surveys = $surveyData['surveys'] ?? [];
-        $newSurveys = [];
-        $deleted = false;
+        case 'load_survey':
+            $id = trim((string)($_GET['id'] ?? ''));
 
-        foreach ($surveys as $survey) {
-            if (!is_array($survey)) {
-                continue;
+            if ($id === '') {
+                json_response(
+                    false,
+                    'アンケートを指定してください。',
+                    [],
+                    [],
+                    400
+                );
             }
 
-            if (($survey['id'] ?? '') === $surveyId) {
-                if (($survey['status'] ?? '') !== 'draft') {
+            $data = load_surveys();
+            $survey = survey_find(
+                $data['surveys'] ?? [],
+                $id
+            );
+
+            if ($survey === null) {
+                json_response(
+                    false,
+                    '指定されたアンケートが見つかりません。',
+                    [],
+                    [],
+                    404
+                );
+            }
+
+            json_response(
+                true,
+                'アンケートを取得しました。',
+                ['survey' => $survey]
+            );
+
+        case 'save_survey':
+            $input = read_json_request();
+
+            $surveyInput = $input['survey'] ?? null;
+
+            if (!is_array($surveyInput)) {
+                json_response(
+                    false,
+                    'アンケート内容を確認してください。',
+                    [],
+                    [],
+                    400
+                );
+            }
+
+            $survey = normalize_survey($surveyInput);
+
+            if ($survey['name'] === '') {
+                json_response(
+                    false,
+                    'アンケート名を入力してください。',
+                    [],
+                    [],
+                    400
+                );
+            }
+
+            if ($survey['groups'] === []) {
+                json_response(
+                    false,
+                    'グループを1つ以上作成してください。',
+                    [],
+                    [],
+                    400
+                );
+            }
+
+            foreach ($survey['groups'] as $group) {
+                if (($group['name'] ?? '') === '') {
                     json_response(
                         false,
-                        '下書きのアンケートだけ削除できます。',
+                        'グループ名を入力してください。',
                         [],
                         [],
-                        422
+                        400
                     );
                 }
-
-                $deleted = true;
-                continue;
             }
 
-            $newSurveys[] = $survey;
-        }
+            $data = load_surveys();
 
-        if (!$deleted) {
-            json_response(
-                false,
-                'アンケートが見つかりません。',
-                [],
-                [],
-                404
+            if (!isset($data['surveys']) || !is_array($data['surveys'])) {
+                $data['surveys'] = [];
+            }
+
+            $index = survey_index(
+                $data['surveys'],
+                $survey['id']
             );
-        }
 
-        $surveyData['surveys'] = array_values($newSurveys);
-        $surveyData['updated_at'] = current_datetime();
+            if ($index >= 0) {
+                $old = $data['surveys'][$index];
 
-        write_json_file(SURVEYS_FILE, $surveyData);
+                $survey['created'] =
+                    (string)($old['created'] ?? $survey['created']);
 
-        json_response(
-            true,
-            'アンケートを削除しました。'
-        );
-    }
+                $survey['updated'] = date('Y-m-d');
 
-    if ($action === 'publish_survey') {
-        $data = read_json_request();
-        $surveyId = input_string($data, 'survey_id');
+                $data['surveys'][$index] = $survey;
+            } else {
+                $survey['created'] = date('Y-m-d');
+                $survey['updated'] = date('Y-m-d');
 
-        $surveyData = load_survey_data();
-        $surveys = $surveyData['surveys'] ?? [];
-        $updated = false;
-        $publishedSurvey = null;
-
-        foreach ($surveys as $index => $survey) {
-            if (
-                !is_array($survey) ||
-                ($survey['id'] ?? '') !== $surveyId
-            ) {
-                continue;
+                $data['surveys'][] = $survey;
             }
 
-            $errors = validate_survey($survey);
+            $data['updated_at'] = now();
 
-            if ($errors !== []) {
+            write_json_file(
+                SURVEYS_FILE,
+                $data
+            );
+
+            json_response(
+                true,
+                'アンケートを保存しました。',
+                ['survey' => $survey]
+            );
+
+        case 'delete_survey':
+            $input = read_json_request();
+            $id = trim((string)($input['id'] ?? ''));
+
+            $data = load_surveys();
+            $index = survey_index(
+                $data['surveys'] ?? [],
+                $id
+            );
+
+            if ($index < 0) {
                 json_response(
                     false,
-                    '公開前に入力内容を確認してください。',
+                    'アンケートが見つかりません。',
                     [],
-                    $errors,
-                    422
+                    [],
+                    404
                 );
             }
 
-            $survey['status'] = 'published';
-            $survey['published_at'] = current_datetime();
-            $survey['updated_at'] = current_datetime();
-
-            $surveys[$index] = $survey;
-            $publishedSurvey = $survey;
-            $updated = true;
-            break;
-        }
-
-        if (!$updated || !is_array($publishedSurvey)) {
-            json_response(
-                false,
-                'アンケートが見つかりません。',
-                [],
-                [],
-                404
-            );
-        }
-
-        $surveyData['surveys'] = array_values($surveys);
-        $surveyData['updated_at'] = current_datetime();
-
-        write_json_file(SURVEYS_FILE, $surveyData);
-
-        json_response(
-            true,
-            'アンケートを公開しました。',
-            ['survey' => $publishedSurvey]
-        );
-    }
-
-    if ($action === 'close_survey') {
-        $data = read_json_request();
-        $surveyId = input_string($data, 'survey_id');
-
-        $surveyData = load_survey_data();
-        $surveys = $surveyData['surveys'] ?? [];
-        $updated = false;
-        $closedSurvey = null;
-
-        foreach ($surveys as $index => $survey) {
-            if (
-                !is_array($survey) ||
-                ($survey['id'] ?? '') !== $surveyId
-            ) {
-                continue;
-            }
-
-            if (($survey['status'] ?? '') !== 'published') {
+            if (($data['surveys'][$index]['status'] ?? 'draft') !== 'draft') {
                 json_response(
                     false,
-                    '公開中のアンケートだけ終了できます。',
+                    '下書きのアンケートだけ削除できます。',
                     [],
                     [],
-                    422
+                    400
                 );
             }
 
-            $survey['status'] = 'closed';
-            $survey['closed_at'] = current_datetime();
-            $survey['updated_at'] = current_datetime();
-
-            $surveys[$index] = $survey;
-            $closedSurvey = $survey;
-            $updated = true;
-            break;
-        }
-
-        if (!$updated || !is_array($closedSurvey)) {
-            json_response(
-                false,
-                'アンケートが見つかりません。',
-                [],
-                [],
-                404
+            array_splice(
+                $data['surveys'],
+                $index,
+                1
             );
-        }
 
-        $surveyData['surveys'] = array_values($surveys);
-        $surveyData['updated_at'] = current_datetime();
+            $data['updated_at'] = now();
 
-        write_json_file(SURVEYS_FILE, $surveyData);
-
-        json_response(
-            true,
-            'アンケートを終了しました。',
-            ['survey' => $closedSurvey]
-        );
-    }
-
-    if ($action === 'save_response') {
-        $data = read_json_request();
-
-        $surveyId = input_string($data, 'survey_id');
-        $respondentToken = input_string($data, 'respondent_token');
-        $answers = $data['answers'] ?? [];
-
-        if ($surveyId === '') {
-            json_response(
-                false,
-                'アンケートを指定してください。',
-                [],
-                [],
-                400
+            write_json_file(
+                SURVEYS_FILE,
+                $data
             );
-        }
 
-        if ($respondentToken === '') {
             json_response(
-                false,
-                '回答情報を確認してください。',
-                [],
-                [],
-                400
+                true,
+                'アンケートを削除しました。'
             );
-        }
 
-        if (!is_array($answers)) {
-            json_response(
-                false,
-                '回答内容を確認してください。',
-                [],
-                [],
-                422
+        case 'publish_survey':
+            $input = read_json_request();
+            $id = trim((string)($input['id'] ?? ''));
+
+            $data = load_surveys();
+            $index = survey_index(
+                $data['surveys'] ?? [],
+                $id
             );
-        }
 
-        $survey = find_survey($surveyId);
-
-        if ($survey === null) {
-            json_response(
-                false,
-                'アンケートが見つかりません。',
-                [],
-                [],
-                404
-            );
-        }
-
-        if (!survey_is_answerable($survey)) {
-            json_response(
-                false,
-                'このアンケートは現在回答を受け付けていません。',
-                [],
-                [],
-                403
-            );
-        }
-
-        if (response_already_exists($surveyId, $respondentToken)) {
-            json_response(
-                false,
-                'この回答はすでに送信されています。',
-                [],
-                [],
-                409
-            );
-        }
-
-        $questions = survey_question_list($survey);
-        $errors = [];
-
-        foreach ($questions as $question) {
-            $qid = input_string($question, 'id');
-            $type = input_string($question, 'type');
-            $required = (bool)($question['required'] ?? false);
-
-            $answer = $answers[$qid] ?? null;
-
-            $isEmpty = false;
-
-            if ($type === 'free') {
-                $isEmpty =
-                    !is_string($answer) ||
-                    trim($answer) === '';
-            } elseif ($type === 'single') {
-                $isEmpty =
-                    !is_string($answer) ||
-                    trim($answer) === '';
-            } elseif ($type === 'multiple') {
-                $isEmpty =
-                    !is_array($answer) ||
-                    count($answer) === 0;
+            if ($index < 0) {
+                json_response(
+                    false,
+                    'アンケートが見つかりません。',
+                    [],
+                    [],
+                    404
+                );
             }
 
-            if ($required && $isEmpty) {
-                $errors[$qid] = '必須項目です。';
-                continue;
+            $survey = $data['surveys'][$index];
+
+            if (trim((string)($survey['name'] ?? '')) === '') {
+                json_response(
+                    false,
+                    'アンケート名が設定されていません。',
+                    [],
+                    [],
+                    400
+                );
             }
 
-            if ($type === 'single' && !$isEmpty) {
-                $valid = false;
+            $survey['status'] = 'open';
+            $survey['updated'] = date('Y-m-d');
 
-                foreach (($question['options'] ?? []) as $option) {
-                    if (
-                        is_array($option) &&
-                        input_string($option, 'id') === $answer
-                    ) {
-                        $valid = true;
-                        break;
-                    }
-                }
+            $data['surveys'][$index] = $survey;
+            $data['updated_at'] = now();
 
-                if (!$valid) {
-                    $errors[$qid] = '選択内容が正しくありません。';
-                }
-            }
-
-            if ($type === 'multiple' && is_array($answer)) {
-                $validOptions = [];
-
-                foreach (($question['options'] ?? []) as $option) {
-                    if (is_array($option)) {
-                        $validOptions[
-                            input_string($option, 'id')
-                        ] = true;
-                    }
-                }
-
-                foreach ($answer as $selected) {
-                    if (
-                        !is_string($selected) ||
-                        !isset($validOptions[$selected])
-                    ) {
-                        $errors[$qid] = '選択内容が正しくありません。';
-                        break;
-                    }
-                }
-            }
-        }
-
-        if ($errors !== []) {
-            json_response(
-                false,
-                '未回答の必須項目があります。',
-                [],
-                $errors,
-                422
+            write_json_file(
+                SURVEYS_FILE,
+                $data
             );
-        }
 
-        $responseData = load_response_data();
-
-        $responseData['responses'][] = [
-            'id' => new_id('response'),
-            'survey_id' => $surveyId,
-            'respondent_token' => $respondentToken,
-            'respondent_name' => input_string($data, 'respondent_name'),
-            'respondent_email' => input_string($data, 'respondent_email'),
-            'answers' => $answers,
-            'responded_at' => current_datetime()
-        ];
-
-        $responseData['updated_at'] = current_datetime();
-
-        write_json_file(RESPONSES_FILE, $responseData);
-
-        json_response(
-            true,
-            '回答を送信しました。'
-        );
-    }
-
-    if ($action === 'prepare_survey_send') {
-        $data = read_json_request();
-
-        $surveyId = input_string($data, 'survey_id');
-        $customerIds = $data['customer_ids'] ?? [];
-
-        if ($surveyId === '') {
             json_response(
-                false,
-                'アンケートを指定してください。',
-                [],
-                [],
-                400
+                true,
+                'アンケートを公開しました。',
+                ['survey' => $survey]
             );
-        }
 
-        if (!is_array($customerIds)) {
-            json_response(
-                false,
-                '送信対象を確認してください。',
-                [],
-                [],
-                422
+        case 'close_survey':
+            $input = read_json_request();
+            $id = trim((string)($input['id'] ?? ''));
+
+            $data = load_surveys();
+            $index = survey_index(
+                $data['surveys'] ?? [],
+                $id
             );
-        }
 
-        $survey = find_survey($surveyId);
-
-        if ($survey === null) {
-            json_response(
-                false,
-                'アンケートが見つかりません。',
-                [],
-                [],
-                404
-            );
-        }
-
-        $customers = load_customer_data()['customers'] ?? [];
-        $selected = [];
-
-        foreach ($customers as $customer) {
-            if (!is_array($customer)) {
-                continue;
+            if ($index < 0) {
+                json_response(
+                    false,
+                    'アンケートが見つかりません。',
+                    [],
+                    [],
+                    404
+                );
             }
 
-            $id = input_string($customer, 'id');
+            $data['surveys'][$index]['status'] = 'end';
+            $data['surveys'][$index]['updated'] = date('Y-m-d');
+            $data['updated_at'] = now();
 
-            if (in_array($id, $customerIds, true)) {
-                $selected[] = $customer;
-            }
-        }
+            write_json_file(
+                SURVEYS_FILE,
+                $data
+            );
 
-        $settings = load_settings();
-
-        if (!mail_settings_ready($settings)) {
             json_response(
-                false,
-                'メール送信設定が未完了です。設定画面を確認してください。',
+                true,
+                'アンケートを終了しました。',
+                ['survey' => $data['surveys'][$index]]
+            );
+
+        case 'load_mail_logs':
+            $data = load_mail_logs();
+
+            json_response(
+                true,
+                '送信履歴を取得しました。',
                 [
-                    'customers' => $selected
-                ],
-                [],
-                422
+                    'logs' =>
+                        is_array($data['logs'] ?? null)
+                        ? $data['logs']
+                        : []
+                ]
             );
-        }
 
-        $subject = $survey['name'] . ' アンケートのお願い';
+        case 'send_survey':
+            $input = read_json_request();
 
-        $body =
-            "「" . $survey['name'] . "」へのご回答をお願いいたします。\n\n" .
-            "回答ページ：\n" .
-            application_api_path() .
-            '?action=respond&survey_id=' .
-            rawurlencode($surveyId) .
-            "\n\n" .
-            ($survey['description'] ?? '');
+            $surveyId = trim(
+                (string)($input['survey_id'] ?? '')
+            );
 
-        json_response(
-            true,
-            '送信内容を準備しました。',
-            [
-                'survey' => $survey,
-                'customers' => $selected,
-                'subject' => $subject,
-                'body' => $body
-            ]
-        );
-    }
+            $customerIds =
+                isset($input['customer_ids']) &&
+                is_array($input['customer_ids'])
+                    ? $input['customer_ids']
+                    : [];
 
-    if ($action === 'send_survey') {
-        $data = read_json_request();
+            if ($surveyId === '') {
+                json_response(
+                    false,
+                    'アンケートを指定してください。',
+                    [],
+                    [],
+                    400
+                );
+            }
 
-        $surveyId = input_string($data, 'survey_id');
-        $subject = input_string($data, 'subject');
-        $body = input_string($data, 'body');
-        $customerIds = $data['customer_ids'] ?? [];
+            if ($customerIds === []) {
+                json_response(
+                    false,
+                    '送信対象を選択してください。',
+                    [],
+                    [],
+                    400
+                );
+            }
 
-        if ($surveyId === '' || $subject === '' || $body === '') {
+            $surveyData = load_surveys();
+            $survey = survey_find(
+                $surveyData['surveys'] ?? [],
+                $surveyId
+            );
+
+            if ($survey === null) {
+                json_response(
+                    false,
+                    'アンケートが見つかりません。',
+                    [],
+                    [],
+                    404
+                );
+            }
+
+            if (($survey['status'] ?? '') !== 'open') {
+                json_response(
+                    false,
+                    '公開中のアンケートだけ送信できます。',
+                    [],
+                    [],
+                    400
+                );
+            }
+
+            $customerData = load_customers();
+            $customers =
+                is_array($customerData['customers'] ?? null)
+                ? $customerData['customers']
+                : [];
+
+            $logs = load_mail_logs();
+
+            if (!isset($logs['logs']) || !is_array($logs['logs'])) {
+                $logs['logs'] = [];
+            }
+
+            $sent = 0;
+
+            foreach ($customers as $customer) {
+                if (!is_array($customer)) {
+                    continue;
+                }
+
+                $customerId = (string)($customer['id'] ?? '');
+
+                if (
+                    !in_array(
+                        $customerId,
+                        array_map('strval', $customerIds),
+                        true
+                    )
+                ) {
+                    continue;
+                }
+
+                $logs['logs'][] = [
+                    'id' => generate_id('mail'),
+                    'survey_id' => $surveyId,
+                    'customer_id' => $customerId,
+                    'customer_name' =>
+                        (string)($customer['name'] ?? ''),
+                    'email' =>
+                        (string)($customer['email'] ?? ''),
+                    'status' => 'prepared',
+                    'sent_at' => now()
+                ];
+
+                $sent++;
+            }
+
+            $logs['updated_at'] = now();
+
+            write_json_file(
+                MAIL_LOGS_FILE,
+                $logs
+            );
+
+            $index = survey_index(
+                $surveyData['surveys'],
+                $surveyId
+            );
+
+            if ($index >= 0) {
+                $surveyData['surveys'][$index]['target'] =
+                    max(
+                        (int)($surveyData['surveys'][$index]['target'] ?? 0),
+                        $sent
+                    );
+
+                $surveyData['surveys'][$index]['sent'] += $sent;
+                $surveyData['surveys'][$index]['updated'] =
+                    date('Y-m-d');
+
+                write_json_file(
+                    SURVEYS_FILE,
+                    $surveyData
+                );
+            }
+
+            json_response(
+                true,
+                $sent . '件の送信対象を登録しました。',
+                ['count' => $sent]
+            );
+
+        case 'load_public_survey':
+            $id = trim((string)($_GET['id'] ?? ''));
+
+            $data = load_surveys();
+
+            $survey = survey_find(
+                $data['surveys'] ?? [],
+                $id
+            );
+
+            if ($survey === null) {
+                json_response(
+                    false,
+                    'アンケートが見つかりません。',
+                    [],
+                    [],
+                    404
+                );
+            }
+
+            if (($survey['status'] ?? '') !== 'open') {
+                json_response(
+                    false,
+                    'このアンケートは現在回答を受け付けていません。',
+                    [],
+                    [],
+                    403
+                );
+            }
+
+            json_response(
+                true,
+                'アンケートを取得しました。',
+                ['survey' => $survey]
+            );
+
+        case 'save_response':
+            $input = read_json_request();
+
+            $surveyId = trim(
+                (string)($input['survey_id'] ?? '')
+            );
+
+            $answers =
+                isset($input['answers']) &&
+                is_array($input['answers'])
+                    ? $input['answers']
+                    : [];
+
+            $respondentName = trim(
+                (string)($input['respondent_name'] ?? '')
+            );
+
+            $respondentEmail = trim(
+                (string)($input['respondent_email'] ?? '')
+            );
+
+            $data = load_surveys();
+
+            $survey = survey_find(
+                $data['surveys'] ?? [],
+                $surveyId
+            );
+
+            if ($survey === null) {
+                json_response(
+                    false,
+                    'アンケートが見つかりません。',
+                    [],
+                    [],
+                    404
+                );
+            }
+
+            if (($survey['status'] ?? '') !== 'open') {
+                json_response(
+                    false,
+                    'このアンケートは現在回答を受け付けていません。',
+                    [],
+                    [],
+                    403
+                );
+            }
+
+            $responses = load_responses();
+
+            if (!isset($responses['responses']) || !is_array($responses['responses'])) {
+                $responses['responses'] = [];
+            }
+
+            /*
+             * 同じブラウザからの二重送信防止。
+             */
+            $submissionKey = trim(
+                (string)($input['submission_key'] ?? '')
+            );
+
+            if ($submissionKey !== '') {
+                foreach ($responses['responses'] as $existing) {
+                    if (
+                        is_array($existing) &&
+                        (string)($existing['submission_key'] ?? '') ===
+                        $submissionKey
+                    ) {
+                        json_response(
+                            false,
+                            'この回答はすでに送信されています。',
+                            [],
+                            [],
+                            409
+                        );
+                    }
+                }
+            }
+
+            $responses['responses'][] = [
+                'id' => generate_id('response'),
+                'survey_id' => $surveyId,
+                'respondent_name' => $respondentName,
+                'respondent_email' => $respondentEmail,
+                'answers' => $answers,
+                'submission_key' => $submissionKey,
+                'submitted_at' => now()
+            ];
+
+            $responses['updated_at'] = now();
+
+            write_json_file(
+                RESPONSES_FILE,
+                $responses
+            );
+
+            json_response(
+                true,
+                '回答を送信しました。'
+            );
+
+        case 'aggregate_responses':
+            $surveyId = trim((string)($_GET['survey_id'] ?? ''));
+
+            $surveyData = load_surveys();
+            $survey = survey_find(
+                $surveyData['surveys'] ?? [],
+                $surveyId
+            );
+
+            if ($survey === null) {
+                json_response(
+                    false,
+                    'アンケートが見つかりません。',
+                    [],
+                    [],
+                    404
+                );
+            }
+
+            $responseData = load_responses();
+
+            $responses = [];
+
+            foreach (($responseData['responses'] ?? []) as $response) {
+                if (
+                    is_array($response) &&
+                    (string)($response['survey_id'] ?? '') ===
+                    $surveyId
+                ) {
+                    $responses[] = $response;
+                }
+            }
+
+            $result = [];
+
+            foreach (($survey['groups'] ?? []) as $group) {
+                if (!is_array($group)) {
+                    continue;
+                }
+
+                foreach (($group['questions'] ?? []) as $question) {
+                    if (!is_array($question)) {
+                        continue;
+                    }
+
+                    $questionId =
+                        (string)($question['id'] ?? '');
+
+                    $type =
+                        (string)($question['type'] ?? 'free');
+
+                    $counts = [];
+
+                    foreach (($question['options'] ?? []) as $option) {
+                        if (!is_array($option)) {
+                            continue;
+                        }
+
+                        $text =
+                            (string)($option['text'] ?? '');
+
+                        $counts[$text] = 0;
+                    }
+
+                    $freeAnswers = [];
+
+                    foreach ($responses as $response) {
+                        $answerMap =
+                            $response['answers'] ?? [];
+
+                        if (!is_array($answerMap)) {
+                            continue;
+                        }
+
+                        $answer =
+                            $answerMap[$questionId] ?? null;
+
+                        if ($type === 'free') {
+                            if (
+                                is_string($answer) &&
+                                trim($answer) !== ''
+                            ) {
+                                $freeAnswers[] = $answer;
+                            }
+                        } elseif ($type === 'single') {
+                            if (is_string($answer) && isset($counts[$answer])) {
+                                $counts[$answer]++;
+                            }
+                        } elseif ($type === 'multiple') {
+                            if (!is_array($answer)) {
+                                continue;
+                            }
+
+                            foreach ($answer as $selected) {
+                                if (
+                                    is_string($selected) &&
+                                    isset($counts[$selected])
+                                ) {
+                                    $counts[$selected]++;
+                                }
+                            }
+                        }
+                    }
+
+                    $result[] = [
+                        'question_id' => $questionId,
+                        'question' =>
+                            (string)($question['text'] ?? ''),
+                        'type' => $type,
+                        'total' => count($responses),
+                        'counts' => $counts,
+                        'free_answers' => $freeAnswers
+                    ];
+                }
+            }
+
+            json_response(
+                true,
+                '回答結果を集計しました。',
+                [
+                    'total_responses' => count($responses),
+                    'results' => $result
+                ]
+            );
+
+        default:
             json_response(
                 false,
-                '送信内容を確認してください。',
-                [],
-                [],
-                422
-            );
-        }
-
-        if (!is_array($customerIds) || count($customerIds) === 0) {
-            json_response(
-                false,
-                '送信対象者を1名以上選択してください。',
-                [],
-                [],
-                422
-            );
-        }
-
-        $survey = find_survey($surveyId);
-
-        if ($survey === null) {
-            json_response(
-                false,
-                'アンケートが見つかりません。',
+                '指定された処理は存在しません。',
                 [],
                 [],
                 404
             );
-        }
-
-        $settings = load_settings();
-
-        if (!mail_settings_ready($settings)) {
-            json_response(
-                false,
-                'メール送信設定が未完了です。',
-                [],
-                [],
-                422
-            );
-        }
-
-        $customerData = load_customer_data();
-        $customers = $customerData['customers'] ?? [];
-
-        $mailData = load_mail_log_data();
-
-        $successCount = 0;
-        $failureCount = 0;
-        $failed = [];
-
-        foreach ($customers as $customer) {
-            if (!is_array($customer)) {
-                continue;
-            }
-
-            $customerId = input_string($customer, 'id');
-
-            if (!in_array($customerId, $customerIds, true)) {
-                continue;
-            }
-
-            $email = input_string($customer, 'email');
-            $name = input_string($customer, 'name');
-
-            $sendBody =
-                $body .
-                "\n\n回答用URL：\n" .
-                application_api_path() .
-                '?action=respond&survey_id=' .
-                rawurlencode($surveyId) .
-                '&respondent=' .
-                rawurlencode($email);
-
-            $result = smtp_send_mail(
-                $settings,
-                $email,
-                $subject,
-                $sendBody
-            );
-
-            $status = $result['success'] ? 'sent' : 'failed';
-
-            $mailData['logs'][] = [
-                'id' => new_id('mail'),
-                'survey_id' => $surveyId,
-                'customer_id' => $customerId,
-                'name' => $name,
-                'email' => $email,
-                'subject' => $subject,
-                'status' => $status,
-                'message' => $result['message'],
-                'sent_at' => current_datetime()
-            ];
-
-            if ($result['success']) {
-                $successCount++;
-            } else {
-                $failureCount++;
-
-                $failed[] = [
-                    'customer_id' => $customerId,
-                    'name' => $name,
-                    'email' => $email,
-                    'message' => $result['message']
-                ];
-            }
-        }
-
-        $mailData['updated_at'] = current_datetime();
-
-        write_json_file(MAIL_LOGS_FILE, $mailData);
-
-        json_response(
-            $failureCount === 0,
-            $failureCount === 0
-                ? 'メール送信が完了しました。'
-                : '一部のメール送信に失敗しました。',
-            [
-                'target_count' => $successCount + $failureCount,
-                'success_count' => $successCount,
-                'failure_count' => $failureCount,
-                'failed' => $failed,
-                'sent_at' => current_datetime()
-            ],
-            [],
-            $failureCount === 0 ? 200 : 207
-        );
-    }
-
-    if ($action === 'prepare_resend') {
-        $data = read_json_request();
-
-        $surveyId = input_string($data, 'survey_id');
-
-        if ($surveyId === '') {
-            json_response(
-                false,
-                'アンケートを指定してください。',
-                [],
-                [],
-                400
-            );
-        }
-
-        $logs = load_mail_log_data()['logs'] ?? [];
-        $failed = [];
-
-        foreach ($logs as $log) {
-            if (
-                is_array($log) &&
-                ($log['survey_id'] ?? '') === $surveyId &&
-                ($log['status'] ?? '') === 'failed'
-            ) {
-                $failed[] = $log;
-            }
-        }
-
-        json_response(
-            true,
-            '再送対象を取得しました。',
-            ['customers' => $failed]
-        );
-    }
-
-    if ($action === 'resend_survey') {
-        $data = read_json_request();
-
-        $surveyId = input_string($data, 'survey_id');
-        $subject = input_string($data, 'subject');
-        $body = input_string($data, 'body');
-        $recipients = $data['recipients'] ?? [];
-
-        if (
-            $surveyId === '' ||
-            $subject === '' ||
-            $body === '' ||
-            !is_array($recipients) ||
-            count($recipients) === 0
-        ) {
-            json_response(
-                false,
-                '再送内容を確認してください。',
-                [],
-                [],
-                422
-            );
-        }
-
-        $survey = find_survey($surveyId);
-
-        if ($survey === null) {
-            json_response(
-                false,
-                'アンケートが見つかりません。',
-                [],
-                [],
-                404
-            );
-        }
-
-        $settings = load_settings();
-
-        if (!mail_settings_ready($settings)) {
-            json_response(
-                false,
-                'メール送信設定が未完了です。',
-                [],
-                [],
-                422
-            );
-        }
-
-        $mailData = load_mail_log_data();
-
-        $successCount = 0;
-        $failureCount = 0;
-        $failed = [];
-
-        foreach ($recipients as $recipient) {
-            if (!is_array($recipient)) {
-                continue;
-            }
-
-            $email = input_string($recipient, 'email');
-            $name = input_string($recipient, 'name');
-            $customerId = input_string($recipient, 'customer_id');
-
-            if (!valid_email($email)) {
-                $failureCount++;
-
-                $failed[] = [
-                    'customer_id' => $customerId,
-                    'name' => $name,
-                    'email' => $email,
-                    'message' => 'メールアドレスが正しくありません。'
-                ];
-
-                continue;
-            }
-
-            $sendBody =
-                $body .
-                "\n\n回答用URL：\n" .
-                application_api_path() .
-                '?action=respond&survey_id=' .
-                rawurlencode($surveyId) .
-                '&respondent=' .
-                rawurlencode($email);
-
-            $result = smtp_send_mail(
-                $settings,
-                $email,
-                $subject,
-                $sendBody
-            );
-
-            $mailData['logs'][] = [
-                'id' => new_id('mail'),
-                'survey_id' => $surveyId,
-                'customer_id' => $customerId,
-                'name' => $name,
-                'email' => $email,
-                'subject' => $subject,
-                'status' => $result['success']
-                    ? 'sent'
-                    : 'failed',
-                'message' => $result['message'],
-                'sent_at' => current_datetime()
-            ];
-
-            if ($result['success']) {
-                $successCount++;
-            } else {
-                $failureCount++;
-
-                $failed[] = [
-                    'customer_id' => $customerId,
-                    'name' => $name,
-                    'email' => $email,
-                    'message' => $result['message']
-                ];
-            }
-        }
-
-        $mailData['updated_at'] = current_datetime();
-
-        write_json_file(MAIL_LOGS_FILE, $mailData);
-
-        json_response(
-            $failureCount === 0,
-            $failureCount === 0
-                ? '再送が完了しました。'
-                : '一部の再送に失敗しました。',
-            [
-                'success_count' => $successCount,
-                'failure_count' => $failureCount,
-                'failed' => $failed,
-                'sent_at' => current_datetime()
-            ],
-            [],
-            $failureCount === 0 ? 200 : 207
-        );
-    }
-
-    json_response(
-        false,
-        '指定された処理は存在しません。',
-        [],
-        [],
-        404
-    );
-}
-
-/* =========================================================
- * 回答者画面判定
- * ========================================================= */
-
-$isRespondentPage =
-    $action === 'respond' &&
-    input_string($_GET, 'survey_id') !== '';
-
-$respondentSurvey = null;
-
-if ($isRespondentPage) {
-    $respondentSurvey =
-        find_survey(input_string($_GET, 'survey_id'));
-
-    if ($respondentSurvey === null) {
-        $isRespondentPage = false;
     }
 }
 
-function application_api_path(): string
-{
-    $scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
-
-    if (!is_string($scriptName) || $scriptName === '') {
-        return 'index.php';
-    }
-
-    return $scriptName;
-}
+$apiPath = application_api_path();
 
 ?>
 <!DOCTYPE html>
@@ -2975,1992 +1908,760 @@ function application_api_path(): string
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="csrf-token" content="<?= h(csrf_token()) ?>">
+<meta name="api-path" content="<?= h($apiPath) ?>">
 <title>アンケート業務運営</title>
 
 <style>
-* {
-    box-sizing: border-box;
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;min-height:100%}
+body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",
+    "Yu Gothic","YuGothic",Meiryo,sans-serif;
+    background:#f4f6f8;color:#263238;font-size:14px;line-height:1.6
+}
+button,input,textarea,select{font:inherit}
+button{cursor:pointer}
+button:disabled{cursor:not-allowed;opacity:.55}
+.hidden{display:none!important}
+
+.topbar{
+    min-height:60px;background:#1f3a5f;color:#fff;
+    display:flex;align-items:center;padding:0 24px;gap:28px
+}
+.logo{font-size:18px;font-weight:bold;white-space:nowrap}
+.main-nav{display:flex;height:60px;align-items:stretch;gap:2px}
+.main-nav button{
+    height:60px;padding:0 16px;color:#dce7f3;
+    background:transparent;border:0;white-space:nowrap
+}
+.main-nav button:hover,.main-nav button.active{
+    background:#31557f;color:#fff
+}
+
+.app{max-width:1440px;margin:0 auto;padding:24px}
+.page{width:100%}
+.page-header{
+    display:flex;justify-content:space-between;align-items:center;
+    gap:20px;margin-bottom:20px
+}
+.page-header h1{margin:0;font-size:25px;line-height:1.35}
+.subtext{color:#718096;font-size:13px;margin-top:5px}
+
+.card{
+    background:#fff;border:1px solid #dfe5eb;border-radius:7px;
+    padding:20px;margin-bottom:18px
+}
+.card-title{font-size:17px;font-weight:bold;margin-bottom:15px}
+
+.btn{
+    border:1px solid #cbd5e0;background:#fff;color:#34495e;
+    border-radius:5px;padding:8px 15px;min-height:38px
+}
+.btn:hover{background:#f7fafc}
+.btn-primary{background:#2878c8;border-color:#2878c8;color:#fff}
+.btn-primary:hover{background:#2068ad;border-color:#2068ad}
+.btn-success{background:#2f855a;border-color:#2f855a;color:#fff}
+.btn-danger{border-color:#e05a5a;color:#c53f3f;background:#fff}
+.btn-small{min-height:32px;padding:5px 10px;font-size:12px}
+
+.loading-spinner{
+    display:none;width:14px;height:14px;margin-right:6px;
+    border:2px solid rgba(255,255,255,.45);
+    border-top-color:#fff;border-radius:50%;
+    animation:spin .7s linear infinite;vertical-align:-2px
+}
+.btn.loading .loading-spinner{display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.notice{
+    background:#eef6ff;border:1px solid #c9e1f8;color:#315a7d;
+    border-radius:6px;padding:12px 14px;margin-bottom:18px
+}
+.notice.success{background:#eefaf3;border-color:#bde3ca;color:#276749}
+.notice.warning{background:#fff8e8;border-color:#f1d99b;color:#856404}
+.notice.error{background:#fff5f5;border-color:#f0c2c2;color:#a33a3a}
+
+.table-wrap{width:100%;overflow-x:auto}
+.table{width:100%;border-collapse:collapse}
+.table th,.table td{
+    padding:12px 10px;border-bottom:1px solid #e6ebef;
+    text-align:left;vertical-align:middle;font-size:13px
+}
+.table th{background:#f8fafc;color:#52606d;font-weight:bold}
+.table tbody tr:hover td{background:#fbfdff}
+.empty{text-align:center!important;color:#8a98a5;padding:40px!important}
+
+.badge{
+    display:inline-block;padding:3px 8px;border-radius:12px;
+    font-size:11px;line-height:1.4;white-space:nowrap
+}
+.badge-draft{color:#5f6b76;background:#edf0f2}
+.badge-open{color:#276749;background:#dff5e7}
+.badge-end{color:#7b3f3f;background:#f6dddd}
+
+.link-button{
+    border:0;background:none;padding:0;color:#2878c8;
+    cursor:pointer;text-align:left
+}
+.link-button:hover{text-decoration:underline}
+
+.form-grid{
+    display:grid;grid-template-columns:1fr 1fr;gap:16px
+}
+.field{margin-bottom:15px}
+.field label{
+    display:block;font-weight:bold;margin-bottom:6px;color:#465765
+}
+.field input,.field textarea,.field select{
+    width:100%;border:1px solid #cbd5e0;border-radius:5px;
+    padding:9px;background:#fff
+}
+.field textarea{min-height:100px;resize:vertical}
+.radio-row{display:flex;gap:20px;flex-wrap:wrap}
+.radio-row label{font-weight:normal}
+
+.group-card{
+    background:#fff;border:1px solid #dfe5eb;border-radius:7px;
+    margin-bottom:18px;overflow:hidden
+}
+.group-card.dragging{opacity:.45}
+.group-card.drag-over{border-top:3px solid #2878c8}
+.group-header{
+    display:flex;align-items:center;gap:10px;
+    padding:12px 15px;background:#f8fafc;
+    border-bottom:1px solid #e6ebef
+}
+.drag-handle{cursor:grab;color:#718096;font-size:18px}
+.group-title{flex:1}
+.group-title input{
+    width:100%;border:1px solid #cbd5e0;
+    border-radius:4px;padding:8px;font-weight:bold
 }
-
-html,
-body {
-    margin: 0;
-    padding: 0;
-    min-height: 100%;
-}
-
-body {
-    font-family:
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        "Yu Gothic",
-        "YuGothic",
-        Meiryo,
-        sans-serif;
-    color: #263238;
-    background: #f4f6f8;
-    font-size: 14px;
-    line-height: 1.6;
-}
-
-button,
-input,
-textarea,
-select {
-    font: inherit;
-}
-
-button {
-    cursor: pointer;
-}
-
-button:disabled {
-    cursor: not-allowed;
-    opacity: .55;
-}
-
-input,
-textarea,
-select {
-    max-width: 100%;
-}
-
-textarea {
-    resize: vertical;
-}
-
-.hidden {
-    display: none !important;
-}
-
-/* =========================
-   ローディング
-========================= */
-
-.loading-spinner {
-    display: none;
-    width: 14px;
-    height: 14px;
-    margin-right: 6px;
-    border: 2px solid rgba(255,255,255,.45);
-    border-top-color: #fff;
-    border-radius: 50%;
-    vertical-align: -2px;
-    animation: newapp-spin .7s linear infinite;
-}
-
-.btn.loading .loading-spinner {
-    display: inline-block;
-}
-
-.btn:not(.loading) .loading-spinner {
-    display: none;
-}
-
-@keyframes newapp-spin {
-    to {
-        transform: rotate(360deg);
-    }
-}
-
-/* =========================
-   上部メニュー
-========================= */
-
-.topbar {
-    min-height: 60px;
-    background: #1f3a5f;
-    color: #fff;
-    display: flex;
-    align-items: center;
-    padding: 0 24px;
-    gap: 30px;
-}
-
-.logo {
-    font-size: 18px;
-    font-weight: bold;
-    white-space: nowrap;
-}
-
-.main-nav {
-    display: flex;
-    height: 60px;
-    align-items: stretch;
-    gap: 2px;
-}
-
-.main-nav button {
-    height: 60px;
-    padding: 0 17px;
-    color: #dce7f3;
-    background: transparent;
-    border: 0;
-    white-space: nowrap;
-}
-
-.main-nav button:hover,
-.main-nav button.active {
-    background: #31557f;
-    color: #fff;
-}
-
-/* =========================
-   レイアウト
-========================= */
-
-.app {
-    max-width: 1440px;
-    margin: 0 auto;
-    padding: 24px;
-}
-
-.page {
-    width: 100%;
-}
-
-.page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 20px;
-    margin-bottom: 20px;
-}
-
-.page-header h1 {
-    margin: 0;
-    font-size: 25px;
-    line-height: 1.35;
-}
-
-.subtext {
-    color: #718096;
-    font-size: 13px;
-    margin-top: 5px;
-}
-
-/* =========================
-   ボタン
-========================= */
-
-.btn {
-    border: 1px solid #cbd5e0;
-    background: #fff;
-    color: #34495e;
-    border-radius: 5px;
-    padding: 8px 15px;
-    min-height: 38px;
-}
-
-.btn:hover {
-    background: #f7fafc;
-}
-
-.btn-primary {
-    background: #2878c8;
-    border-color: #2878c8;
-    color: #fff;
-}
-
-.btn-primary:hover {
-    background: #2068ad;
-    border-color: #2068ad;
-}
-
-.btn-success {
-    background: #2f855a;
-    border-color: #2f855a;
-    color: #fff;
-}
-
-.btn-success:hover {
-    background: #276749;
-}
-
-.btn-danger {
-    border-color: #e05a5a;
-    color: #c53f3f;
-    background: #fff;
-}
-
-.btn-danger:hover {
-    background: #fff5f5;
-}
-
-.btn-warning {
-    background: #a66b00;
-    border-color: #a66b00;
-    color: #fff;
-}
-
-.btn-small {
-    min-height: 32px;
-    padding: 5px 10px;
-    font-size: 12px;
-}
-
-.link-button {
-    border: 0;
-    background: none;
-    padding: 0;
-    color: #2878c8;
-    cursor: pointer;
-}
-
-.link-button:hover {
-    text-decoration: underline;
-}
-
-/* =========================
-   カード
-========================= */
-
-.card {
-    background: #fff;
-    border: 1px solid #dfe5eb;
-    border-radius: 7px;
-    padding: 20px;
-    margin-bottom: 18px;
-}
-
-.card-title {
-    font-size: 17px;
-    font-weight: bold;
-    margin-bottom: 15px;
-}
-
-.card-title small {
-    font-size: 12px;
-    color: #718096;
-    font-weight: normal;
-    margin-left: 8px;
-}
-
-/* =========================
-   通知
-========================= */
-
-.notice {
-    background: #eef6ff;
-    border: 1px solid #c9e1f8;
-    color: #315a7d;
-    border-radius: 6px;
-    padding: 12px 14px;
-    margin-bottom: 18px;
-}
-
-.notice.success {
-    background: #eefaf3;
-    border-color: #bde3ca;
-    color: #276749;
-}
-
-.notice.warning {
-    background: #fff8e8;
-    border-color: #f1d99b;
-    color: #856404;
-}
-
-.notice.error {
-    background: #fff5f5;
-    border-color: #f0c2c2;
-    color: #a33a3a;
-}
-
-/* =========================
-   テーブル
-========================= */
-
-.table-wrap {
-    width: 100%;
-    overflow-x: auto;
-}
-
-.table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-.table th,
-.table td {
-    padding: 12px 10px;
-    border-bottom: 1px solid #e6ebef;
-    text-align: left;
-    vertical-align: middle;
-    font-size: 13px;
-}
-
-.table th {
-    background: #f8fafc;
-    color: #52606d;
-    font-weight: bold;
-}
-
-.table tbody tr:hover td {
-    background: #fbfdff;
-}
-
-.empty {
-    text-align: center !important;
-    color: #8a98a5;
-    padding: 40px !important;
-}
-
-/* =========================
-   ステータス
-========================= */
-
-.status-badge {
-    display: inline-flex;
-    align-items: center;
-    border-radius: 999px;
-    padding: 3px 10px;
-    font-size: 12px;
-    font-weight: bold;
-    white-space: nowrap;
-}
-
-.status-badge.draft {
-    color: #5f6b76;
-    background: #edf0f2;
-}
-
-.status-badge.published {
-    color: #17643c;
-    background: #dff4e8;
-}
-
-.status-badge.closed {
-    color: #6e4c1f;
-    background: #f7ead1;
-}
-
-.status-dot {
-    width: 9px;
-    height: 9px;
-    display: inline-block;
-    border-radius: 50%;
-    margin-right: 7px;
-    background: #a0aec0;
-}
-
-.status-dot.ok {
-    background: #2f855a;
-}
-
-.status-dot.warn {
-    background: #d69e2e;
-}
-
-.status-dot.error {
-    background: #c53f3f;
-}
-
-.status-line {
-    display: flex;
-    align-items: center;
-    padding: 10px 12px;
-    background: #f8fafc;
-    border-radius: 5px;
-    margin-bottom: 16px;
-}
-
-/* =========================
-   フォーム
-========================= */
-
-.form-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0,1fr));
-    gap: 0 20px;
-}
-
-.form-grid.three {
-    grid-template-columns: repeat(3, minmax(0,1fr));
-}
-
-.field {
-    margin-bottom: 17px;
-}
-
-.field.full {
-    grid-column: 1 / -1;
-}
-
-.field label {
-    display: block;
-    font-weight: bold;
-    margin-bottom: 6px;
-}
-
-.field label .required {
-    color: #c53f3f;
-    margin-left: 3px;
-}
-
-.field input,
-.field textarea,
-.field select {
-    width: 100%;
-    border: 1px solid #cbd5e0;
-    border-radius: 5px;
-    background: #fff;
-    padding: 9px 10px;
-    min-height: 38px;
-    outline: none;
-}
-
-.field textarea {
-    min-height: 110px;
-}
-
-.field input:focus,
-.field textarea:focus,
-.field select:focus {
-    border-color: #2878c8;
-    box-shadow: 0 0 0 2px rgba(40,120,200,.12);
-}
-
-.field-error {
-    color: #c53f3f;
-    font-size: 12px;
-    margin-top: 4px;
-}
-
-.help {
-    color: #718096;
-    font-size: 12px;
-    margin-top: 4px;
-}
-
-/* =========================
-   ツールバー
-========================= */
-
-.toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-}
-
-.toolbar-between {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-}
-
-.search-input {
-    min-width: 260px;
-    border: 1px solid #cbd5e0;
-    border-radius: 5px;
-    padding: 8px 10px;
-    min-height: 38px;
-}
-
-/* =========================
-   ダッシュボード
-========================= */
-
-.dashboard-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0,1fr));
-    gap: 14px;
-    margin-bottom: 18px;
-}
-
-.metric-card {
-    background: #fff;
-    border: 1px solid #dfe5eb;
-    border-radius: 7px;
-    padding: 17px;
+.group-actions{display:flex;gap:6px}
+
+.question-card{padding:15px;border-bottom:1px solid #e6ebef}
+.question-card:last-child{border-bottom:0}
+.question-card.dragging{opacity:.45}
+.question-card.drag-over{border-top:3px solid #2878c8}
+.question-head{
+    display:flex;align-items:center;gap:8px
+}
+.question-number{
+    width:60px;color:#2878c8;font-weight:bold;flex:none
 }
-
-.metric-label {
-    color: #718096;
-    font-size: 12px;
-    margin-bottom: 6px;
-}
-
-.metric-value {
-    font-size: 27px;
-    font-weight: bold;
-    color: #263238;
-}
-
-.metric-value small {
-    font-size: 13px;
-    font-weight: normal;
-    margin-left: 3px;
-}
-
-/* =========================
-   タブ
-========================= */
-
-.tabs {
-    display: flex;
-    gap: 2px;
-    border-bottom: 1px solid #dfe5eb;
-    margin-bottom: 18px;
-}
-
-.tabs button {
-    border: 0;
-    background: transparent;
-    padding: 10px 17px;
-    color: #66727d;
-    border-bottom: 3px solid transparent;
-}
-
-.tabs button.active {
-    color: #2878c8;
-    border-bottom-color: #2878c8;
-    font-weight: bold;
-}
-
-/* =========================
-   編集画面
-========================= */
-
-.editor-group {
-    border: 1px solid #d9e1e8;
-    border-radius: 7px;
-    margin-bottom: 15px;
-    background: #fff;
-}
-
-.editor-group.drag-over {
-    border-color: #2878c8;
-    box-shadow: 0 0 0 2px rgba(40,120,200,.12);
-}
-
-.group-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 12px;
-    background: #f8fafc;
-    border-bottom: 1px solid #e6ebef;
-}
-
-.drag-handle {
-    cursor: grab;
-    color: #9aa7b3;
-    user-select: none;
-    font-size: 18px;
-}
-
-.drag-handle:active {
-    cursor: grabbing;
-}
-
-.group-name-input {
-    flex: 1;
-    border: 1px solid #cbd5e0;
-    border-radius: 4px;
-    padding: 7px 9px;
-    font-weight: bold;
-}
-
-.group-body {
-    padding: 13px;
-}
-
-.question-card {
-    border: 1px solid #e0e6eb;
-    border-radius: 6px;
-    padding: 13px;
-    margin-bottom: 11px;
-    background: #fff;
-}
-
-.question-card.drag-over {
-    border-color: #2878c8;
-    background: #f7fbff;
-}
-
-.question-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 9px;
-}
-
-.question-title {
-    flex: 1;
-}
-
-.question-title input {
-    width: 100%;
-    border: 1px solid #cbd5e0;
-    border-radius: 4px;
-    padding: 7px 9px;
-}
-
-.question-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-    margin-bottom: 10px;
-}
-
-.question-meta select {
-    border: 1px solid #cbd5e0;
-    border-radius: 4px;
-    padding: 6px 8px;
-}
-
-.checkbox-inline {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-}
-
-.option-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 6px;
-}
-
-.option-row input {
-    flex: 1;
-    border: 1px solid #cbd5e0;
-    border-radius: 4px;
-    padding: 6px 8px;
-}
-
-.branch-row {
-    display: grid;
-    grid-template-columns: minmax(100px,.7fr) minmax(160px,1fr);
-    gap: 8px;
-    align-items: center;
-    margin-bottom: 6px;
-}
-
-.branch-row select {
-    width: 100%;
-    border: 1px solid #cbd5e0;
-    border-radius: 4px;
-    padding: 6px;
-}
-
-.add-row {
-    margin-top: 8px;
-    text-align: center;
-}
-
-.add-group {
-    text-align: center;
-    margin-top: 8px;
-}
-
-/* =========================
-   内容確認
-========================= */
-
-.preview-group {
-    margin-bottom: 20px;
-}
-
-.preview-group-title {
-    font-size: 17px;
-    font-weight: bold;
-    padding-bottom: 8px;
-    border-bottom: 2px solid #dfe5eb;
-    margin-bottom: 8px;
-}
-
-.preview-question {
-    padding: 12px 4px;
-    border-bottom: 1px solid #edf1f4;
-}
-
-.preview-question-title {
-    font-weight: bold;
-    margin-bottom: 5px;
-}
-
-.preview-option {
-    padding-left: 12px;
-    color: #52606d;
-}
-
-/* =========================
-   送信画面
-========================= */
-
-.send-layout {
-    display: grid;
-    grid-template-columns: minmax(0,1.2fr) minmax(300px,.8fr);
-    gap: 18px;
-}
-
-.customer-search {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 12px;
-}
-
-.customer-search input {
-    flex: 1;
-    border: 1px solid #cbd5e0;
-    border-radius: 5px;
-    padding: 8px 10px;
-}
-
-.customer-list {
-    max-height: 480px;
-    overflow: auto;
-    border: 1px solid #e1e7ec;
-    border-radius: 5px;
-}
-
-.customer-row {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    padding: 10px;
-    border-bottom: 1px solid #edf1f4;
+.question-title{flex:1}
+.question-title input{
+    width:100%;border:1px solid #cbd5e0;
+    border-radius:4px;padding:8px
+}
+.question-tools{display:flex;gap:6px;align-items:center}
+.question-tools select{
+    border:1px solid #cbd5e0;border-radius:4px;padding:6px
+}
+.question-meta{
+    display:flex;gap:18px;align-items:center;
+    margin-top:10px;padding-left:68px;
+    color:#657786;font-size:13px
 }
-
-.customer-row:last-child {
-    border-bottom: 0;
-}
-
-.customer-info {
-    flex: 1;
-    min-width: 0;
-}
-
-.customer-name {
-    font-weight: bold;
-}
-
-.customer-email {
-    color: #718096;
-    font-size: 12px;
-    overflow-wrap: anywhere;
-}
-
-.selected-panel {
-    background: #f8fafc;
-    border: 1px solid #dfe5eb;
-    border-radius: 6px;
-    padding: 12px;
-}
-
-.selected-customer {
-    padding: 8px 0;
-    border-bottom: 1px solid #e5e9ed;
-}
-
-.selected-customer:last-child {
-    border-bottom: 0;
-}
-
-/* =========================
-   回答者
-========================= */
-
-.respondent-page {
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 25px 18px 60px;
-}
-
-.respondent-header {
-    background: #fff;
-    border: 1px solid #dfe5eb;
-    border-radius: 7px;
-    padding: 22px;
-    margin-bottom: 18px;
-}
-
-.respondent-header h1 {
-    margin-top: 0;
-}
-
-.respondent-question {
-    background: #fff;
-    border: 1px solid #dfe5eb;
-    border-radius: 7px;
-    padding: 20px;
-    margin-bottom: 16px;
-}
-
-.respondent-question-title {
-    font-weight: bold;
-    margin-bottom: 13px;
-}
-
-.respondent-option {
-    margin-bottom: 8px;
-}
-
-.respondent-option label {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-}
-
-.respondent-option input {
-    margin-top: 5px;
-}
-
-.respondent-complete {
-    background: #fff;
-    border: 1px solid #dfe5eb;
-    border-radius: 7px;
-    padding: 35px 22px;
-    text-align: center;
-}
-
-/* =========================
-   メッセージ
-========================= */
-
-.toast-container {
-    position: fixed;
-    top: 76px;
-    right: 20px;
-    z-index: 1000;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    width: min(380px, calc(100vw - 40px));
-}
-
-.toast {
-    background: #263238;
-    color: #fff;
-    border-radius: 6px;
-    padding: 11px 14px;
-    box-shadow: 0 5px 18px rgba(0,0,0,.16);
-}
-
-.toast.success {
-    background: #2f855a;
+.question-options{margin-top:12px;padding-left:68px}
+.option-row{
+    display:flex;align-items:center;gap:7px;margin-bottom:7px
+}
+.option-row input{
+    flex:1;border:1px solid #cbd5e0;
+    border-radius:4px;padding:7px
 }
-
-.toast.error {
-    background: #c53f3f;
-}
-
-.toast.warning {
-    background: #a66b00;
-}
-
-/* =========================
-   モーダル
-========================= */
-
-.modal-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 900;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    background: rgba(25,35,45,.48);
-}
-
-.modal {
-    width: min(760px,100%);
-    max-height: calc(100vh - 40px);
-    overflow-y: auto;
-    background: #fff;
-    border-radius: 8px;
-    box-shadow: 0 12px 35px rgba(0,0,0,.25);
-}
-
-.modal-header {
-    padding: 17px 20px;
-    border-bottom: 1px solid #e6ebef;
-    font-weight: bold;
-}
-
-.modal-body {
-    padding: 20px;
-}
-
-.modal-footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    padding: 13px 20px;
-    border-top: 1px solid #e6ebef;
-}
-
-/* =========================
-   グラフ
-========================= */
-
-.bar-row {
-    margin-bottom: 12px;
-}
-
-.bar-label {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 4px;
+.option-row select{
+    width:230px;border:1px solid #cbd5e0;
+    border-radius:4px;padding:7px
+}
+.add-question-area{
+    padding:12px 14px;background:#fafcfd;
+    border-top:1px solid #edf1f4
 }
-
-.bar-track {
-    height: 18px;
-    background: #edf2f7;
-    border-radius: 4px;
-    overflow: hidden;
-}
-
-.bar-value {
-    height: 100%;
-    background: #2878c8;
-    border-radius: 4px;
-}
-
-.free-answer {
-    border: 1px solid #e1e7ec;
-    background: #f8fafc;
-    border-radius: 5px;
-    padding: 9px 10px;
-    margin-bottom: 7px;
+.add-group-area{text-align:center;margin:8px 0 20px}
+.editor-toolbar{
+    display:flex;justify-content:space-between;
+    gap:10px;margin-top:20px
 }
-
-/* =========================
-   レスポンシブ
-========================= */
-
-@media (max-width: 1000px) {
-    .dashboard-grid {
-        grid-template-columns: repeat(2,minmax(0,1fr));
-    }
-
-    .send-layout {
-        grid-template-columns: 1fr;
-    }
+.editor-actions{display:flex;gap:8px}
+
+.detail-tabs{
+    display:flex;gap:5px;margin-bottom:18px;
+    flex-wrap:wrap
+}
+.detail-tabs button{
+    border:1px solid #d6dee6;background:#fff;
+    padding:9px 16px;border-radius:5px
+}
+.detail-tabs button.active{
+    background:#2878c8;color:#fff;border-color:#2878c8
 }
-
-@media (max-width: 760px) {
-    .topbar {
-        min-height: auto;
-        align-items: flex-start;
-        flex-direction: column;
-        gap: 0;
-        padding: 10px 12px 0;
-    }
-
-    .main-nav {
-        width: 100%;
-        height: auto;
-        overflow-x: auto;
-    }
-
-    .main-nav button {
-        height: 44px;
-        flex: 0 0 auto;
-    }
-
-    .app {
-        padding: 15px;
-    }
-
-    .page-header {
-        align-items: flex-start;
-        flex-direction: column;
-    }
-
-    .form-grid,
-    .form-grid.three {
-        grid-template-columns: 1fr;
-    }
-
-    .field.full {
-        grid-column: auto;
-    }
-
-    .dashboard-grid {
-        grid-template-columns: 1fr 1fr;
-    }
-
-    .branch-row {
-        grid-template-columns: 1fr;
-    }
+
+.detail-summary{
+    display:grid;grid-template-columns:repeat(4,1fr);
+    gap:14px;margin-bottom:18px
+}
+.stat-card{
+    background:#fff;border:1px solid #dfe5eb;
+    border-radius:7px;padding:17px
+}
+.stat-label{color:#718096;font-size:12px}
+.stat-value{font-size:27px;font-weight:bold;margin-top:5px}
+
+.send-layout{
+    display:grid;grid-template-columns:1.1fr .9fr;gap:18px
+}
+.customer-toolbar{display:flex;gap:8px;margin-bottom:12px}
+.customer-toolbar input,.customer-toolbar select{
+    border:1px solid #cbd5e0;border-radius:5px;padding:8px
+}
+.customer-toolbar input{flex:1}
+.selection-summary{
+    padding:10px 12px;background:#edf6ff;color:#2b5f8a;
+    border-radius:5px;margin-bottom:12px;font-size:13px
+}
+.recipient-chip{
+    display:inline-block;padding:5px 8px;margin:3px;
+    border-radius:4px;background:#edf2f7;font-size:12px
 }
-
-@media (max-width: 520px) {
-    .dashboard-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .toolbar-between {
-        align-items: flex-start;
-        flex-direction: column;
-    }
-
-    .search-input {
-        min-width: 0;
-        width: 100%;
-    }
+.email-preview{
+    border:1px solid #dfe5eb;border-radius:6px;
+    background:#fafbfc;padding:15px;
+    white-space:pre-wrap;min-height:150px
+}
+.progress{
+    height:10px;background:#e8edf2;border-radius:5px;
+    overflow:hidden;margin-top:8px
+}
+.progress span{display:block;height:100%;background:#4285c5}
+
+.result-layout{
+    display:grid;grid-template-columns:270px 1fr;gap:18px
+}
+.result-question-button{
+    display:block;width:100%;border:0;background:#fff;
+    text-align:left;padding:10px;border-radius:4px;margin-bottom:4px
+}
+.result-question-button:hover,.result-question-button.active{
+    background:#eef6ff;color:#2878c8
+}
+.result-bar-row{margin-bottom:14px}
+.result-bar-label{
+    display:flex;justify-content:space-between;
+    gap:10px;margin-bottom:4px
+}
+.result-bar{
+    height:18px;border-radius:3px;
+    overflow:hidden;background:#edf1f4
+}
+.result-bar-inner{height:100%;background:#2878c8}
+.result-answer{
+    padding:8px 10px;background:#f7f9fb;
+    border:1px solid #e6ebef;border-radius:4px;
+    margin:5px 0;font-size:13px
+}
+
+.settings-tabs{display:flex;gap:5px;margin-bottom:18px}
+.settings-tabs button{
+    border:1px solid #d6dee6;background:#fff;
+    padding:9px 16px;border-radius:5px
+}
+.settings-tabs button.active{
+    background:#2878c8;color:#fff;border-color:#2878c8
+}
+.status-line{
+    display:flex;align-items:center;gap:8px;
+    padding:10px 12px;background:#f7f9fb;
+    border-radius:5px;margin-bottom:15px
+}
+.status-dot{
+    width:9px;height:9px;border-radius:50%;background:#9aa7b3
+}
+.status-dot.ok{background:#2f9e61}
+.status-dot.warn{background:#d39b25}
+.status-dot.error{background:#d9534f}
+
+.modal-backdrop{
+    position:fixed;inset:0;background:rgba(20,35,50,.45);
+    display:flex;align-items:center;justify-content:center;
+    z-index:1000
+}
+.modal{
+    width:min(760px,calc(100% - 30px));
+    max-height:90vh;overflow:auto;background:#fff;
+    border-radius:8px;box-shadow:0 15px 50px rgba(0,0,0,.25)
+}
+.modal-header{
+    padding:16px 20px;border-bottom:1px solid #e3e8ed;
+    display:flex;justify-content:space-between
+}
+.modal-body{padding:20px}
+.modal-footer{
+    padding:13px 20px;border-top:1px solid #e3e8ed;
+    display:flex;justify-content:flex-end;gap:8px
+}
+.toast{
+    position:fixed;right:25px;bottom:25px;
+    background:#263238;color:#fff;padding:12px 18px;
+    border-radius:5px;box-shadow:0 5px 20px rgba(0,0,0,.2);
+    opacity:0;transform:translateY(10px);
+    transition:.2s;pointer-events:none;z-index:2000
+}
+.toast.show{opacity:1;transform:translateY(0)}
+
+.public-page{
+    max-width:820px;margin:0 auto;padding:30px 20px 60px
+}
+.public-question{
+    background:#fff;border:1px solid #dfe5eb;
+    border-radius:7px;padding:20px;margin-bottom:15px
+}
+.public-question-title{font-weight:bold;margin-bottom:12px}
+.public-option{margin:8px 0}
+.public-complete{
+    background:#fff;border:1px solid #dfe5eb;
+    border-radius:7px;padding:40px;text-align:center
+}
+
+@media(max-width:980px){
+    .send-layout,.result-layout{grid-template-columns:1fr}
+    .detail-summary{grid-template-columns:1fr 1fr}
+}
+@media(max-width:800px){
+    .topbar{padding:0 10px;gap:8px}
+    .logo{font-size:15px}
+    .main-nav button{padding:0 8px;font-size:12px}
+    .app{padding:14px}
+    .form-grid{grid-template-columns:1fr}
+    .question-head{align-items:flex-start;flex-wrap:wrap}
+    .question-title{min-width:70%}
+    .question-meta,.question-options{padding-left:0}
+    .option-row{flex-wrap:wrap}
+    .option-row select{width:100%}
+    .table{min-width:800px}
+    .card{overflow-x:auto}
 }
 </style>
 </head>
+
 <body>
 
-<div id="app" class="app">
+<header class="topbar" id="operator-header">
+    <div class="logo">アンケート業務運営</div>
 
-    <!-- =====================================================
-         管理画面ヘッダー
-         ===================================================== -->
-    <header class="topbar">
-        <div class="logo">アンケート業務運営</div>
+    <nav class="main-nav">
+        <button id="nav-list" type="button">アンケート一覧</button>
+        <button id="nav-create" type="button">アンケート作成</button>
+        <button id="nav-customers" type="button">顧客一覧</button>
+        <button id="nav-settings" type="button">設定</button>
+    </nav>
+</header>
 
-        <nav class="main-nav" id="main-nav">
-            <button type="button" class="active" data-page="dashboard">回答状況</button>
-            <button type="button" data-page="surveys">アンケート管理</button>
-            <button type="button" data-page="customers">顧客管理</button>
-            <button type="button" data-page="settings">設定</button>
-        </nav>
-    </header>
+<main class="app" id="operator-app">
 
-    <!-- =====================================================
-         通知
-         ===================================================== -->
-    <div id="toast-container" class="toast-container" aria-live="polite"></div>
-
-    <!-- =====================================================
-         メイン：回答状況
-         ===================================================== -->
-    <main id="page-dashboard" class="page">
-
-        <div class="page-header">
-            <div>
-                <h1>回答状況</h1>
-                <div class="subtext">
-                    アンケートの送信状況と回答状況を確認できます。
-                </div>
-            </div>
-
-            <div class="action-row">
-                <button
-                    type="button"
-                    id="dashboard-refresh-button"
-                    class="btn btn-primary"
-                >
-                    <span class="loading-spinner"></span>
-                    最新状態に更新
-                </button>
-            </div>
+<section id="page-list">
+    <div class="page-header">
+        <div>
+            <h1>アンケート一覧</h1>
+            <div class="subtext">作成済みのアンケートを管理します</div>
         </div>
 
-        <div class="dashboard-grid">
+        <button id="btn-open-create" class="btn btn-primary" type="button">
+            <span class="loading-spinner"></span>
+            ＋ アンケート作成
+        </button>
+    </div>
 
-            <div class="stat-card">
-                <div class="stat-label">アンケート数</div>
-                <div id="stat-survey-count" class="stat-value">0</div>
-            </div>
+    <div id="list-notice"></div>
 
-            <div class="stat-card">
-                <div class="stat-label">公開中</div>
-                <div id="stat-open-count" class="stat-value">0</div>
-            </div>
-
-            <div class="stat-card">
-                <div class="stat-label">送信件数</div>
-                <div id="stat-sent-count" class="stat-value">0</div>
-            </div>
-
-            <div class="stat-card">
-                <div class="stat-label">回答件数</div>
-                <div id="stat-response-count" class="stat-value">0</div>
-            </div>
-
+    <div class="card">
+        <div class="table-wrap">
+            <table class="table">
+                <thead>
+                <tr>
+                    <th>アンケート名</th>
+                    <th>状態</th>
+                    <th>作成日</th>
+                    <th>公開期間</th>
+                    <th>回答数</th>
+                    <th>最終更新日</th>
+                    <th>操作</th>
+                </tr>
+                </thead>
+                <tbody id="survey-list-body"></tbody>
+            </table>
         </div>
+    </div>
+</section>
 
-        <section class="card">
-            <div class="card-title">
-                アンケート別回答状況
-            </div>
+<section id="page-editor" class="hidden">
 
-            <div class="table-wrap">
-                <table class="table">
-                    <thead>
-                    <tr>
-                        <th>アンケート名</th>
-                        <th>状態</th>
-                        <th>送信</th>
-                        <th>回答</th>
-                        <th>回答率</th>
-                        <th>操作</th>
-                    </tr>
-                    </thead>
-                    <tbody id="dashboard-survey-list">
-                    <tr>
-                        <td colspan="6" class="empty">
-                            読み込み中です。
-                        </td>
-                    </tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
-
-    </main>
-
-    <!-- =====================================================
-         アンケート管理
-         ===================================================== -->
-    <main id="page-surveys" class="page hidden">
-
-        <div class="page-header">
-            <div>
-                <h1>アンケート管理</h1>
-                <div class="subtext">
-                    アンケートの作成、編集、公開、終了、送信を行います。
-                </div>
-            </div>
-
-            <div class="action-row">
-                <button
-                    type="button"
-                    id="survey-new-button"
-                    class="btn btn-primary"
-                >
-                    新しいアンケートを作成
-                </button>
-            </div>
+    <div class="page-header">
+        <div>
+            <h1 id="editor-page-title">アンケート作成</h1>
+            <div class="subtext">アンケート全体を1画面で編集できます</div>
         </div>
+    </div>
 
-        <section id="survey-list-section" class="card">
+    <div id="editor-notice"></div>
 
-            <div class="card-title">
-                アンケート一覧
-            </div>
+    <div class="notice">
+        質問とグループはドラッグ＆ドロップで並べ替えできます。
+        質問番号は自動的に更新されます。
+    </div>
 
-            <div class="table-wrap">
-                <table class="table">
-                    <thead>
-                    <tr>
-                        <th>アンケート名</th>
-                        <th>状態</th>
-                        <th>質問数</th>
-                        <th>更新日時</th>
-                        <th>操作</th>
-                    </tr>
-                    </thead>
+    <div class="card">
 
-                    <tbody id="survey-list">
-                    <tr>
-                        <td colspan="5" class="empty">
-                            読み込み中です。
-                        </td>
-                    </tr>
-                    </tbody>
-                </table>
-            </div>
+        <div class="form-grid">
 
-        </section>
-
-        <!-- =================================================
-             アンケート編集
-             ================================================= -->
-        <section id="survey-editor-section" class="hidden">
-
-            <div class="page-header">
-
-                <div>
-                    <h1 id="survey-editor-title">
-                        アンケート作成
-                    </h1>
-
-                    <div
-                        id="survey-editor-status"
-                        class="subtext"
-                    >
-                        下書き
-                    </div>
-                </div>
-
-                <div class="action-row">
-
-                    <button
-                        type="button"
-                        id="survey-editor-back-button"
-                        class="btn"
-                    >
-                        一覧へ戻る
-                    </button>
-
-                    <button
-                        type="button"
-                        id="survey-editor-save-button"
-                        class="btn btn-primary"
-                    >
-                        <span class="loading-spinner"></span>
-                        保存
-                    </button>
-
-                    <button
-                        type="button"
-                        id="survey-editor-preview-button"
-                        class="btn"
-                    >
-                        内容を確認
-                    </button>
-
-                </div>
-
-            </div>
-
-            <div id="survey-editor-message"></div>
-
-            <section class="card">
-
-                <div class="card-title">
-                    基本情報
-                </div>
-
-                <div class="form-grid">
-
-                    <div class="field">
-                        <label for="survey-title">
-                            アンケート名
-                        </label>
-
-                        <input
-                            type="text"
-                            id="survey-title"
-                            maxlength="200"
-                            autocomplete="off"
-                        >
-
-                        <div
-                            id="survey-title-error"
-                            class="error-text"
-                        ></div>
-                    </div>
-
-                    <div class="field">
-                        <label for="survey-description">
-                            説明
-                        </label>
-
-                        <input
-                            type="text"
-                            id="survey-description"
-                            maxlength="500"
-                        >
-                    </div>
-
-                </div>
-
-                <div class="form-grid">
-
-                    <div class="field">
-                        <label for="survey-start-date">
-                            公開開始日時
-                        </label>
-
-                        <input
-                            type="datetime-local"
-                            id="survey-start-date"
-                        >
-                    </div>
-
-                    <div class="field">
-                        <label for="survey-end-date">
-                            公開終了日時
-                        </label>
-
-                        <input
-                            type="datetime-local"
-                            id="survey-end-date"
-                        >
-                    </div>
-
-                </div>
-
-            </section>
-
-            <section class="card">
-
-                <div class="card-title">
-                    質問
-                    <small>
-                        グループ単位で整理できます
-                    </small>
-                </div>
-
-                <div
-                    id="survey-groups"
-                    class="groups"
-                ></div>
-
-                <div class="add-group-area">
-                    <button
-                        type="button"
-                        id="add-group-button"
-                        class="btn"
-                    >
-                        ＋ 質問グループを追加
-                    </button>
-                </div>
-
-            </section>
-
-            <div class="action-row right">
-
-                <button
-                    type="button"
-                    id="survey-editor-cancel-button"
-                    class="btn"
-                >
-                    キャンセル
-                </button>
-
-                <button
-                    type="button"
-                    id="survey-editor-save-button-bottom"
-                    class="btn btn-primary"
-                >
-                    <span class="loading-spinner"></span>
-                    保存する
-                </button>
-
-            </div>
-
-        </section>
-
-        <!-- =================================================
-             アンケート内容確認
-             ================================================= -->
-        <section
-            id="survey-preview-section"
-            class="card hidden"
-        >
-
-            <div class="page-header">
-
-                <div>
-                    <h1>アンケート内容確認</h1>
-                    <div class="subtext">
-                        回答者に表示される内容を確認してください。
-                    </div>
-                </div>
-
-                <div class="action-row">
-
-                    <button
-                        type="button"
-                        id="survey-preview-back-button"
-                        class="btn"
-                    >
-                        編集画面へ戻る
-                    </button>
-
-                    <button
-                        type="button"
-                        id="survey-preview-save-button"
-                        class="btn btn-primary"
-                    >
-                        <span class="loading-spinner"></span>
-                        保存
-                    </button>
-
-                </div>
-
-            </div>
-
-            <div
-                id="survey-preview-content"
-            ></div>
-
-        </section>
-
-    </main>
-
-    <!-- =====================================================
-         顧客管理
-         ===================================================== -->
-    <main id="page-customers" class="page hidden">
-
-        <div class="page-header">
-
-            <div>
-                <h1>顧客管理</h1>
-
-                <div class="subtext">
-                    kintoneから顧客情報を取得します。
-                </div>
-            </div>
-
-            <div class="action-row">
-
-                <button
-                    type="button"
-                    id="customer-refresh-button"
-                    class="btn btn-primary"
-                >
-                    <span class="loading-spinner"></span>
-                    kintoneから更新
-                </button>
-
-            </div>
-
-        </div>
-
-        <section class="card">
-
-            <div class="card-title">
-                顧客検索
-            </div>
-
-            <div class="customer-search">
-
-                <input
-                    type="search"
-                    id="customer-search-input"
-                    placeholder="顧客名・メールアドレスで検索"
-                    autocomplete="off"
-                >
-
-                <button
-                    type="button"
-                    id="customer-search-clear-button"
-                    class="btn"
-                >
-                    クリア
-                </button>
-
-            </div>
-
-        </section>
-
-        <section class="card">
-
-            <div class="card-title">
-                顧客一覧
-                <small id="customer-count-label">
-                    0件
-                </small>
-            </div>
-
-            <div class="table-wrap">
-
-                <table class="table">
-
-                    <thead>
-                    <tr>
-                        <th>選択</th>
-                        <th>顧客名</th>
-                        <th>メールアドレス</th>
-                        <th>顧客ID</th>
-                    </tr>
-                    </thead>
-
-                    <tbody id="customer-list">
-                    <tr>
-                        <td colspan="4" class="empty">
-                            顧客情報がありません。
-                        </td>
-                    </tr>
-                    </tbody>
-
-                </table>
-
-            </div>
-
-        </section>
-
-    </main>
-
-    <!-- =====================================================
-         設定
-         ===================================================== -->
-    <main id="page-settings" class="page hidden">
-
-        <div class="page-header">
-
-            <div>
-                <h1>設定</h1>
-
-                <div class="subtext">
-                    kintoneおよびメール送信の設定を行います。
-                </div>
-            </div>
-
-        </div>
-
-        <div id="settings-message"></div>
-
-        <!-- =================================================
-             kintone設定
-             ================================================= -->
-        <section class="card settings-section">
-
-            <div class="card-title">
-                kintone設定
-            </div>
-
-            <div
-                id="kintone-status"
-                class="settings-status"
-            >
-                <span
-                    id="kintone-status-dot"
-                    class="status-dot"
-                ></span>
-
-                <span id="kintone-status-text">
-                    未設定
-                </span>
-            </div>
-
-            <div class="form-grid">
-
-                <div class="field">
-
-                    <label for="kintone-domain">
-                        サブドメイン
-                    </label>
-
-                    <input
-                        type="text"
-                        id="kintone-domain"
-                        placeholder="example"
-                        autocomplete="off"
-                    >
-
-                </div>
-
-                <div class="field">
-
-                    <label for="kintone-app-id">
-                        顧客アプリID
-                    </label>
-
-                    <input
-                        type="text"
-                        id="kintone-app-id"
-                        inputmode="numeric"
-                    >
-
-                </div>
-
-            </div>
-
-            <div class="form-grid">
-
-                <div class="field">
-
-                    <label for="kintone-login-name">
-                        ログイン名
-                    </label>
-
-                    <input
-                        type="text"
-                        id="kintone-login-name"
-                        autocomplete="username"
-                    >
-
-                </div>
-
-                <div class="field">
-
-                    <label for="kintone-password">
-                        パスワード
-                    </label>
-
-                    <input
-                        type="password"
-                        id="kintone-password"
-                        autocomplete="current-password"
-                    >
-
-                </div>
-
-            </div>
-
-            <div class="form-grid">
-
-                <div class="field">
-
-                    <label for="kintone-id-field">
-                        顧客IDフィールド
-                    </label>
-
-                    <input
-                        type="text"
-                        id="kintone-id-field"
-                        placeholder="customer_id"
-                    >
-
-                </div>
-
-                <div class="field">
-
-                    <label for="kintone-name-field">
-                        顧客名フィールド
-                    </label>
-
-                    <input
-                        type="text"
-                        id="kintone-name-field"
-                        placeholder="customer_name"
-                    >
-
-                </div>
-
-            </div>
-
-            <div class="form-grid">
-
-                <div class="field">
-
-                    <label for="kintone-email-field">
-                        メールアドレスフィールド
-                    </label>
-
-                    <input
-                        type="text"
-                        id="kintone-email-field"
-                        placeholder="email"
-                    >
-
-                </div>
-
-                <div class="field">
-
-                    <label for="kintone-proxy">
-                        プロキシサーバ
-                    </label>
-
-                    <input
-                        type="text"
-                        id="kintone-proxy"
-                        placeholder="host:port"
-                        autocomplete="off"
-                    >
-
-                </div>
-
-            </div>
-
-            <div class="action-row">
-
-                <button
-                    type="button"
-                    id="kintone-save-button"
-                    class="btn btn-primary"
-                >
-                    <span class="loading-spinner"></span>
-                    kintone設定を保存
-                </button>
-
-                <button
-                    type="button"
-                    id="kintone-test-button"
-                    class="btn"
-                >
-                    <span class="loading-spinner"></span>
-                    接続テスト
-                </button>
-
-            </div>
-
-        </section>
-
-        <!-- =================================================
-             メール設定
-             ================================================= -->
-        <section class="card settings-section">
-
-            <div class="card-title">
-                メール設定
-            </div>
-
-            <div class="form-grid">
-
-                <div class="field">
-
-                    <label for="smtp-server">
-                        SMTPサーバ
-                    </label>
-
-                    <input
-                        type="text"
-                        id="smtp-server"
-                    >
-
-                </div>
-
-                <div class="field">
-
-                    <label for="smtp-port">
-                        SMTPポート
-                    </label>
-
-                    <input
-                        type="number"
-                        id="smtp-port"
-                        min="1"
-                        max="65535"
-                        value="587"
-                    >
-
-                </div>
-
-            </div>
-
-            <div class="form-grid">
-
-                <div class="field">
-
-                    <label for="smtp-connection-type">
-                        接続方式
-                    </label>
-
-                    <select id="smtp-connection-type">
-
-                        <option value="tls">
-                            TLS
-                        </option>
-
-                        <option value="ssl">
-                            SSL
-                        </option>
-
-                        <option value="none">
-                            なし
-                        </option>
-
-                    </select>
-
-                </div>
-
-                <div class="field">
-
-                    <label for="smtp-username">
-                        SMTPユーザー名
-                    </label>
-
-                    <input
-                        type="text"
-                        id="smtp-username"
-                        autocomplete="username"
-                    >
-
-                </div>
-
-            </div>
-
-            <div class="form-grid">
-
-                <div class="field">
-
-                    <label for="smtp-password">
-                        SMTPパスワード
-                    </label>
-
-                    <input
-                        type="password"
-                        id="smtp-password"
-                        autocomplete="current-password"
-                    >
-
-                </div>
-
-                <div class="field">
-
-                    <label for="mail-from-email">
-                        送信元メールアドレス
-                    </label>
-
-                    <input
-                        type="email"
-                        id="mail-from-email"
-                    >
-
-                </div>
-
+            <div class="field">
+                <label for="survey-name">アンケート名 *</label>
+                <input id="survey-name" type="text"
+                    placeholder="例：新商品アンケート">
             </div>
 
             <div class="field">
+                <label for="survey-status">公開状態</label>
+                <select id="survey-status">
+                    <option value="draft">下書き</option>
+                    <option value="open">公開中</option>
+                    <option value="end">終了</option>
+                </select>
+            </div>
 
-                <label for="mail-from-name">
-                    送信元名
+        </div>
+
+        <div class="field">
+            <label for="survey-description">説明</label>
+            <textarea id="survey-description"
+                placeholder="回答者への説明を入力してください"></textarea>
+        </div>
+
+        <div class="form-grid">
+
+            <div class="field">
+                <label for="survey-start">公開開始日</label>
+                <input id="survey-start" type="date">
+            </div>
+
+            <div class="field">
+                <label for="survey-end">公開終了日</label>
+                <input id="survey-end" type="date">
+            </div>
+
+        </div>
+
+        <div class="field">
+            <label>質問番号</label>
+
+            <div class="radio-row">
+                <label>
+                    <input type="radio"
+                        name="numbering"
+                        value="global">
+                    全体で通番（Q1、Q2、Q3…）
                 </label>
 
-                <input
-                    type="text"
-                    id="mail-from-name"
-                >
-
+                <label>
+                    <input type="radio"
+                        name="numbering"
+                        value="group">
+                    グループごと（Q1-1、Q1-2、Q2-1…）
+                </label>
             </div>
+        </div>
 
-            <div class="action-row">
+    </div>
 
-                <button
-                    type="button"
-                    id="mail-save-button"
-                    class="btn btn-primary"
-                >
-                    <span class="loading-spinner"></span>
-                    メール設定を保存
-                </button>
+    <div id="groups"></div>
 
-                <button
-                    type="button"
-                    id="mail-test-button"
-                    class="btn"
-                >
-                    <span class="loading-spinner"></span>
-                    接続テスト
-                </button>
+    <div class="add-group-area">
+        <button id="btn-add-group"
+            class="btn btn-primary"
+            type="button">
+            ＋ グループ追加
+        </button>
+    </div>
 
+    <div class="editor-toolbar">
+        <button id="btn-editor-back"
+            class="btn"
+            type="button">
+            一覧へ戻る
+        </button>
+
+        <div class="editor-actions">
+            <button id="btn-preview-editor"
+                class="btn"
+                type="button">
+                内容確認
+            </button>
+
+            <button id="btn-save-survey"
+                class="btn btn-primary"
+                type="button">
+                <span class="loading-spinner"></span>
+                保存
+            </button>
+        </div>
+    </div>
+
+</section>
+
+<section id="page-detail" class="hidden">
+
+    <div class="page-header">
+        <div>
+            <h1 id="detail-title"></h1>
+            <div class="subtext" id="detail-subtitle"></div>
+        </div>
+
+        <div>
+            <button id="btn-detail-edit"
+                class="btn"
+                type="button">
+                編集
+            </button>
+
+            <button id="btn-detail-send"
+                class="btn btn-primary"
+                type="button">
+                送信
+            </button>
+
+            <button id="btn-detail-back"
+                class="btn"
+                type="button">
+                一覧へ戻る
+            </button>
+        </div>
+    </div>
+
+    <div class="detail-tabs">
+
+        <button id="tab-content"
+            type="button"
+            data-tab="content">
+            アンケート内容
+        </button>
+
+        <button id="tab-send"
+            type="button"
+            data-tab="send">
+            送信
+        </button>
+
+        <button id="tab-status"
+            type="button"
+            data-tab="status">
+            回答状況
+        </button>
+
+        <button id="tab-result"
+            type="button"
+            data-tab="result">
+            回答結果
+        </button>
+
+    </div>
+
+    <div id="detail-content"></div>
+
+</section>
+
+<section id="page-customers" class="hidden">
+
+    <div class="page-header">
+        <div>
+            <h1>顧客一覧</h1>
+            <div class="subtext">
+                kintoneから取得した顧客です
             </div>
+        </div>
 
-        </section>
+        <button id="btn-customer-settings"
+            class="btn"
+            type="button">
+            kintone設定
+        </button>
+    </div>
 
-    </main>
+    <div id="customer-notice"></div>
 
-</div>
+    <div class="card">
 
-<!-- =========================================================
-     回答者画面
-     ========================================================= -->
-<main
-    id="respondent-page"
-    class="respondent-page hidden"
->
+        <div class="customer-toolbar">
 
-    <div
-        id="respondent-content"
-    ></div>
+            <input id="customer-search"
+                type="text"
+                placeholder="顧客名・メールアドレスで検索">
+
+            <button id="btn-refresh-customers"
+                class="btn"
+                type="button">
+                <span class="loading-spinner"></span>
+                顧客一覧を更新
+            </button>
+
+        </div>
+
+        <div class="table-wrap">
+
+            <table class="table">
+
+                <thead>
+                <tr>
+                    <th>顧客名</th>
+                    <th>メールアドレス</th>
+                    <th>会社名</th>
+                    <th>顧客番号</th>
+                </tr>
+                </thead>
+
+                <tbody id="customer-body"></tbody>
+
+            </table>
+
+        </div>
+    </div>
+
+</section>
+
+<section id="page-settings" class="hidden">
+
+    <div class="page-header">
+        <div>
+            <h1>設定</h1>
+            <div class="subtext">
+                メール送信と顧客一覧取得に必要な設定を管理します
+            </div>
+        </div>
+    </div>
+
+    <div class="settings-tabs">
+
+        <button id="settings-tab-mail"
+            type="button"
+            data-settings-tab="mail">
+            メール送信設定
+        </button>
+
+        <button id="settings-tab-kintone"
+            type="button"
+            data-settings-tab="kintone">
+            kintone設定
+        </button>
+
+    </div>
+
+    <div id="settings-content"></div>
+
+</section>
 
 </main>
 
-<!-- =========================================================
-     モーダル
-     ========================================================= -->
-<div
-    id="modal-backdrop"
-    class="modal-backdrop hidden"
-    role="presentation"
->
+<div id="modal" class="modal-backdrop hidden">
 
-    <div
-        id="modal"
-        class="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="modal-title"
-    >
+    <div class="modal">
 
-        <div
-            id="modal-title"
-            class="modal-header"
-        >
-            確認
+        <div class="modal-header">
+            <strong id="modal-title"></strong>
+
+            <button id="modal-close"
+                class="btn btn-small"
+                type="button">
+                閉じる
+            </button>
         </div>
 
-        <div
-            id="modal-body"
-            class="modal-body"
-        ></div>
+        <div id="modal-body" class="modal-body"></div>
 
-        <div class="modal-footer">
-
-            <button
-                type="button"
-                id="modal-cancel-button"
-                class="btn"
-            >
-                キャンセル
-            </button>
-
-            <button
-                type="button"
-                id="modal-ok-button"
-                class="btn btn-primary"
-            >
-                OK
-            </button>
-
-        </div>
+        <div id="modal-footer" class="modal-footer"></div>
 
     </div>
 
 </div>
 
+<div id="toast" class="toast"></div>
+
 <script>
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', function () {
     'use strict';
 
-    /* =========================================================
-     * 基本値
-     * ========================================================= */
+    const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+    const apiMeta = document.querySelector('meta[name="api-path"]');
 
-    const API_PATH = <?= json_encode(
-        application_api_path(),
-        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
-    ) ?>;
+    const csrfToken = csrfMeta ? csrfMeta.content : '';
+    const apiPath = apiMeta ? apiMeta.content : 'index.php';
 
-    const CSRF_TOKEN = <?= json_encode(
-        csrf_token(),
-        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
-    ) ?>;
+    let surveys = [];
+    let customers = [];
+    let currentSurvey = null;
+    let currentSurveyId = '';
+    let editingSurvey = null;
+    let currentSettingsTab = 'mail';
+    let currentDetailTab = 'content';
+    let draggedGroupId = '';
+    let draggedQuestionId = '';
+    let nextGroupNo = 1;
+    let nextQuestionNo = 1;
+    let toastTimer = null;
 
-    const state = {
-        currentPage: 'dashboard',
-        surveys: [],
-        customers: [],
-        responses: [],
-        currentSurvey: null,
-        selectedCustomerIds: [],
-        editingSurveyId: '',
-        modalResolver: null
+    const $ = function (id) {
+        return document.getElementById(id);
     };
 
-    /* =========================================================
-     * DOM取得
-     * ========================================================= */
+    function escapeHtml(value) {
+        const str = String(value ?? '');
 
-    const get = (id) => document.getElementById(id);
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
 
-    const toastContainer = get('toast-container');
-    const modalBackdrop = get('modal-backdrop');
-    const modalTitle = get('modal-title');
-    const modalBody = get('modal-body');
-    const modalCancelButton = get('modal-cancel-button');
-    const modalOkButton = get('modal-ok-button');
+    function showToast(message) {
+        const toast = $('toast');
 
-    /* =========================================================
-     * 共通表示
-     * ========================================================= */
-
-    function showToast(message, type = 'success') {
-        if (!toastContainer) {
+        if (!toast) {
             return;
         }
 
-        const toast = document.createElement('div');
-        toast.className = 'toast ' + type;
-        toast.textContent = String(message ?? '');
+        toast.textContent = String(message || '');
+        toast.classList.add('show');
 
-        toastContainer.appendChild(toast);
+        if (toastTimer !== null) {
+            window.clearTimeout(toastTimer);
+        }
 
-        window.setTimeout(() => {
-            if (toast.parentNode) {
-                toast.parentNode.removeChild(toast);
-            }
-        }, 4000);
+        toastTimer = window.setTimeout(function () {
+            toast.classList.remove('show');
+        }, 2800);
+    }
+
+    function showNotice(target, message, type) {
+        if (!target) {
+            return;
+        }
+
+        target.textContent = '';
+
+        if (!message) {
+            return;
+        }
+
+        const div = document.createElement('div');
+
+        div.className =
+            'notice' +
+            (type ? ' ' + type : '');
+
+        div.textContent = String(message);
+
+        target.appendChild(div);
     }
 
     function setButtonLoading(button, loading) {
@@ -4968,541 +2669,309 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        button.disabled = loading;
-
         if (loading) {
+            button.disabled = true;
             button.classList.add('loading');
         } else {
+            button.disabled = false;
             button.classList.remove('loading');
         }
     }
 
-    function setButtonLoadingImmediately(button) {
-        if (!button) {
-            return;
-        }
-
-        button.disabled = true;
-        button.classList.add('loading');
-    }
-
-    function escapeHtml(value) {
-        const div = document.createElement('div');
-        div.textContent = String(value ?? '');
-        return div.innerHTML;
-    }
-
-    function formatDateTime(value) {
-        if (!value) {
-            return '';
-        }
-
-        const date = new Date(value);
-
-        if (Number.isNaN(date.getTime())) {
-            return String(value);
-        }
-
-        return date.toLocaleString('ja-JP', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-    }
-
-    function surveyStatusLabel(status) {
-        switch (status) {
-            case 'open':
-                return '公開中';
-            case 'closed':
-                return '終了';
-            case 'draft':
-            default:
-                return '下書き';
-        }
-    }
-
-    function surveyStatusClass(status) {
-        switch (status) {
-            case 'open':
-                return 'badge badge-open';
-            case 'closed':
-                return 'badge badge-closed';
-            default:
-                return 'badge badge-draft';
-        }
-    }
-
-    function questionTypeLabel(type) {
-        switch (type) {
-            case 'single':
-                return '単一選択';
-            case 'multiple':
-                return '複数選択';
-            case 'text':
-                return '自由記述';
-            case 'textarea':
-                return '自由記述';
-            default:
-                return type || '選択';
-        }
-    }
-
-    /* =========================================================
-     * API通信
-     * ========================================================= */
-
-    async function apiGet(action, params = {}) {
+    /*
+     * 重要：
+     * 絶対URLを生成しない。
+     *
+     * 同じApache上のindex.php自身へ相対的に通信する。
+     * これにより https://n11-1041/... をJavaScriptへ
+     * 固定することを避ける。
+     */
+    function buildApiUrl(action, params) {
         const query = new URLSearchParams();
 
         query.set('action', action);
 
-        Object.keys(params).forEach((key) => {
-            const value = params[key];
+        if (params && typeof params === 'object') {
+            Object.keys(params).forEach(function (key) {
+                const value = params[key];
 
-            if (
-                value !== null &&
-                value !== undefined &&
-                String(value) !== ''
-            ) {
-                query.set(key, String(value));
+                if (
+                    value !== undefined &&
+                    value !== null &&
+                    String(value) !== ''
+                ) {
+                    query.set(key, String(value));
+                }
+            });
+        }
+
+        return apiPath + '?' + query.toString();
+    }
+
+    async function apiGet(action, params) {
+        const url = buildApiUrl(action, params);
+
+        const response = await fetch(url, {
+            method: 'GET',
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: {
+                'Accept': 'application/json'
             }
         });
 
-        const response = await fetch(
-            API_PATH + '?' + query.toString(),
-            {
-                method: 'GET',
-                credentials: 'same-origin',
-                headers: {
-                    'Accept': 'application/json'
-                }
-            }
-        );
+        const text = await response.text();
 
-        const data = await response.json();
+        let data = null;
 
-        if (!response.ok || !data.success) {
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
             throw new Error(
-                data?.message ||
-                'データの取得に失敗しました。'
+                'サーバーから正しい応答を取得できませんでした。'
+            );
+        }
+
+        if (!response.ok || !data || data.success !== true) {
+            throw new Error(
+                data && data.message
+                    ? data.message
+                    : '処理に失敗しました。'
             );
         }
 
         return data;
     }
 
-    async function apiPost(action, payload = {}, button = null) {
+    async function apiPost(button, action, payload) {
+        /*
+         * 規約：
+         * fetch開始前に必ずdisabledとloadingを設定。
+         */
         if (button) {
-            setButtonLoadingImmediately(button);
+            button.disabled = true;
+            button.classList.add('loading');
         }
 
         try {
-            const response = await fetch(
-                API_PATH + '?action=' + encodeURIComponent(action),
-                {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                        'X-CSRF-Token': CSRF_TOKEN
-                    },
-                    body: JSON.stringify(payload)
-                }
-            );
+            const url = buildApiUrl(action);
 
-            const data = await response.json();
+            const response = await fetch(url, {
+                method: 'POST',
+                credentials: 'same-origin',
+                cache: 'no-store',
+                headers: {
+                    'Content-Type': 'application/json; charset=utf-8',
+                    'Accept': 'application/json',
+                    'X-CSRF-Token': csrfToken
+                },
+                body: JSON.stringify(payload || {})
+            });
 
-            if (!response.ok || !data.success) {
+            const text = await response.text();
+
+            let data = null;
+
+            try {
+                data = JSON.parse(text);
+            } catch (e) {
                 throw new Error(
-                    data?.message ||
-                    '処理に失敗しました。'
+                    'サーバーから正しい応答を取得できませんでした。'
+                );
+            }
+
+            if (!response.ok || !data || data.success !== true) {
+                throw new Error(
+                    data && data.message
+                        ? data.message
+                        : '処理に失敗しました。'
                 );
             }
 
             return data;
-
         } finally {
             if (button) {
-                setButtonLoading(button, false);
+                button.disabled = false;
+                button.classList.remove('loading');
             }
         }
     }
 
-    /* =========================================================
-     * ページ切替
-     * ========================================================= */
-
-    function showPage(pageName) {
-        const pages = [
-            'dashboard',
-            'surveys',
-            'customers',
-            'settings'
+    function showPage(id) {
+        const pageIds = [
+            'page-list',
+            'page-editor',
+            'page-detail',
+            'page-customers',
+            'page-settings'
         ];
 
-        pages.forEach((name) => {
-            const page = get('page-' + name);
+        pageIds.forEach(function (pageId) {
+            const element = $(pageId);
 
-            if (!page) {
-                return;
+            if (element) {
+                element.classList.toggle(
+                    'hidden',
+                    pageId !== id
+                );
             }
-
-            page.classList.toggle(
-                'hidden',
-                name !== pageName
-            );
         });
 
-        const respondentPage = get('respondent-page');
+        const navIds = [
+            'nav-list',
+            'nav-create',
+            'nav-customers',
+            'nav-settings'
+        ];
 
-        if (respondentPage) {
-            respondentPage.classList.add('hidden');
+        navIds.forEach(function (navId) {
+            const element = $(navId);
+
+            if (element) {
+                element.classList.remove('active');
+            }
+        });
+
+        if (id === 'page-list' && $('nav-list')) {
+            $('nav-list').classList.add('active');
         }
 
-        const navButtons = document.querySelectorAll(
-            '#main-nav button[data-page]'
-        );
+        if (id === 'page-editor' && $('nav-create')) {
+            $('nav-create').classList.add('active');
+        }
 
-        navButtons.forEach((button) => {
-            button.classList.toggle(
-                'active',
-                button.dataset.page === pageName
-            );
-        });
+        if (id === 'page-customers' && $('nav-customers')) {
+            $('nav-customers').classList.add('active');
+        }
 
-        state.currentPage = pageName;
-
-        if (pageName === 'dashboard') {
-            loadDashboard();
-        } else if (pageName === 'surveys') {
-            loadSurveys();
-        } else if (pageName === 'customers') {
-            loadCustomers();
-        } else if (pageName === 'settings') {
-            loadSettings();
+        if (id === 'page-settings' && $('nav-settings')) {
+            $('nav-settings').classList.add('active');
         }
     }
 
-    /* =========================================================
-     * ダッシュボード
-     * ========================================================= */
-
-    async function loadDashboard(button = null) {
-        try {
-            const result = await apiGet(
-                'aggregate_responses'
-            );
-
-            const data = result?.data ?? {};
-
-            const surveys = Array.isArray(data.surveys)
-                ? data.surveys
-                : [];
-
-            const stats = data.stats ?? {};
-
-            const surveyCount = Number(
-                stats.survey_count ?? surveys.length
-            );
-
-            const openCount = Number(
-                stats.open_count ?? 0
-            );
-
-            const sentCount = Number(
-                stats.sent_count ?? 0
-            );
-
-            const responseCount = Number(
-                stats.response_count ?? 0
-            );
-
-            const surveyCountElement =
-                get('stat-survey-count');
-
-            const openCountElement =
-                get('stat-open-count');
-
-            const sentCountElement =
-                get('stat-sent-count');
-
-            const responseCountElement =
-                get('stat-response-count');
-
-            if (surveyCountElement) {
-                surveyCountElement.textContent =
-                    String(surveyCount);
-            }
-
-            if (openCountElement) {
-                openCountElement.textContent =
-                    String(openCount);
-            }
-
-            if (sentCountElement) {
-                sentCountElement.textContent =
-                    String(sentCount);
-            }
-
-            if (responseCountElement) {
-                responseCountElement.textContent =
-                    String(responseCount);
-            }
-
-            renderDashboardSurveys(surveys);
-
-        } catch (error) {
-            showToast(
-                error?.message ||
-                '回答状況を取得できませんでした。',
-                'error'
-            );
-        } finally {
-            if (button) {
-                setButtonLoading(button, false);
-            }
+    function statusBadge(status) {
+        if (status === 'open') {
+            return '<span class="badge badge-open">公開中</span>';
         }
+
+        if (status === 'end') {
+            return '<span class="badge badge-end">終了</span>';
+        }
+
+        return '<span class="badge badge-draft">下書き</span>';
     }
 
-    function renderDashboardSurveys(surveys) {
-        const tbody = get('dashboard-survey-list');
-
-        if (!tbody) {
-            return;
-        }
-
-        tbody.replaceChildren();
-
-        if (!Array.isArray(surveys) || surveys.length === 0) {
-            const tr = document.createElement('tr');
-            const td = document.createElement('td');
-
-            td.colSpan = 6;
-            td.className = 'empty';
-            td.textContent =
-                'アンケートがありません。';
-
-            tr.appendChild(td);
-            tbody.appendChild(tr);
-            return;
-        }
-
-        surveys.forEach((survey) => {
-            const tr = document.createElement('tr');
-
-            const titleTd = document.createElement('td');
-            titleTd.textContent =
-                survey?.title || '名称未設定';
-
-            const statusTd = document.createElement('td');
-
-            const badge = document.createElement('span');
-            badge.className =
-                surveyStatusClass(survey?.status);
-
-            badge.textContent =
-                surveyStatusLabel(survey?.status);
-
-            statusTd.appendChild(badge);
-
-            const sentTd = document.createElement('td');
-            sentTd.textContent =
-                String(survey?.sent_count ?? 0);
-
-            const responseTd = document.createElement('td');
-            responseTd.textContent =
-                String(survey?.response_count ?? 0);
-
-            const rateTd = document.createElement('td');
-
-            const sent = Number(
-                survey?.sent_count ?? 0
-            );
-
-            const responses = Number(
-                survey?.response_count ?? 0
-            );
-
-            const rate = sent > 0
-                ? Math.round(
-                    responses / sent * 100
-                )
-                : 0;
-
-            rateTd.textContent = rate + '%';
-
-            const actionTd = document.createElement('td');
-
-            const button = document.createElement('button');
-
-            button.type = 'button';
-            button.className = 'btn btn-small';
-            button.textContent = '詳細';
-
-            button.addEventListener(
-                'click',
-                () => {
-                    if (!survey?.id) {
-                        return;
-                    }
-
-                    openSurvey(survey.id);
-                }
-            );
-
-            actionTd.appendChild(button);
-
-            tr.appendChild(titleTd);
-            tr.appendChild(statusTd);
-            tr.appendChild(sentTd);
-            tr.appendChild(responseTd);
-            tr.appendChild(rateTd);
-            tr.appendChild(actionTd);
-
-            tbody.appendChild(tr);
-        });
-    }
-
-    /* =========================================================
-     * アンケート一覧
-     * ========================================================= */
-
-    async function loadSurveys() {
-        const tbody = get('survey-list');
-
-        if (tbody) {
-            tbody.replaceChildren();
-
-            const tr = document.createElement('tr');
-            const td = document.createElement('td');
-
-            td.colSpan = 5;
-            td.className = 'empty';
-            td.textContent = '読み込み中です。';
-
-            tr.appendChild(td);
-            tbody.appendChild(tr);
-        }
-
+    async function loadSurveyList() {
         try {
             const result = await apiGet('load_surveys');
 
-            const surveys =
-                Array.isArray(result?.data?.surveys)
-                    ? result.data.surveys
-                    : [];
+            surveys = Array.isArray(result.data?.surveys)
+                ? result.data.surveys
+                : [];
 
-            state.surveys = surveys;
-
-            renderSurveyList(surveys);
-
+            renderSurveyList();
         } catch (error) {
-            showToast(
-                error?.message ||
-                'アンケート一覧を取得できませんでした。',
+            showNotice(
+                $('list-notice'),
+                error instanceof Error
+                    ? error.message
+                    : 'アンケート一覧を取得できません。',
                 'error'
             );
         }
     }
 
-    function renderSurveyList(surveys) {
-        const tbody = get('survey-list');
+    function renderSurveyList() {
+        const body = $('survey-list-body');
 
-        if (!tbody) {
+        if (!body) {
             return;
         }
 
-        tbody.replaceChildren();
+        body.textContent = '';
 
-        if (!Array.isArray(surveys) || surveys.length === 0) {
+        if (surveys.length === 0) {
             const tr = document.createElement('tr');
             const td = document.createElement('td');
 
-            td.colSpan = 5;
+            td.colSpan = 7;
             td.className = 'empty';
-            td.textContent =
-                'アンケートがありません。';
+            td.textContent = 'アンケートがありません。';
 
             tr.appendChild(td);
-            tbody.appendChild(tr);
+            body.appendChild(tr);
+
             return;
         }
 
-        surveys.forEach((survey) => {
+        surveys.forEach(function (survey) {
             const tr = document.createElement('tr');
 
-            const titleTd = document.createElement('td');
-            titleTd.textContent =
-                survey?.title || '名称未設定';
+            const nameTd = document.createElement('td');
+            const nameButton = document.createElement('button');
+
+            nameButton.type = 'button';
+            nameButton.className = 'link-button';
+            nameButton.textContent =
+                String(survey.name || '名称未設定');
+
+            nameButton.addEventListener('click', function () {
+                openDetail(String(survey.id || ''));
+            });
+
+            nameTd.appendChild(nameButton);
 
             const statusTd = document.createElement('td');
+            statusTd.innerHTML = statusBadge(
+                String(survey.status || 'draft')
+            );
 
-            const badge = document.createElement('span');
+            const createdTd = document.createElement('td');
+            createdTd.textContent =
+                String(survey.created || '');
 
-            badge.className =
-                surveyStatusClass(survey?.status);
+            const periodTd = document.createElement('td');
+            periodTd.textContent =
+                (survey.start || survey.end)
+                    ? String(survey.start || '未設定') +
+                      ' ～ ' +
+                      String(survey.end || '未設定')
+                    : '未設定';
 
-            badge.textContent =
-                surveyStatusLabel(survey?.status);
-
-            statusTd.appendChild(badge);
-
-            const questionTd = document.createElement('td');
-
-            let questionCount = 0;
-
-            if (Array.isArray(survey?.groups)) {
-                survey.groups.forEach((group) => {
-                    if (Array.isArray(group?.questions)) {
-                        questionCount +=
-                            group.questions.length;
-                    }
-                });
-            }
-
-            questionTd.textContent =
-                String(questionCount);
+            const answerTd = document.createElement('td');
+            answerTd.textContent =
+                String(Number(survey.answers || 0)) + '件';
 
             const updatedTd = document.createElement('td');
-
             updatedTd.textContent =
-                formatDateTime(
-                    survey?.updated_at
-                );
+                String(survey.updated || '');
 
             const actionTd = document.createElement('td');
 
-            const actionRow =
-                document.createElement('div');
-
-            actionRow.className = 'action-row';
-
-            const editButton =
-                document.createElement('button');
-
+            const editButton = document.createElement('button');
             editButton.type = 'button';
-            editButton.className =
-                'btn btn-small';
+            editButton.className = 'btn btn-small';
             editButton.textContent = '編集';
 
-            editButton.addEventListener(
-                'click',
-                () => {
-                    if (!survey?.id) {
-                        return;
-                    }
+            editButton.addEventListener('click', function () {
+                editSurvey(String(survey.id || ''));
+            });
 
-                    openSurvey(survey.id);
-                }
-            );
+            actionTd.appendChild(editButton);
 
-            actionRow.appendChild(editButton);
+            const detailButton = document.createElement('button');
+            detailButton.type = 'button';
+            detailButton.className = 'btn btn-small';
+            detailButton.textContent = '確認';
 
-            if (survey?.status === 'draft') {
+            detailButton.addEventListener('click', function () {
+                openDetail(String(survey.id || ''));
+            });
+
+            actionTd.appendChild(document.createTextNode(' '));
+            actionTd.appendChild(detailButton);
+
+            if (survey.status === 'draft') {
                 const publishButton =
                     document.createElement('button');
 
@@ -5513,656 +2982,534 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 publishButton.addEventListener(
                     'click',
-                    async () => {
-                        if (!survey?.id) {
-                            return;
-                        }
-
-                        const confirmed =
-                            await confirmDialog(
-                                'アンケートを公開しますか？'
-                            );
-
-                        if (!confirmed) {
-                            return;
-                        }
-
-                        setButtonLoadingImmediately(
+                    function () {
+                        publishSurvey(
+                            String(survey.id || ''),
                             publishButton
                         );
-
-                        try {
-                            await apiPost(
-                                'publish_survey',
-                                {
-                                    survey_id: survey.id
-                                }
-                            );
-
-                            showToast(
-                                'アンケートを公開しました。'
-                            );
-
-                            await loadSurveys();
-
-                        } catch (error) {
-                            showToast(
-                                error?.message ||
-                                '公開に失敗しました。',
-                                'error'
-                            );
-                        } finally {
-                            setButtonLoading(
-                                publishButton,
-                                false
-                            );
-                        }
                     }
                 );
 
-                actionRow.appendChild(
-                    publishButton
+                actionTd.appendChild(
+                    document.createTextNode(' ')
                 );
+                actionTd.appendChild(publishButton);
+
+                const deleteButton =
+                    document.createElement('button');
+
+                deleteButton.type = 'button';
+                deleteButton.className =
+                    'btn btn-small btn-danger';
+                deleteButton.textContent = '削除';
+
+                deleteButton.addEventListener(
+                    'click',
+                    function () {
+                        deleteSurvey(
+                            String(survey.id || ''),
+                            deleteButton
+                        );
+                    }
+                );
+
+                actionTd.appendChild(
+                    document.createTextNode(' ')
+                );
+                actionTd.appendChild(deleteButton);
             }
 
-            if (survey?.status === 'open') {
+            if (survey.status === 'open') {
                 const closeButton =
                     document.createElement('button');
 
                 closeButton.type = 'button';
                 closeButton.className =
-                    'btn btn-small';
+                    'btn btn-small btn-danger';
                 closeButton.textContent = '終了';
 
                 closeButton.addEventListener(
                     'click',
-                    async () => {
-                        if (!survey?.id) {
-                            return;
-                        }
-
-                        const confirmed =
-                            await confirmDialog(
-                                'アンケートを終了しますか？'
-                            );
-
-                        if (!confirmed) {
-                            return;
-                        }
-
-                        setButtonLoadingImmediately(
+                    function () {
+                        closeSurvey(
+                            String(survey.id || ''),
                             closeButton
                         );
-
-                        try {
-                            await apiPost(
-                                'close_survey',
-                                {
-                                    survey_id: survey.id
-                                }
-                            );
-
-                            showToast(
-                                'アンケートを終了しました。'
-                            );
-
-                            await loadSurveys();
-
-                        } catch (error) {
-                            showToast(
-                                error?.message ||
-                                '終了処理に失敗しました。',
-                                'error'
-                            );
-                        } finally {
-                            setButtonLoading(
-                                closeButton,
-                                false
-                            );
-                        }
                     }
                 );
 
-                actionRow.appendChild(
-                    closeButton
+                actionTd.appendChild(
+                    document.createTextNode(' ')
                 );
-
-                const sendButton =
-                    document.createElement('button');
-
-                sendButton.type = 'button';
-                sendButton.className =
-                    'btn btn-small btn-primary';
-                sendButton.textContent = '送信';
-
-                sendButton.addEventListener(
-                    'click',
-                    () => {
-                        if (!survey?.id) {
-                            return;
-                        }
-
-                        openSendScreen(
-                            survey.id
-                        );
-                    }
-                );
-
-                actionRow.appendChild(
-                    sendButton
-                );
+                actionTd.appendChild(closeButton);
             }
 
-            const deleteButton =
-                document.createElement('button');
-
-            deleteButton.type = 'button';
-            deleteButton.className =
-                'btn btn-small btn-danger';
-            deleteButton.textContent = '削除';
-
-            deleteButton.addEventListener(
-                'click',
-                async () => {
-                    if (!survey?.id) {
-                        return;
-                    }
-
-                    const confirmed =
-                        await confirmDialog(
-                            'このアンケートを削除しますか？'
-                        );
-
-                    if (!confirmed) {
-                        return;
-                    }
-
-                    setButtonLoadingImmediately(
-                        deleteButton
-                    );
-
-                    try {
-                        await apiPost(
-                            'delete_survey',
-                            {
-                                survey_id: survey.id
-                            }
-                        );
-
-                        showToast(
-                            'アンケートを削除しました。'
-                        );
-
-                        await loadSurveys();
-
-                    } catch (error) {
-                        showToast(
-                            error?.message ||
-                            '削除に失敗しました。',
-                            'error'
-                        );
-                    } finally {
-                        setButtonLoading(
-                            deleteButton,
-                            false
-                        );
-                    }
-                }
-            );
-
-            actionRow.appendChild(deleteButton);
-
-            actionTd.appendChild(actionRow);
-
-            tr.appendChild(titleTd);
+            tr.appendChild(nameTd);
             tr.appendChild(statusTd);
-            tr.appendChild(questionTd);
+            tr.appendChild(createdTd);
+            tr.appendChild(periodTd);
+            tr.appendChild(answerTd);
             tr.appendChild(updatedTd);
             tr.appendChild(actionTd);
 
-            tbody.appendChild(tr);
+            body.appendChild(tr);
         });
     }
 
-    /* =========================================================
-     * アンケート編集
-     * ========================================================= */
-
-    function createEmptyQuestion() {
-        return {
-            id: crypto.randomUUID
-                ? crypto.randomUUID()
-                : 'q_' + Date.now(),
-            title: '',
-            type: 'single',
-            required: false,
-            options: [
-                {
-                    id: 'o_' + Date.now() + '_1',
-                    label: '',
-                    next_group_id: ''
-                }
-            ]
-        };
-    }
-
-    function createEmptyGroup() {
-        return {
-            id: crypto.randomUUID
-                ? crypto.randomUUID()
-                : 'g_' + Date.now(),
-            title: '質問グループ',
-            questions: [
-                createEmptyQuestion()
-            ]
-        };
-    }
-
     function createEmptySurvey() {
-        return {
-            id: '',
-            title: '',
+        const survey = {
+            id: 'survey_' + Date.now(),
+            name: '',
             description: '',
             status: 'draft',
-            start_at: '',
-            end_at: '',
-            groups: [
-                createEmptyGroup()
-            ]
+            created: '',
+            start: '',
+            end: '',
+            answers: 0,
+            target: 0,
+            sent: 0,
+            updated: '',
+            numbering: 'global',
+            groups: []
+        };
+
+        survey.groups.push(createGroup());
+
+        return survey;
+    }
+
+    function createGroup() {
+        const group = {
+            id: 'group_' + Date.now() + '_' + nextGroupNo++,
+            name: 'グループ' + nextGroupNo,
+            questions: []
+        };
+
+        group.questions.push(createQuestion());
+
+        return group;
+    }
+
+    function createQuestion() {
+        return {
+            id: 'question_' +
+                Date.now() +
+                '_' +
+                nextQuestionNo++,
+            text: '',
+            type: 'free',
+            required: false,
+            options: []
         };
     }
 
-    async function openSurvey(surveyId) {
+    function openCreate() {
+        editingSurvey = createEmptySurvey();
+
+        const title = $('editor-page-title');
+
+        if (title) {
+            title.textContent = 'アンケート作成';
+        }
+
+        loadEditor();
+
+        showPage('page-editor');
+    }
+
+    async function editSurvey(id) {
+        if (!id) {
+            return;
+        }
+
         try {
             const result = await apiGet(
                 'load_survey',
-                {
-                    survey_id: surveyId
-                }
+                {id: id}
             );
 
-            const survey =
-                result?.data?.survey ?? null;
+            editingSurvey =
+                JSON.parse(
+                    JSON.stringify(
+                        result.data?.survey || null
+                    )
+                );
 
-            if (!survey) {
+            if (!editingSurvey) {
                 throw new Error(
-                    'アンケートを取得できませんでした。'
+                    'アンケートを取得できません。'
                 );
             }
 
-            state.currentSurvey =
-                JSON.parse(JSON.stringify(survey));
+            const title = $('editor-page-title');
 
-            state.editingSurveyId =
-                survey.id || '';
+            if (title) {
+                title.textContent = 'アンケート編集';
+            }
 
-            showSurveyEditor();
-
+            loadEditor();
+            showPage('page-editor');
         } catch (error) {
             showToast(
-                error?.message ||
-                'アンケートを開けませんでした。',
-                'error'
+                error instanceof Error
+                    ? error.message
+                    : 'アンケートを開けません。'
             );
         }
     }
 
-    function showSurveyEditor() {
-        const listSection =
-            get('survey-list-section');
-
-        const editorSection =
-            get('survey-editor-section');
-
-        const previewSection =
-            get('survey-preview-section');
-
-        if (listSection) {
-            listSection.classList.add('hidden');
+    function loadEditor() {
+        if (!editingSurvey) {
+            return;
         }
 
-        if (editorSection) {
-            editorSection.classList.remove('hidden');
+        const name = $('survey-name');
+        const description = $('survey-description');
+        const status = $('survey-status');
+        const start = $('survey-start');
+        const end = $('survey-end');
+
+        if (name) {
+            name.value = String(
+                editingSurvey.name || ''
+            );
         }
-
-        if (previewSection) {
-            previewSection.classList.add('hidden');
-        }
-
-        const survey =
-            state.currentSurvey || createEmptySurvey();
-
-        const editorTitle =
-            get('survey-editor-title');
-
-        if (editorTitle) {
-            editorTitle.textContent =
-                survey.id
-                    ? 'アンケート編集'
-                    : 'アンケート作成';
-        }
-
-        const status =
-            get('survey-editor-status');
-
-        if (status) {
-            status.textContent =
-                surveyStatusLabel(
-                    survey.status
-                );
-        }
-
-        const title =
-            get('survey-title');
-
-        if (title) {
-            title.value =
-                survey.title || '';
-        }
-
-        const description =
-            get('survey-description');
 
         if (description) {
-            description.value =
-                survey.description || '';
+            description.value = String(
+                editingSurvey.description || ''
+            );
         }
 
-        const startDate =
-            get('survey-start-date');
-
-        if (startDate) {
-            startDate.value =
-                toDatetimeLocal(
-                    survey.start_at
+        if (status) {
+            status.value =
+                String(
+                    editingSurvey.status || 'draft'
                 );
         }
 
-        const endDate =
-            get('survey-end-date');
-
-        if (endDate) {
-            endDate.value =
-                toDatetimeLocal(
-                    survey.end_at
-                );
+        if (start) {
+            start.value =
+                String(editingSurvey.start || '');
         }
 
-        renderSurveyGroups(
-            Array.isArray(survey.groups)
-                ? survey.groups
-                : []
-        );
+        if (end) {
+            end.value =
+                String(editingSurvey.end || '');
+        }
+
+        document
+            .querySelectorAll('input[name="numbering"]')
+            .forEach(function (radio) {
+                if (
+                    radio instanceof HTMLInputElement
+                ) {
+                    radio.checked =
+                        radio.value ===
+                        String(
+                            editingSurvey.numbering ||
+                            'global'
+                        );
+                }
+            });
+
+        renderEditor();
     }
 
-    function toDatetimeLocal(value) {
-        if (!value) {
-            return '';
+    function questionNumber(groupIndex, questionIndex) {
+        if (
+            editingSurvey &&
+            editingSurvey.numbering === 'group'
+        ) {
+            return 'Q' +
+                String(groupIndex + 1) +
+                '-' +
+                String(questionIndex + 1);
         }
 
-        const date = new Date(value);
+        let count = 0;
 
-        if (Number.isNaN(date.getTime())) {
-            return '';
+        for (let i = 0; i < groupIndex; i++) {
+            count +=
+                Array.isArray(
+                    editingSurvey.groups[i].questions
+                )
+                    ? editingSurvey.groups[i].questions.length
+                    : 0;
         }
 
-        const pad = (number) =>
-            String(number).padStart(2, '0');
-
-        return (
-            date.getFullYear() +
-            '-' +
-            pad(date.getMonth() + 1) +
-            '-' +
-            pad(date.getDate()) +
-            'T' +
-            pad(date.getHours()) +
-            ':' +
-            pad(date.getMinutes())
-        );
+        return 'Q' +
+            String(
+                count +
+                questionIndex +
+                1
+            );
     }
 
-    function renderSurveyGroups(groups) {
-        const container =
-            get('survey-groups');
+    function renderEditor() {
+        const groupsElement = $('groups');
 
-        if (!container) {
+        if (!groupsElement || !editingSurvey) {
             return;
         }
 
-        container.replaceChildren();
+        groupsElement.textContent = '';
 
-        if (
-            !Array.isArray(groups) ||
-            groups.length === 0
-        ) {
-            container.textContent =
-                '質問グループがありません。';
+        const groups =
+            Array.isArray(editingSurvey.groups)
+                ? editingSurvey.groups
+                : [];
 
-            return;
-        }
+        groups.forEach(function (group, groupIndex) {
+            const groupCard =
+                document.createElement('div');
 
-        groups.forEach(
-            (group, groupIndex) => {
-                container.appendChild(
-                    createGroupElement(
-                        group,
-                        groupIndex
-                    )
-                );
-            }
-        );
-    }
+            groupCard.className = 'group-card';
+            groupCard.draggable = true;
+            groupCard.dataset.groupId =
+                String(group.id || '');
 
-    function createGroupElement(group, groupIndex) {
-        const wrapper =
-            document.createElement('div');
-
-        wrapper.className = 'group-card';
-        wrapper.dataset.groupId =
-            group.id || '';
-
-        const header =
-            document.createElement('div');
-
-        header.className = 'group-header';
-
-        const handle =
-            document.createElement('span');
-
-        handle.className = 'drag-handle';
-        handle.textContent = '☷';
-        handle.title = '並べ替え';
-
-        const titleWrapper =
-            document.createElement('div');
-
-        titleWrapper.className = 'group-title';
-
-        const titleInput =
-            document.createElement('input');
-
-        titleInput.type = 'text';
-        titleInput.value =
-            group.title || '';
-        titleInput.placeholder =
-            '質問グループ名';
-
-        titleInput.addEventListener(
-            'input',
-            () => {
-                if (
-                    state.currentSurvey &&
-                    Array.isArray(
-                        state.currentSurvey.groups
-                    ) &&
-                    state.currentSurvey.groups[
-                        groupIndex
-                    ]
-                ) {
-                    state.currentSurvey.groups[
-                        groupIndex
-                    ].title =
-                        titleInput.value;
+            groupCard.addEventListener(
+                'dragstart',
+                function () {
+                    draggedGroupId =
+                        String(group.id || '');
+                    groupCard.classList.add('dragging');
                 }
-            }
-        );
+            );
 
-        titleWrapper.appendChild(titleInput);
-
-        const actions =
-            document.createElement('div');
-
-        actions.className =
-            'group-actions';
-
-        const removeGroupButton =
-            document.createElement('button');
-
-        removeGroupButton.type = 'button';
-        removeGroupButton.className =
-            'btn btn-small btn-danger';
-        removeGroupButton.textContent = '削除';
-
-        removeGroupButton.addEventListener(
-            'click',
-            async () => {
-                const confirmed =
-                    await confirmDialog(
-                        'この質問グループを削除しますか？'
-                    );
-
-                if (!confirmed) {
-                    return;
+            groupCard.addEventListener(
+                'dragend',
+                function () {
+                    draggedGroupId = '';
+                    groupCard.classList.remove('dragging');
                 }
+            );
 
-                if (
-                    state.currentSurvey &&
-                    Array.isArray(
-                        state.currentSurvey.groups
-                    )
-                ) {
-                    state.currentSurvey.groups.splice(
-                        groupIndex,
-                        1
-                    );
+            groupCard.addEventListener(
+                'dragover',
+                function (event) {
+                    event.preventDefault();
+                    groupCard.classList.add('drag-over');
+                }
+            );
 
-                    renderSurveyGroups(
-                        state.currentSurvey.groups
+            groupCard.addEventListener(
+                'dragleave',
+                function () {
+                    groupCard.classList.remove(
+                        'drag-over'
                     );
                 }
-            }
-        );
+            );
 
-        actions.appendChild(
-            removeGroupButton
-        );
+            groupCard.addEventListener(
+                'drop',
+                function (event) {
+                    event.preventDefault();
+                    groupCard.classList.remove(
+                        'drag-over'
+                    );
 
-        header.appendChild(handle);
-        header.appendChild(titleWrapper);
-        header.appendChild(actions);
+                    if (
+                        draggedGroupId &&
+                        draggedGroupId !==
+                        String(group.id || '')
+                    ) {
+                        moveGroup(
+                            draggedGroupId,
+                            String(group.id || '')
+                        );
+                    }
+                }
+            );
 
-        wrapper.appendChild(header);
+            const header =
+                document.createElement('div');
 
-        const questionContainer =
-            document.createElement('div');
+            header.className = 'group-header';
 
-        if (
-            Array.isArray(group.questions)
-        ) {
-            group.questions.forEach(
-                (question, questionIndex) => {
-                    questionContainer.appendChild(
-                        createQuestionElement(
+            const handle =
+                document.createElement('span');
+
+            handle.className = 'drag-handle';
+            handle.textContent = '☷';
+
+            const title =
+                document.createElement('div');
+
+            title.className = 'group-title';
+
+            const groupInput =
+                document.createElement('input');
+
+            groupInput.type = 'text';
+            groupInput.value =
+                String(group.name || '');
+
+            groupInput.addEventListener(
+                'input',
+                function () {
+                    group.name =
+                        groupInput.value;
+                }
+            );
+
+            title.appendChild(groupInput);
+
+            const actions =
+                document.createElement('div');
+
+            actions.className = 'group-actions';
+
+            const deleteGroupButton =
+                document.createElement('button');
+
+            deleteGroupButton.type = 'button';
+            deleteGroupButton.className =
+                'btn btn-small btn-danger';
+            deleteGroupButton.textContent =
+                'グループ削除';
+
+            deleteGroupButton.addEventListener(
+                'click',
+                function () {
+                    deleteGroup(
+                        String(group.id || '')
+                    );
+                }
+            );
+
+            actions.appendChild(
+                deleteGroupButton
+            );
+
+            header.appendChild(handle);
+            header.appendChild(title);
+            header.appendChild(actions);
+
+            groupCard.appendChild(header);
+
+            const questions =
+                document.createElement('div');
+
+            questions.className = 'questions';
+
+            const questionList =
+                Array.isArray(group.questions)
+                    ? group.questions
+                    : [];
+
+            questionList.forEach(
+                function (question, questionIndex) {
+                    questions.appendChild(
+                        renderQuestion(
                             group,
-                            groupIndex,
                             question,
+                            groupIndex,
                             questionIndex
                         )
                     );
                 }
             );
-        }
 
-        wrapper.appendChild(
-            questionContainer
-        );
+            groupCard.appendChild(questions);
 
-        const addQuestionArea =
-            document.createElement('div');
+            const addArea =
+                document.createElement('div');
 
-        addQuestionArea.className =
-            'add-question-area';
+            addArea.className =
+                'add-question-area';
 
-        const addQuestionButton =
-            document.createElement('button');
+            const addButton =
+                document.createElement('button');
 
-        addQuestionButton.type = 'button';
-        addQuestionButton.className =
-            'btn btn-small';
-        addQuestionButton.textContent =
-            '＋ 質問を追加';
+            addButton.type = 'button';
+            addButton.className =
+                'btn btn-small btn-primary';
+            addButton.textContent =
+                '＋ 質問追加';
 
-        addQuestionButton.addEventListener(
-            'click',
-            () => {
-                if (
-                    !state.currentSurvey ||
-                    !Array.isArray(
-                        state.currentSurvey.groups
-                    )
-                ) {
-                    return;
+            addButton.addEventListener(
+                'click',
+                function () {
+                    addQuestion(
+                        String(group.id || '')
+                    );
                 }
+            );
 
-                const targetGroup =
-                    state.currentSurvey.groups[
-                        groupIndex
-                    ];
+            addArea.appendChild(addButton);
+            groupCard.appendChild(addArea);
 
-                if (!targetGroup) {
-                    return;
-                }
-
-                if (
-                    !Array.isArray(
-                        targetGroup.questions
-                    )
-                ) {
-                    targetGroup.questions = [];
-                }
-
-                targetGroup.questions.push(
-                    createEmptyQuestion()
-                );
-
-                renderSurveyGroups(
-                    state.currentSurvey.groups
-                );
-            }
-        );
-
-        addQuestionArea.appendChild(
-            addQuestionButton
-        );
-
-        wrapper.appendChild(
-            addQuestionArea
-        );
-
-        return wrapper;
+            groupsElement.appendChild(groupCard);
+        });
     }
 
-    function createQuestionElement(
+    function renderQuestion(
         group,
-        groupIndex,
         question,
+        groupIndex,
         questionIndex
     ) {
         const card =
             document.createElement('div');
 
         card.className = 'question-card';
+        card.draggable = true;
+        card.dataset.questionId =
+            String(question.id || '');
+
+        card.addEventListener(
+            'dragstart',
+            function () {
+                draggedQuestion =
+                    String(question.id || '');
+                card.classList.add('dragging');
+            }
+        );
+
+        card.addEventListener(
+            'dragend',
+            function () {
+                draggedQuestion = '';
+                card.classList.remove('dragging');
+            }
+        );
+
+        card.addEventListener(
+            'dragover',
+            function (event) {
+                event.preventDefault();
+                card.classList.add('drag-over');
+            }
+        );
+
+        card.addEventListener(
+            'dragleave',
+            function () {
+                card.classList.remove('drag-over');
+            }
+        );
+
+        card.addEventListener(
+            'drop',
+            function (event) {
+                event.preventDefault();
+                card.classList.remove('drag-over');
+
+                if (
+                    draggedQuestion &&
+                    draggedQuestion !==
+                    String(question.id || '')
+                ) {
+                    moveQuestion(
+                        draggedQuestion,
+                        String(question.id || '')
+                    );
+                }
+            }
+        );
 
         const head =
             document.createElement('div');
@@ -6174,131 +3521,111 @@ document.addEventListener('DOMContentLoaded', () => {
 
         number.className = 'question-number';
         number.textContent =
-            '質問 ' + (questionIndex + 1);
+            questionNumber(
+                groupIndex,
+                questionIndex
+            );
 
         const title =
             document.createElement('div');
 
         title.className = 'question-title';
 
-        const titleInput =
+        const input =
             document.createElement('input');
 
-        titleInput.type = 'text';
-        titleInput.value =
-            question.title || '';
-        titleInput.placeholder =
+        input.type = 'text';
+        input.value =
+            String(question.text || '');
+
+        input.placeholder =
             '質問文を入力してください';
 
-        titleInput.addEventListener(
+        input.addEventListener(
             'input',
-            () => {
-                question.title =
-                    titleInput.value;
+            function () {
+                question.text =
+                    input.value;
             }
         );
 
-        title.appendChild(titleInput);
+        title.appendChild(input);
 
         const tools =
             document.createElement('div');
 
         tools.className = 'question-tools';
 
-        const typeSelect =
+        const type =
             document.createElement('select');
 
         [
+            ['free', '自由記述'],
             ['single', '単一選択'],
-            ['multiple', '複数選択'],
-            ['text', '自由記述']
-        ].forEach(([value, label]) => {
+            ['multiple', '複数選択']
+        ].forEach(function (item) {
             const option =
                 document.createElement('option');
 
-            option.value = value;
-            option.textContent = label;
+            option.value = item[0];
+            option.textContent = item[1];
 
-            if (question.type === value) {
-                option.selected = true;
-            }
-
-            typeSelect.appendChild(option);
+            type.appendChild(option);
         });
 
-        typeSelect.addEventListener(
+        type.value =
+            String(question.type || 'free');
+
+        type.addEventListener(
             'change',
-            () => {
+            function () {
                 question.type =
-                    typeSelect.value;
+                    type.value;
 
                 if (
-                    question.type === 'text'
+                    type.value === 'free'
                 ) {
                     question.options = [];
                 } else if (
-                    !Array.isArray(
-                        question.options
-                    ) ||
+                    !Array.isArray(question.options) ||
                     question.options.length === 0
                 ) {
                     question.options = [
                         {
-                            id:
-                                'o_' +
-                                Date.now(),
-                            label: '',
-                            next_group_id: ''
+                            text: '',
+                            branch: ''
+                        },
+                        {
+                            text: '',
+                            branch: ''
                         }
                     ];
                 }
 
-                renderSurveyGroups(
-                    state.currentSurvey.groups
+                renderEditor();
+            }
+        );
+
+        tools.appendChild(type);
+
+        const deleteButton =
+            document.createElement('button');
+
+        deleteButton.type = 'button';
+        deleteButton.className =
+            'btn btn-small btn-danger';
+        deleteButton.textContent = '削除';
+
+        deleteButton.addEventListener(
+            'click',
+            function () {
+                deleteQuestion(
+                    String(question.id || '')
                 );
             }
         );
 
-        tools.appendChild(typeSelect);
-
-        const removeButton =
-            document.createElement('button');
-
-        removeButton.type = 'button';
-        removeButton.className =
-            'btn btn-small btn-danger';
-        removeButton.textContent = '削除';
-
-        removeButton.addEventListener(
-            'click',
-            async () => {
-                const confirmed =
-                    await confirmDialog(
-                        'この質問を削除しますか？'
-                    );
-
-                if (!confirmed) {
-                    return;
-                }
-
-                if (
-                    Array.isArray(
-                        group.questions
-                    )
-                ) {
-                    group.questions.splice(
-                        questionIndex,
-                        1
-                    );
-
-                    renderSurveyGroups(
-                        state.currentSurvey.groups
-                    );
-                }
-            }
-        );
-
-        tools.appendChild(removeButton);
+        tools.appendChild(deleteButton);
 
         head.appendChild(number);
         head.appendChild(title);
@@ -6314,51 +3641,32 @@ document.addEventListener('DOMContentLoaded', () => {
         const requiredLabel =
             document.createElement('label');
 
-        const requiredCheckbox =
+        const required =
             document.createElement('input');
 
-        requiredCheckbox.type = 'checkbox';
-        requiredCheckbox.checked =
+        required.type = 'checkbox';
+        required.checked =
             Boolean(question.required);
 
-        requiredCheckbox.addEventListener(
+        required.addEventListener(
             'change',
-            () => {
+            function () {
                 question.required =
-                    requiredCheckbox.checked;
+                    required.checked;
             }
         );
 
+        requiredLabel.appendChild(required);
         requiredLabel.appendChild(
-            requiredCheckbox
+            document.createTextNode(' 必須')
         );
 
-        requiredLabel.appendChild(
-            document.createTextNode(
-                ' 必須回答'
-            )
-        );
-
-        meta.appendChild(
-            requiredLabel
-        );
-
-        const typeText =
-            document.createElement('span');
-
-        typeText.textContent =
-            '形式：' +
-            questionTypeLabel(
-                question.type
-            );
-
-        meta.appendChild(typeText);
-
+        meta.appendChild(requiredLabel);
         card.appendChild(meta);
 
         if (
-            question.type !== 'text' &&
-            question.type !== 'textarea'
+            question.type === 'single' ||
+            question.type === 'multiple'
         ) {
             const options =
                 document.createElement('div');
@@ -6366,87 +3674,111 @@ document.addEventListener('DOMContentLoaded', () => {
             options.className =
                 'question-options';
 
-            if (
-                Array.isArray(
-                    question.options
-                )
-            ) {
-                question.options.forEach(
-                    (option, optionIndex) => {
-                        const row =
-                            document.createElement(
-                                'div'
-                            );
+            const optionList =
+                Array.isArray(question.options)
+                    ? question.options
+                    : [];
 
-                        row.className =
-                            'option-row';
+            optionList.forEach(
+                function (item, optionIndex) {
+                    const row =
+                        document.createElement('div');
 
-                        const label =
-                            document.createElement(
-                                'span'
-                            );
+                    row.className = 'option-row';
 
-                        label.className =
-                            'branch-label';
+                    const optionInput =
+                        document.createElement('input');
 
-                        label.textContent =
-                            '選択肢 ' +
-                            (optionIndex + 1);
+                    optionInput.type = 'text';
+                    optionInput.value =
+                        String(item.text || '');
+                    optionInput.placeholder =
+                        '選択肢';
 
-                        const input =
-                            document.createElement(
-                                'input'
-                            );
+                    optionInput.addEventListener(
+                        'input',
+                        function () {
+                            item.text =
+                                optionInput.value;
+                        }
+                    );
 
-                        input.type = 'text';
-                        input.value =
-                            option.label || '';
-                        input.placeholder =
-                            '選択肢';
+                    row.appendChild(optionInput);
 
-                        input.addEventListener(
-                            'input',
-                            () => {
-                                option.label =
-                                    input.value;
+                    if (
+                        question.type === 'single'
+                    ) {
+                        const branch =
+                            document.createElement('select');
+
+                        const emptyOption =
+                            document.createElement('option');
+
+                        emptyOption.value = '';
+                        emptyOption.textContent =
+                            '分岐なし';
+
+                        branch.appendChild(
+                            emptyOption
+                        );
+
+                        getAllQuestionTargets(
+                            String(question.id || '')
+                        ).forEach(
+                            function (target) {
+                                const option =
+                                    document.createElement('option');
+
+                                option.value =
+                                    String(target.id);
+
+                                option.textContent =
+                                    target.number +
+                                    ' ' +
+                                    target.text;
+
+                                branch.appendChild(option);
                             }
                         );
 
-                        const removeOption =
-                            document.createElement(
-                                'button'
-                            );
+                        branch.value =
+                            String(item.branch || '');
 
-                        removeOption.type = 'button';
-                        removeOption.className =
-                            'btn btn-small btn-danger';
-                        removeOption.textContent =
-                            '削除';
-
-                        removeOption.addEventListener(
-                            'click',
-                            () => {
-                                question.options.splice(
-                                    optionIndex,
-                                    1
-                                );
-
-                                renderSurveyGroups(
-                                    state.currentSurvey.groups
-                                );
+                        branch.addEventListener(
+                            'change',
+                            function () {
+                                item.branch =
+                                    branch.value;
                             }
                         );
 
-                        row.appendChild(label);
-                        row.appendChild(input);
-                        row.appendChild(
-                            removeOption
-                        );
-
-                        options.appendChild(row);
+                        row.appendChild(branch);
                     }
-                );
-            }
+
+                    const remove =
+                        document.createElement('button');
+
+                    remove.type = 'button';
+                    remove.className =
+                        'btn btn-small btn-danger';
+                    remove.textContent = '削除';
+
+                    remove.addEventListener(
+                        'click',
+                        function () {
+                            question.options.splice(
+                                optionIndex,
+                                1
+                            );
+
+                            renderEditor();
+                        }
+                    );
+
+                    row.appendChild(remove);
+                    options.appendChild(row);
+                }
+            );
 
             const addOption =
                 document.createElement('button');
@@ -6454,1577 +3786,867 @@ document.addEventListener('DOMContentLoaded', () => {
             addOption.type = 'button';
             addOption.className =
                 'btn btn-small';
-
             addOption.textContent =
-                '＋ 選択肢を追加';
+                '＋ 選択肢追加';
 
             addOption.addEventListener(
                 'click',
-                () => {
-                    if (
-                        !Array.isArray(
-                            question.options
-                        )
-                    ) {
-                        question.options = [];
-                    }
-
+                function () {
                     question.options.push({
-                        id:
-                            'o_' +
-                            Date.now() +
-                            '_' +
-                            question.options.length,
-                        label: '',
-                        next_group_id: ''
+                        text: '',
+                        branch: ''
                     });
 
-                    renderSurveyGroups(
-                        state.currentSurvey.groups
-                    );
+                    renderEditor();
                 }
             );
 
             options.appendChild(addOption);
-
             card.appendChild(options);
         }
 
         return card;
     }
 
-    function collectSurveyFromForm() {
-        const survey =
-            state.currentSurvey ||
-            createEmptySurvey();
+    function getAllQuestionTargets(excludeId) {
+        const targets = [];
 
-        const title =
-            get('survey-title');
+        if (!editingSurvey) {
+            return targets;
+        }
 
-        const description =
-            get('survey-description');
+        let number = 0;
 
-        const start =
-            get('survey-start-date');
+        editingSurvey.groups.forEach(
+            function (group, groupIndex) {
+                const questions =
+                    Array.isArray(group.questions)
+                        ? group.questions
+                        : [];
 
-        const end =
-            get('survey-end-date');
+                questions.forEach(
+                    function (question, questionIndex) {
+                        number++;
 
-        survey.title =
-            title?.value.trim() || '';
+                        if (
+                            String(question.id || '') !==
+                            String(excludeId || '')
+                        ) {
+                            targets.push({
+                                id: String(question.id || ''),
+                                number:
+                                    questionNumber(
+                                        groupIndex,
+                                        questionIndex
+                                    ),
+                                text:
+                                    String(
+                                        question.text ||
+                                        '未入力'
+                                    )
+                            });
+                        }
+                    }
+                );
+            }
+        );
 
-        survey.description =
-            description?.value.trim() || '';
-
-        survey.start_at =
-            start?.value || '';
-
-        survey.end_at =
-            end?.value || '';
-
-        return survey;
+        return targets;
     }
 
-    function validateSurvey(survey) {
-        if (!survey.title) {
-            showToast(
-                'アンケート名を入力してください。',
-                'error'
-            );
+    function addGroup() {
+        if (!editingSurvey) {
+            return;
+        }
 
-            const title =
-                get('survey-title');
+        editingSurvey.groups.push(
+            createGroup()
+        );
 
-            if (title) {
-                title.focus();
-            }
+        renderEditor();
+    }
 
-            return false;
+    function deleteGroup(id) {
+        if (!editingSurvey) {
+            return;
         }
 
         if (
-            !Array.isArray(survey.groups) ||
-            survey.groups.length === 0
+            editingSurvey.groups.length <= 1
         ) {
             showToast(
-                '質問グループを1つ以上作成してください。',
-                'error'
+                'グループは1つ以上必要です。'
+            );
+            return;
+        }
+
+        if (
+            !window.confirm(
+                'このグループを削除しますか？'
+            )
+        ) {
+            return;
+        }
+
+        editingSurvey.groups =
+            editingSurvey.groups.filter(
+                function (group) {
+                    return String(group.id) !==
+                        String(id);
+                }
             );
 
-            return false;
+        renderEditor();
+    }
+
+    function addQuestion(groupId) {
+        if (!editingSurvey) {
+            return;
+        }
+
+        const group =
+            editingSurvey.groups.find(
+                function (item) {
+                    return String(item.id) ===
+                        String(groupId);
+                }
+            );
+
+        if (!group) {
+            return;
+        }
+
+        if (!Array.isArray(group.questions)) {
+            group.questions = [];
+        }
+
+        group.questions.push(
+            createQuestion()
+        );
+
+        renderEditor();
+    }
+
+    function deleteQuestion(id) {
+        if (!editingSurvey) {
+            return;
         }
 
         for (
             let groupIndex = 0;
-            groupIndex < survey.groups.length;
+            groupIndex < editingSurvey.groups.length;
             groupIndex++
         ) {
             const group =
-                survey.groups[groupIndex];
+                editingSurvey.groups[groupIndex];
 
-            if (
-                !group?.title ||
-                !group.title.trim()
-            ) {
-                showToast(
-                    '質問グループ名を入力してください。',
-                    'error'
+            const index =
+                group.questions.findIndex(
+                    function (question) {
+                        return String(question.id) ===
+                            String(id);
+                    }
                 );
 
-                return false;
-            }
-
-            if (
-                !Array.isArray(group.questions) ||
-                group.questions.length === 0
-            ) {
-                showToast(
-                    '各質問グループには質問を1つ以上設定してください。',
-                    'error'
-                );
-
-                return false;
-            }
-
-            for (
-                let questionIndex = 0;
-                questionIndex < group.questions.length;
-                questionIndex++
-            ) {
-                const question =
-                    group.questions[questionIndex];
-
+            if (index >= 0) {
                 if (
-                    !question?.title ||
-                    !question.title.trim()
+                    group.questions.length <= 1
                 ) {
                     showToast(
-                        '質問文を入力してください。',
-                        'error'
+                        'グループには質問を1つ以上残してください。'
                     );
-
-                    return false;
+                    return;
                 }
 
-                if (
-                    question.type !== 'text' &&
-                    question.type !== 'textarea'
-                ) {
-                    if (
-                        !Array.isArray(
-                            question.options
-                        ) ||
-                        question.options.length < 1
-                    ) {
-                        showToast(
-                            '選択式の質問には選択肢を設定してください。',
-                            'error'
-                        );
+                group.questions.splice(index, 1);
+                renderEditor();
 
-                        return false;
-                    }
+                return;
+            }
+        }
+    }
 
-                    for (
-                        const option
-                        of question.options
-                    ) {
+    function moveGroup(sourceId, targetId) {
+        if (!editingSurvey) {
+            return;
+        }
+
+        const sourceIndex =
+            editingSurvey.groups.findIndex(
+                function (group) {
+                    return String(group.id) ===
+                        String(sourceId);
+                }
+            );
+
+        const targetIndex =
+            editingSurvey.groups.findIndex(
+                function (group) {
+                    return String(group.id) ===
+                        String(targetId);
+                }
+            );
+
+        if (
+            sourceIndex < 0 ||
+            targetIndex < 0 ||
+            sourceIndex === targetIndex
+        ) {
+            return;
+        }
+
+        const moved =
+            editingSurvey.groups.splice(
+                sourceIndex,
+                1
+            )[0];
+
+        editingSurvey.groups.splice(
+            targetIndex,
+            0,
+            moved
+        );
+
+        renderEditor();
+    }
+
+    function moveQuestion(sourceId, targetId) {
+        if (!editingSurvey) {
+            return;
+        }
+
+        let sourceGroup = null;
+        let sourceIndex = -1;
+
+        editingSurvey.groups.forEach(
+            function (group) {
+                group.questions.forEach(
+                    function (question, index) {
                         if (
-                            !option?.label ||
-                            !option.label.trim()
+                            String(question.id) ===
+                            String(sourceId)
                         ) {
-                            showToast(
-                                '空の選択肢があります。',
-                                'error'
-                            );
-
-                            return false;
+                            sourceGroup = group;
+                            sourceIndex = index;
                         }
                     }
-                }
+                );
+            }
+        );
+
+        let targetGroup = null;
+        let targetIndex = -1;
+
+        editingSurvey.groups.forEach(
+            function (group) {
+                group.questions.forEach(
+                    function (question, index) {
+                        if (
+                            String(question.id) ===
+                            String(targetId)
+                        ) {
+                            targetGroup = group;
+                            targetIndex = index;
+                        }
+                    }
+                );
+            }
+        );
+
+        if (
+            !sourceGroup ||
+            !targetGroup ||
+            sourceIndex < 0 ||
+            targetIndex < 0
+        ) {
+            return;
+        }
+
+        const moved =
+            sourceGroup.questions.splice(
+                sourceIndex,
+                1
+            )[0];
+
+        if (sourceGroup === targetGroup) {
+            if (sourceIndex < targetIndex) {
+                targetIndex--;
             }
         }
 
-        return true;
+        targetGroup.questions.splice(
+            targetIndex,
+            0,
+            moved
+        );
+
+        renderEditor();
     }
 
-    async function saveSurvey(button = null) {
-        const survey =
-            collectSurveyFromForm();
+    async function saveSurvey(button) {
+        if (!editingSurvey) {
+            return;
+        }
 
-        if (!validateSurvey(survey)) {
+        const name = $('survey-name');
+        const description = $('survey-description');
+        const status = $('survey-status');
+        const start = $('survey-start');
+        const end = $('survey-end');
+
+        if (name) {
+            editingSurvey.name = name.value.trim();
+        }
+
+        if (description) {
+            editingSurvey.description =
+                description.value;
+        }
+
+        if (status) {
+            editingSurvey.status =
+                status.value;
+        }
+
+        if (start) {
+            editingSurvey.start =
+                start.value;
+        }
+
+        if (end) {
+            editingSurvey.end =
+                end.value;
+        }
+
+        const numbering =
+            document.querySelector(
+                'input[name="numbering"]:checked'
+            );
+
+        if (numbering instanceof HTMLInputElement) {
+            editingSurvey.numbering =
+                numbering.value;
+        }
+
+        if (!editingSurvey.name) {
+            showToast(
+                'アンケート名を入力してください。'
+            );
             return;
         }
 
         try {
             const result = await apiPost(
+                button,
                 'save_survey',
                 {
-                    survey
-                },
-                button
+                    survey: editingSurvey
+                }
             );
 
-            const savedSurvey =
-                result?.data?.survey ?? survey;
-
-            state.currentSurvey =
-                savedSurvey;
-
-            state.editingSurveyId =
-                savedSurvey.id || '';
+            editingSurvey =
+                result.data?.survey || editingSurvey;
 
             showToast(
                 'アンケートを保存しました。'
             );
 
-            await loadSurveys();
+            await loadSurveyList();
 
-            showSurveyEditor();
-
+            showPage('page-list');
         } catch (error) {
-            showToast(
-                error?.message ||
-                'アンケートの保存に失敗しました。',
+            showNotice(
+                $('editor-notice'),
+                error instanceof Error
+                    ? error.message
+                    : '保存できませんでした。',
                 'error'
             );
         }
     }
 
-    /* =========================================================
-     * アンケートプレビュー
-     * ========================================================= */
-
-    function showSurveyPreview() {
-        const survey =
-            collectSurveyFromForm();
-
-        if (!validateSurvey(survey)) {
+    function previewEditor() {
+        if (!editingSurvey) {
             return;
         }
 
-        const editorSection =
-            get('survey-editor-section');
-
-        const previewSection =
-            get('survey-preview-section');
-
-        const content =
-            get('survey-preview-content');
-
-        if (!previewSection || !content) {
-            return;
-        }
-
-        if (editorSection) {
-            editorSection.classList.add('hidden');
-        }
-
-        previewSection.classList.remove(
-            'hidden'
-        );
-
-        content.replaceChildren();
-
-        const title =
-            document.createElement('h2');
-
-        title.textContent =
-            survey.title;
-
-        content.appendChild(title);
-
-        if (survey.description) {
-            const description =
-                document.createElement('p');
-
-            description.textContent =
-                survey.description;
-
-            content.appendChild(
-                description
-            );
-        }
-
-        if (Array.isArray(survey.groups)) {
-            survey.groups.forEach(
-                (group, groupIndex) => {
-                    const groupElement =
-                        document.createElement('div');
-
-                    groupElement.className =
-                        'preview-group';
-
-                    const groupTitle =
-                        document.createElement('div');
-
-                    groupTitle.className =
-                        'preview-group-title';
-
-                    groupTitle.textContent =
-                        group.title ||
-                        '質問グループ ' +
-                        (groupIndex + 1);
-
-                    groupElement.appendChild(
-                        groupTitle
-                    );
-
-                    if (
-                        Array.isArray(
-                            group.questions
-                        )
-                    ) {
-                        group.questions.forEach(
-                            (question, questionIndex) => {
-                                const questionElement =
-                                    document.createElement(
-                                        'div'
-                                    );
-
-                                questionElement.className =
-                                    'preview-question';
-
-                                const questionTitle =
-                                    document.createElement(
-                                        'div'
-                                    );
-
-                                questionTitle.className =
-                                    'preview-question-title';
-
-                                questionTitle.textContent =
-                                    (questionIndex + 1) +
-                                    '. ' +
-                                    question.title;
-
-                                if (question.required) {
-                                    questionTitle.textContent +=
-                                        '（必須）';
-                                }
-
-                                questionElement.appendChild(
-                                    questionTitle
-                                );
-
-                                if (
-                                    Array.isArray(
-                                        question.options
-                                    )
-                                ) {
-                                    question.options.forEach(
-                                        (option) => {
-                                            const optionElement =
-                                                document.createElement(
-                                                    'div'
-                                                );
-
-                                            optionElement.className =
-                                                'preview-option';
-
-                                            optionElement.textContent =
-                                                '・' +
-                                                (
-                                                    option?.label ||
-                                                    ''
-                                                );
-
-                                            questionElement.appendChild(
-                                                optionElement
-                                            );
-                                        }
-                                    );
-                                }
-
-                                groupElement.appendChild(
-                                    questionElement
-                                );
-                            }
-                        );
-                    }
-
-                    content.appendChild(
-                        groupElement
-                    );
-                }
-            );
-        }
-    }
-
-    /* =========================================================
-     * 顧客
-     * ========================================================= */
-
-    async function loadCustomers() {
-        const tbody =
-            get('customer-list');
-
-        if (tbody) {
-            tbody.replaceChildren();
-
-            const tr =
-                document.createElement('tr');
-
-            const td =
-                document.createElement('td');
-
-            td.colSpan = 4;
-            td.className = 'empty';
-            td.textContent =
-                '読み込み中です。';
-
-            tr.appendChild(td);
-            tbody.appendChild(tr);
-        }
-
-        try {
-            const result =
-                await apiGet('load_customers');
-
-            const customers =
-                Array.isArray(
-                    result?.data?.customers
-                )
-                    ? result.data.customers
-                    : [];
-
-            state.customers =
-                customers;
-
-            renderCustomers(
-                customers
-            );
-
-        } catch (error) {
-            showToast(
-                error?.message ||
-                '顧客情報を取得できませんでした。',
-                'error'
-            );
-        }
-    }
-
-    function renderCustomers(customers) {
-        const tbody =
-            get('customer-list');
-
-        if (!tbody) {
-            return;
-        }
-
-        tbody.replaceChildren();
-
-        const countLabel =
-            get('customer-count-label');
-
-        if (countLabel) {
-            countLabel.textContent =
-                customers.length + '件';
-        }
-
-        if (customers.length === 0) {
-            const tr =
-                document.createElement('tr');
-
-            const td =
-                document.createElement('td');
-
-            td.colSpan = 4;
-            td.className = 'empty';
-            td.textContent =
-                '顧客情報がありません。';
-
-            tr.appendChild(td);
-            tbody.appendChild(tr);
-            return;
-        }
-
-        customers.forEach(
-            (customer) => {
-                const tr =
-                    document.createElement('tr');
-
-                const selectTd =
-                    document.createElement('td');
-
-                const checkbox =
-                    document.createElement(
-                        'input'
-                    );
-
-                checkbox.type = 'checkbox';
-
-                const customerId =
-                    String(
-                        customer?.id ??
-                        customer?.customer_id ??
-                        ''
-                    );
-
-                checkbox.value =
-                    customerId;
-
-                checkbox.checked =
-                    state.selectedCustomerIds.includes(
-                        customerId
-                    );
-
-                checkbox.addEventListener(
-                    'change',
-                    () => {
-                        if (
-                            checkbox.checked
-                        ) {
-                            if (
-                                !state.selectedCustomerIds.includes(
-                                    customerId
-                                )
-                            ) {
-                                state.selectedCustomerIds.push(
-                                    customerId
-                                );
-                            }
-                        } else {
-                            state.selectedCustomerIds =
-                                state.selectedCustomerIds.filter(
-                                    (id) =>
-                                        id !== customerId
-                                );
-                        }
-                    }
-                );
-
-                selectTd.appendChild(
-                    checkbox
-                );
-
-                const nameTd =
-                    document.createElement('td');
-
-                nameTd.textContent =
-                    customer?.name ||
-                    customer?.customer_name ||
-                    '';
-
-                const emailTd =
-                    document.createElement('td');
-
-                emailTd.textContent =
-                    customer?.email ||
-                    customer?.customer_email ||
-                    '';
-
-                const idTd =
-                    document.createElement('td');
-
-                idTd.textContent =
-                    customerId;
-
-                tr.appendChild(selectTd);
-                tr.appendChild(nameTd);
-                tr.appendChild(emailTd);
-                tr.appendChild(idTd);
-
-                tbody.appendChild(tr);
-            }
-        );
-    }
-
-    function filterCustomers(keyword) {
-        const text =
-            String(keyword ?? '')
-                .trim()
-                .toLowerCase();
-
-        if (!text) {
-            renderCustomers(
-                state.customers
-            );
-            return;
-        }
-
-        const filtered =
-            state.customers.filter(
-                (customer) => {
-                    const values = [
-                        customer?.id,
-                        customer?.customer_id,
-                        customer?.name,
-                        customer?.customer_name,
-                        customer?.email,
-                        customer?.customer_email
-                    ];
-
-                    return values.some(
-                        (value) =>
-                            String(
-                                value ?? ''
-                            )
-                                .toLowerCase()
-                                .includes(text)
-                    );
-                }
-            );
-
-        renderCustomers(filtered);
-    }
-
-    /* =========================================================
-     * 設定
-     * ========================================================= */
-
-    async function loadSettings() {
-        try {
-            const result =
-                await apiGet(
-                    'load_settings'
-                );
-
-            const settings =
-                result?.data?.settings ?? {};
-
-            const kintone =
-                settings?.kintone ?? {};
-
-            const mail =
-                settings?.mail ?? {};
-
-            setValue(
-                'kintone-domain',
-                kintone.domain
-            );
-
-            setValue(
-                'kintone-app-id',
-                kintone.customer_app_id
-            );
-
-            setValue(
-                'kintone-login-name',
-                kintone.login_name
-            );
-
-            setValue(
-                'kintone-password',
-                ''
-            );
-
-            setValue(
-                'kintone-id-field',
-                kintone.customer_id_field
-            );
-
-            setValue(
-                'kintone-name-field',
-                kintone.customer_name_field
-            );
-
-            setValue(
-                'kintone-email-field',
-                kintone.customer_email_field
-            );
-
-            setValue(
-                'kintone-proxy',
-                buildProxyValue(kintone)
-            );
-
-            setValue(
-                'smtp-server',
-                mail.smtp_server
-            );
-
-            setValue(
-                'smtp-port',
-                mail.smtp_port || 587
-            );
-
-            setValue(
-                'smtp-connection-type',
-                mail.connection_type || 'tls'
-            );
-
-            setValue(
-                'smtp-username',
-                mail.username
-            );
-
-            setValue(
-                'smtp-password',
-                ''
-            );
-
-            setValue(
-                'mail-from-email',
-                mail.from_email
-            );
-
-            setValue(
-                'mail-from-name',
-                mail.from_name
-            );
-
-            updateKintoneStatus(
-                kintone
-            );
-
-        } catch (error) {
-            showToast(
-                error?.message ||
-                '設定を取得できませんでした。',
-                'error'
-            );
-        }
-    }
-
-    function setValue(id, value) {
-        const element =
-            get(id);
-
-        if (!element) {
-            return;
-        }
-
-        element.value =
-            value === null ||
-            value === undefined
-                ? ''
-                : String(value);
-    }
-
-    function buildProxyValue(kintone) {
-        const host =
-            String(
-                kintone?.proxy_host ?? ''
-            ).trim();
-
-        const port =
-            String(
-                kintone?.proxy_port ?? ''
-            ).trim();
-
-        if (!host) {
-            return '';
-        }
-
-        if (
-            host.includes(':') ||
-            !port
-        ) {
-            return host;
-        }
-
-        return host + ':' + port;
-    }
-
-    function updateKintoneStatus(kintone) {
-        const dot =
-            get('kintone-status-dot');
-
-        const text =
-            get('kintone-status-text');
-
-        if (!dot || !text) {
-            return;
-        }
-
-        dot.classList.remove(
-            'ready',
-            'error',
-            'warning'
-        );
-
-        const status =
-            kintone?.connection_status ||
-            'not_configured';
-
-        if (
-            status === 'connected'
-        ) {
-            dot.classList.add('ready');
-            text.textContent =
-                '接続確認済み';
-        } else if (
-            status === 'error'
-        ) {
-            dot.classList.add('error');
-            text.textContent =
-                '接続エラー';
-        } else {
-            dot.classList.add('warning');
-            text.textContent =
-                '未確認';
-        }
-    }
-
-    function collectKintoneSettings() {
-        const proxy =
-            get('kintone-proxy')?.value.trim() ||
-            '';
-
-        let proxyHost = '';
-        let proxyPort = '';
-
-        if (proxy) {
-            const separator =
-                proxy.lastIndexOf(':');
-
-            if (
-                separator > 0 &&
-                separator <
-                    proxy.length - 1
-            ) {
-                proxyHost =
-                    proxy.slice(
-                        0,
-                        separator
-                    ).trim();
-
-                proxyPort =
-                    proxy.slice(
-                        separator + 1
-                    ).trim();
-            } else {
-                proxyHost =
-                    proxy.trim();
-            }
-        }
-
-        return {
-            domain:
-                get('kintone-domain')?.value.trim() ||
-                '',
-
-            login_name:
-                get('kintone-login-name')?.value.trim() ||
-                '',
-
-            password:
-                get('kintone-password')?.value ||
-                '',
-
-            customer_app_id:
-                get('kintone-app-id')?.value.trim() ||
-                '',
-
-            customer_id_field:
-                get('kintone-id-field')?.value.trim() ||
-                '',
-
-            customer_name_field:
-                get('kintone-name-field')?.value.trim() ||
-                '',
-
-            customer_email_field:
-                get('kintone-email-field')?.value.trim() ||
-                '',
-
-            proxy_host:
-                proxyHost,
-
-            proxy_port:
-                proxyPort
-        };
-    }
-
-    function collectMailSettings() {
-        return {
-            smtp_server:
-                get('smtp-server')?.value.trim() ||
-                '',
-
-            smtp_port:
-                Number(
-                    get('smtp-port')?.value ||
-                    587
-                ),
-
-            connection_type:
-                get('smtp-connection-type')?.value ||
-                'tls',
-
-            username:
-                get('smtp-username')?.value.trim() ||
-                '',
-
-            password:
-                get('smtp-password')?.value ||
-                '',
-
-            from_email:
-                get('mail-from-email')?.value.trim() ||
-                '',
-
-            from_name:
-                get('mail-from-name')?.value.trim() ||
-                ''
-        };
-    }
-
-    /* =========================================================
-     * モーダル
-     * ========================================================= */
-
-    function confirmDialog(message) {
-        return new Promise((resolve) => {
-            state.modalResolver =
-                resolve;
-
-            if (modalTitle) {
-                modalTitle.textContent =
-                    '確認';
-            }
-
-            if (modalBody) {
-                modalBody.textContent =
-                    String(message ?? '');
-            }
-
-            if (modalBackdrop) {
-                modalBackdrop.classList.remove(
-                    'hidden'
-                );
-            }
-        });
-    }
-
-    function closeModal(result) {
-        if (modalBackdrop) {
-            modalBackdrop.classList.add(
-                'hidden'
-            );
-        }
-
-        const resolver =
-            state.modalResolver;
-
-        state.modalResolver =
-            null;
-
-        if (typeof resolver === 'function') {
-            resolver(Boolean(result));
-        }
-    }
-
-    /* =========================================================
-     * イベント
-     * ========================================================= */
-
-    const nav =
-        get('main-nav');
-
-    if (nav) {
-        nav.querySelectorAll(
-            'button[data-page]'
-        ).forEach((button) => {
-            if (!button) {
-                return;
-            }
-
-            button.addEventListener(
-                'click',
-                () => {
-                    const page =
-                        button.dataset.page;
-
-                    if (!page) {
-                        return;
-                    }
-
-                    showPage(page);
-                }
-            );
-        });
-    }
-
-    const dashboardRefresh =
-        get('dashboard-refresh-button');
-
-    if (dashboardRefresh) {
-        dashboardRefresh.addEventListener(
-            'click',
-            () => {
-                setButtonLoadingImmediately(
-                    dashboardRefresh
-                );
-
-                loadDashboard(
-                    dashboardRefresh
-                );
-            }
-        );
-    }
-
-    const surveyNew =
-        get('survey-new-button');
-
-    if (surveyNew) {
-        surveyNew.addEventListener(
-            'click',
-            () => {
-                state.currentSurvey =
-                    createEmptySurvey();
-
-                state.editingSurveyId =
-                    '';
-
-                showSurveyEditor();
-            }
-        );
-    }
-
-    const surveyEditorBack =
-        get('survey-editor-back-button');
-
-    if (surveyEditorBack) {
-        surveyEditorBack.addEventListener(
-            'click',
-            () => {
-                const editor =
-                    get('survey-editor-section');
-
-                if (editor) {
-                    editor.classList.add(
-                        'hidden'
-                    );
-                }
-
-                const list =
-                    get('survey-list-section');
-
-                if (list) {
-                    list.classList.remove(
-                        'hidden'
-                    );
-                }
-
-                const preview =
-                    get('survey-preview-section');
-
-                if (preview) {
-                    preview.classList.add(
-                        'hidden'
-                    );
-                }
-
-                loadSurveys();
-            }
-        );
-    }
-
-    const addGroup =
-        get('add-group-button');
-
-    if (addGroup) {
-        addGroup.addEventListener(
-            'click',
-            () => {
-                if (
-                    !state.currentSurvey
-                ) {
-                    state.currentSurvey =
-                        createEmptySurvey();
-                }
-
-                if (
-                    !Array.isArray(
-                        state.currentSurvey.groups
-                    )
-                ) {
-                    state.currentSurvey.groups =
-                        [];
-                }
-
-                state.currentSurvey.groups.push(
-                    createEmptyGroup()
-                );
-
-                renderSurveyGroups(
-                    state.currentSurvey.groups
-                );
-            }
-        );
-    }
-
-    const surveySave =
-        get('survey-editor-save-button');
-
-    if (surveySave) {
-        surveySave.addEventListener(
-            'click',
-            () => {
-                saveSurvey(
-                    surveySave
-                );
-            }
-        );
-    }
-
-    const surveySaveBottom =
-        get('survey-editor-save-button-bottom');
-
-    if (surveySaveBottom) {
-        surveySaveBottom.addEventListener(
-            'click',
-            () => {
-                saveSurvey(
-                    surveySaveBottom
-                );
-            }
-        );
-    }
-
-    const surveyPreview =
-        get('survey-editor-preview-button');
-
-    if (surveyPreview) {
-        surveyPreview.addEventListener(
-            'click',
-            () => {
-                showSurveyPreview();
-            }
-        );
-    }
-
-    const surveyPreviewBack =
-        get('survey-preview-back-button');
-
-    if (surveyPreviewBack) {
-        surveyPreviewBack.addEventListener(
-            'click',
-            () => {
-                const preview =
-                    get('survey-preview-section');
-
-                const editor =
-                    get('survey-editor-section');
-
-                if (preview) {
-                    preview.classList.add(
-                        'hidden'
-                    );
-                }
-
-                if (editor) {
-                    editor.classList.remove(
-                        'hidden'
-                    );
-                }
-            }
-        );
-    }
-
-    const surveyPreviewSave =
-        get('survey-preview-save-button');
-
-    if (surveyPreviewSave) {
-        surveyPreviewSave.addEventListener(
-            'click',
-            () => {
-                saveSurvey(
-                    surveyPreviewSave
-                );
-            }
-        );
-    }
-
-    const customerRefresh =
-        get('customer-refresh-button');
-
-    if (customerRefresh) {
-        customerRefresh.addEventListener(
-            'click',
-            async () => {
-                setButtonLoadingImmediately(
-                    customerRefresh
-                );
-
-                try {
-                    await apiPost(
-                        'refresh_customers',
-                        {},
-                        customerRefresh
-                    );
-
-                    showToast(
-                        '顧客情報を更新しました。'
-                    );
-
-                    await loadCustomers();
-
-                } catch (error) {
-                    showToast(
-                        error?.message ||
-                        '顧客情報の更新に失敗しました。',
-                        'error'
-                    );
-
-                    setButtonLoading(
-                        customerRefresh,
-                        false
-                    );
-                }
-            }
-        );
-    }
-
-    const customerSearch =
-        get('customer-search-input');
-
-    if (customerSearch) {
-        customerSearch.addEventListener(
-            'input',
-            () => {
-                filterCustomers(
-                    customerSearch.value
-                );
-            }
-        );
-    }
-
-    const customerSearchClear =
-        get(
-            'customer-search-clear-button'
-        );
-
-    if (customerSearchClear) {
-        customerSearchClear.addEventListener(
-            'click',
-            () => {
-                if (customerSearch) {
-                    customerSearch.value = '';
-                }
-
-                renderCustomers(
-                    state.customers
-                );
-            }
-        );
-    }
-
-    const kintoneSave =
-        get('kintone-save-button');
-
-    if (kintoneSave) {
-        kintoneSave.addEventListener(
-            'click',
-            async () => {
-                const settings =
-                    collectKintoneSettings();
-
-                try {
-                    await apiPost(
-                        'save_kintone_settings',
-                        {
-                            kintone: settings
-                        },
-                        kintoneSave
-                    );
-
-                    showToast(
-                        'kintone設定を保存しました。'
-                    );
-
-                    await loadSettings();
-
-                } catch (error) {
-                    showToast(
-                        error?.message ||
-                        'kintone設定の保存に失敗しました。',
-                        'error'
-                    );
-                }
-            }
-        );
-    }
-
-    const kintoneTest =
-        get('kintone-test-button');
-
-    if (kintoneTest) {
-        kintoneTest.addEventListener(
-            'click',
-            async () => {
-                const settings =
-                    collectKintoneSettings();
-
-                try {
-                    const result =
-                        await apiPost(
-                            'test_kintone_connection',
-                            {
-                                kintone: settings
-                            },
-                            kintoneTest
-                        );
-
-                    updateKintoneStatus({
-                        connection_status:
-                            'connected'
-                    });
-
-                    showToast(
-                        result?.message ||
-                        'kintoneへの接続を確認しました。'
-                    );
-
-                } catch (error) {
-                    updateKintoneStatus({
-                        connection_status:
-                            'error'
-                    });
-
-                    showToast(
-                        error?.message ||
-                        'kintoneへの接続に失敗しました。',
-                        'error'
-                    );
-                }
-            }
-        );
-    }
-
-    const mailSave =
-        get('mail-save-button');
-
-    if (mailSave) {
-        mailSave.addEventListener(
-            'click',
-            async () => {
-                const settings =
-                    collectMailSettings();
-
-                try {
-                    await apiPost(
-                        'save_mail_settings',
-                        {
-                            mail: settings
-                        },
-                        mailSave
-                    );
-
-                    showToast(
-                        'メール設定を保存しました。'
-                    );
-
-                    await loadSettings();
-
-                } catch (error) {
-                    showToast(
-                        error?.message ||
-                        'メール設定の保存に失敗しました。',
-                        'error'
-                    );
-                }
-            }
-        );
-    }
-
-    const mailTest =
-        get('mail-test-button');
-
-    if (mailTest) {
-        mailTest.addEventListener(
-            'click',
-            async () => {
-                const settings =
-                    collectMailSettings();
-
-                try {
-                    const result =
-                        await apiPost(
-                            'test_mail_settings',
-                            {
-                                mail: settings
-                            },
-                            mailTest
-                        );
-
-                    showToast(
-                        result?.message ||
-                        'メール設定を確認しました。'
-                    );
-
-                } catch (error) {
-                    showToast(
-                        error?.message ||
-                        'メール設定の確認に失敗しました。',
-                        'error'
-                    );
-                }
-            }
-        );
-    }
-
-    if (modalCancelButton) {
-        modalCancelButton.addEventListener(
-            'click',
-            () => {
-                closeModal(false);
-            }
-        );
-    }
-
-    if (modalOkButton) {
-        modalOkButton.addEventListener(
-            'click',
-            () => {
-                closeModal(true);
-            }
-        );
-    }
-
-    if (modalBackdrop) {
-        modalBackdrop.addEventListener(
-            'click',
-            (event) => {
-                if (
-                    event.target ===
-                    modalBackdrop
-                ) {
-                    closeModal(false);
-                }
-            }
-        );
-    }
-
-    /* =========================================================
-     * 送信画面
-     * ========================================================= */
-
-    async function openSendScreen(surveyId) {
-        try {
-            const result =
-                await apiGet(
-                    'prepare_survey_send',
-                    {
-                        survey_id: surveyId
-                    }
-                );
-
-            const survey =
-                result?.data?.survey ?? null;
-
-            if (!survey) {
-                throw new Error(
-                    '送信対象のアンケートを取得できませんでした。'
-                );
-            }
-
-            state.currentSurvey =
-                survey;
-
-            renderSendScreen();
-
-        } catch (error) {
-            showToast(
-                error?.message ||
-                '送信画面を開けませんでした。',
-                'error'
-            );
-        }
-    }
-
-    function renderSendScreen() {
-        const editor =
-            get('survey-editor-section');
-
-        const list =
-            get('survey-list-section');
-
-        const preview =
-            get('survey-preview-section');
-
-        if (editor) {
-            editor.classList.add('hidden');
-        }
-
-        if (preview) {
-            preview.classList.add('hidden');
-        }
-
-        if (list) {
-            list.classList.add('hidden');
-        }
-
-        const section =
-            document.createElement('section');
-
-        section.id =
-            'survey-send-section';
-
-        section.className = 'card';
-
-        const title =
+        const body =
             document.createElement('div');
 
-        title.className =
-            'card-title';
+        const heading =
+            document.createElement('h2');
 
-        title.textContent =
-            'アンケート送信';
+        heading.textContent =
+            String(
+                editingSurvey.name ||
+                'アンケート'
+            );
 
-        section.appendChild(title);
+        body.appendChild(heading);
 
         const description =
             document.createElement('p');
 
         description.textContent =
-            state.currentSurvey?.title ||
-            '';
+            String(
+                editingSurvey.description || ''
+            );
 
-        section.appendChild(
-            description
+        body.appendChild(description);
+
+        editingSurvey.groups.forEach(
+            function (group, groupIndex) {
+                const groupTitle =
+                    document.createElement('h3');
+
+                groupTitle.textContent =
+                    String(group.name || '');
+
+                body.appendChild(groupTitle);
+
+                group.questions.forEach(
+                    function (question, questionIndex) {
+                        const questionBlock =
+                            document.createElement('div');
+
+                        questionBlock.className =
+                            'public-question';
+
+                        const title =
+                            document.createElement('div');
+
+                        title.className =
+                            'public-question-title';
+
+                        title.textContent =
+                            questionNumber(
+                                groupIndex,
+                                questionIndex
+                            ) +
+                            ' ' +
+                            String(
+                                question.text ||
+                                '未入力'
+                            );
+
+                        questionBlock.appendChild(title);
+
+                        if (
+                            question.type ===
+                            'single' ||
+                            question.type ===
+                            'multiple'
+                        ) {
+                            (
+                                question.options || []
+                            ).forEach(
+                                function (option) {
+                                    const line =
+                                        document.createElement(
+                                            'div'
+                                        );
+
+                                    line.className =
+                                        'public-option';
+
+                                    line.textContent =
+                                        '・' +
+                                        String(
+                                            option.text ||
+                                            ''
+                                        );
+
+                                    questionBlock.appendChild(
+                                        line
+                                    );
+                                }
+                            );
+                        }
+
+                        body.appendChild(
+                            questionBlock
+                        );
+                    }
+                );
+            }
         );
 
-        const info =
+        openModal(
+            'アンケート内容確認',
+            body,
+            []
+        );
+    }
+
+    async function openDetail(id) {
+        if (!id) {
+            return;
+        }
+
+        try {
+            const result = await apiGet(
+                'load_survey',
+                {id: id}
+            );
+
+            currentSurvey =
+                result.data?.survey || null;
+
+            if (!currentSurvey) {
+                throw new Error(
+                    'アンケートを取得できません。'
+                );
+            }
+
+            currentSurveyId = id;
+
+            const title = $('detail-title');
+            const subtitle = $('detail-subtitle');
+
+            if (title) {
+                title.textContent =
+                    String(
+                        currentSurvey.name ||
+                        ''
+                    );
+            }
+
+            if (subtitle) {
+                subtitle.textContent =
+                    String(
+                        currentSurvey.description ||
+                        ''
+                    );
+            }
+
+            currentDetailTab = 'content';
+
+            renderDetail();
+
+            showPage('page-detail');
+        } catch (error) {
+            showToast(
+                error instanceof Error
+                    ? error.message
+                    : 'アンケートを開けません。'
+            );
+        }
+    }
+
+    function renderDetail() {
+        const container =
+            $('detail-content');
+
+        if (!container || !currentSurvey) {
+            return;
+        }
+
+        container.textContent = '';
+
+        document
+            .querySelectorAll('.detail-tabs button')
+            .forEach(function (button) {
+                if (
+                    button instanceof HTMLButtonElement
+                ) {
+                    button.classList.toggle(
+                        'active',
+                        button.dataset.tab ===
+                        currentDetailTab
+                    );
+                }
+            });
+
+        if (currentDetailTab === 'content') {
+            renderDetailContent(container);
+        } else if (
+            currentDetailTab === 'send'
+        ) {
+            renderDetailSend(container);
+        } else if (
+            currentDetailTab === 'status'
+        ) {
+            renderDetailStatus(container);
+        } else if (
+            currentDetailTab === 'result'
+        ) {
+            renderDetailResult(container);
+        }
+    }
+
+    function renderDetailContent(container) {
+        const summary =
             document.createElement('div');
 
-        info.className = 'notice';
+        summary.className = 'detail-summary';
 
-        info.textContent =
-            '送信対象の顧客を選択してください。';
+        [
+            [
+                '状態',
+                currentSurvey.status === 'open'
+                    ? '公開中'
+                    : currentSurvey.status === 'end'
+                        ? '終了'
+                        : '下書き'
+            ],
+            [
+                '回答数',
+                String(
+                    Number(
+                        currentSurvey.answers || 0
+                    )
+                ) + '件'
+            ],
+            [
+                '公開開始',
+                String(
+                    currentSurvey.start ||
+                    '未設定'
+                )
+            ],
+            [
+                '公開終了',
+                String(
+                    currentSurvey.end ||
+                    '未設定'
+                )
+            ]
+        ].forEach(function (item) {
+            const card =
+                document.createElement('div');
 
-        section.appendChild(info);
+            card.className = 'stat-card';
+
+            const label =
+                document.createElement('div');
+
+            label.className = 'stat-label';
+            label.textContent = item[0];
+
+            const value =
+                document.createElement('div');
+
+            value.className = 'stat-value';
+            value.textContent = item[1];
+
+            card.appendChild(label);
+            card.appendChild(value);
+
+            summary.appendChild(card);
+        });
+
+        container.appendChild(summary);
+
+        const card =
+            document.createElement('div');
+
+        card.className = 'card';
+
+        const title =
+            document.createElement('div');
+
+        title.className = 'card-title';
+        title.textContent = 'アンケート内容';
+
+        card.appendChild(title);
+
+        currentSurvey.groups.forEach(
+            function (group, groupIndex) {
+                const groupTitle =
+                    document.createElement('h3');
+
+                groupTitle.textContent =
+                    String(group.name || '');
+
+                card.appendChild(groupTitle);
+
+                group.questions.forEach(
+                    function (question, questionIndex) {
+                        const q =
+                            document.createElement('div');
+
+                        q.className =
+                            'public-question';
+
+                        const qt =
+                            document.createElement('div');
+
+                        qt.className =
+                            'public-question-title';
+
+                        qt.textContent =
+                            questionNumber(
+                                groupIndex,
+                                questionIndex
+                            ) +
+                            ' ' +
+                            String(
+                                question.text ||
+                                '未入力'
+                            );
+
+                        q.appendChild(qt);
+
+                        if (
+                            question.type === 'single' ||
+                            question.type === 'multiple'
+                        ) {
+                            (
+                                question.options || []
+                            ).forEach(
+                                function (option) {
+                                    const op =
+                                        document.createElement(
+                                            'div'
+                                        );
+
+                                    op.className =
+                                        'public-option';
+
+                                    op.textContent =
+                                        '・' +
+                                        String(
+                                            option.text ||
+                                            ''
+                                        );
+
+                                    q.appendChild(op);
+                                }
+                            );
+                        }
+
+                        card.appendChild(q);
+                    }
+                );
+            }
+        );
+
+        container.appendChild(card);
+    }
+
+    async function renderDetailSend(container) {
+        const layout =
+            document.createElement('div');
+
+        layout.className = 'send-layout';
+
+        const left =
+            document.createElement('div');
+
+        left.className = 'card';
+
+        const title =
+            document.createElement('div');
+
+        title.className = 'card-title';
+        title.textContent = '送信対象';
+
+        left.appendChild(title);
 
         const search =
             document.createElement('input');
 
-        search.type = 'search';
+        search.type = 'text';
         search.placeholder =
             '顧客名・メールアドレスで検索';
-
+        search.id = 'send-customer-search';
         search.style.width = '100%';
-        search.style.marginBottom =
-            '12px';
+        search.style.padding = '9px';
+        search.style.border =
+            '1px solid #cbd5e0';
+        search.style.borderRadius = '5px';
 
-        section.appendChild(search);
+        left.appendChild(search);
 
-        const customerList =
+        const summary =
             document.createElement('div');
 
-        customerList.className =
-            'customer-list';
+        summary.className =
+            'selection-summary';
 
-        section.appendChild(
-            customerList
-        );
+        summary.id = 'send-selection-summary';
 
-        const actionRow =
+        summary.textContent =
+            '選択：0件';
+
+        left.appendChild(summary);
+
+        const tableWrap =
             document.createElement('div');
 
-        actionRow.className =
-            'action-row right';
+        tableWrap.className =
+            'table-wrap';
 
-        actionRow.style.marginTop =
-            '14px';
+        const table =
+            document.createElement('table');
 
-        const backButton =
-            document.createElement('button');
+        table.className = 'table';
 
-        backButton.type = 'button';
-        backButton.className = 'btn';
-        backButton.textContent =
-            '戻る';
+        const thead =
+            document.createElement('thead');
+
+        const headRow =
+            document.createElement('tr');
+
+        [
+            '選択',
+            '顧客名',
+            'メールアドレス',
+            '会社名'
+        ].forEach(function (text) {
+            const th =
+                document.createElement('th');
+
+            th.textContent = text;
+            headRow.appendChild(th);
+        });
+
+        thead.appendChild(headRow);
+
+        const tbody =
+            document.createElement('tbody');
+
+        tbody.id = 'send-customer-body';
+
+        table.appendChild(thead);
+        table.appendChild(tbody);
+        tableWrap.appendChild(table);
+
+        left.appendChild(tableWrap);
+
+        const right =
+            document.createElement('div');
+
+        right.className = 'card';
+
+        const rightTitle =
+            document.createElement('div');
+
+        rightTitle.className =
+            'card-title';
+
+        rightTitle.textContent =
+            '送信内容';
+
+        right.appendChild(rightTitle);
+
+        const preview =
+            document.createElement('div');
+
+        preview.className =
+            'email-preview';
+
+        preview.textContent =
+            'アンケートへのご回答をお願いします。\n\n' +
+            String(
+                currentSurvey.name || ''
+            ) +
+            '\n\n' +
+            String(
+                currentSurvey.description || ''
+            );
+
+        right.appendChild(preview);
 
         const sendButton =
             document.createElement('button');
@@ -8033,753 +4655,378 @@ document.addEventListener('DOMContentLoaded', () => {
         sendButton.className =
             'btn btn-primary';
 
-        sendButton.innerHTML =
-            '<span class="loading-spinner"></span>送信する';
+        const spinner =
+            document.createElement('span');
 
-        backButton.addEventListener(
-            'click',
-            () => {
-                section.remove();
-                loadSurveys();
-            }
+        spinner.className =
+            'loading-spinner';
+
+        sendButton.appendChild(spinner);
+        sendButton.appendChild(
+            document.createTextNode(
+                '選択した顧客へ送信'
+            )
         );
 
         sendButton.addEventListener(
             'click',
-            async () => {
-                const selected =
-                    Array.from(
-                        customerList.querySelectorAll(
-                            'input[type="checkbox"]:checked'
-                        )
-                    ).map(
-                        (checkbox) =>
-                            checkbox.value
-                    );
-
-                if (selected.length === 0) {
-                    showToast(
-                        '送信対象を選択してください。',
-                        'error'
-                    );
-                    return;
-                }
-
-                const confirmed =
-                    await confirmDialog(
-                        selected.length +
-                        '件の顧客へアンケートを送信しますか？'
-                    );
-
-                if (!confirmed) {
-                    return;
-                }
-
-                try {
-                    await apiPost(
-                        'send_survey',
-                        {
-                            survey_id:
-                                state.currentSurvey?.id ||
-                                '',
-                            customer_ids:
-                                selected
-                        },
-                        sendButton
-                    );
-
-                    showToast(
-                        'アンケートを送信しました。'
-                    );
-
-                    section.remove();
-
-                    loadSurveys();
-
-                } catch (error) {
-                    showToast(
-                        error?.message ||
-                        'アンケート送信に失敗しました。',
-                        'error'
-                    );
-                }
+            function () {
+                sendSurvey(
+                    sendButton
+                );
             }
         );
 
-        actionRow.appendChild(
-            backButton
-        );
+        right.appendChild(sendButton);
 
-        actionRow.appendChild(
-            sendButton
-        );
+        layout.appendChild(left);
+        layout.appendChild(right);
 
-        section.appendChild(
-            actionRow
-        );
+        container.appendChild(layout);
 
-        const page =
-            get('page-surveys');
+        await loadCustomers();
 
-        if (!page) {
+        renderSendCustomers();
+
+        if (search) {
+            search.addEventListener(
+                'input',
+                function () {
+                    renderSendCustomers();
+                }
+            );
+        }
+    }
+
+    function getSelectedCustomerIds() {
+        const checked =
+            document.querySelectorAll(
+                '#send-customer-body input[type="checkbox"]:checked'
+            );
+
+        const ids = [];
+
+        checked.forEach(function (input) {
+            if (
+                input instanceof HTMLInputElement
+            ) {
+                ids.push(input.value);
+            }
+        });
+
+        return ids;
+    }
+
+    function renderSendCustomers() {
+        const body =
+            $('send-customer-body');
+
+        if (!body) {
             return;
         }
 
-        page.appendChild(section);
+        body.textContent = '';
 
-        const renderSendCustomers =
-            (customers) => {
-                customerList.replaceChildren();
+        const search =
+            $('send-customer-search');
 
-                customers.forEach(
-                    (customer) => {
-                        const row =
-                            document.createElement(
-                                'div'
-                            );
+        const keyword =
+            search
+                ? search.value.trim().toLowerCase()
+                : '';
 
-                        row.className =
-                            'customer-row';
-
-                        const checkbox =
-                            document.createElement(
-                                'input'
-                            );
-
-                        checkbox.type =
-                            'checkbox';
-
-                        checkbox.value =
-                            String(
-                                customer?.id ??
-                                customer?.customer_id ??
-                                ''
-                            );
-
-                        const info =
-                            document.createElement(
-                                'div'
-                            );
-
-                        info.className =
-                            'customer-info';
-
-                        const name =
-                            document.createElement(
-                                'div'
-                            );
-
-                        name.className =
-                            'customer-name';
-
-                        name.textContent =
-                            customer?.name ||
-                            customer?.customer_name ||
-                            '';
-
-                        const email =
-                            document.createElement(
-                                'div'
-                            );
-
-                        email.className =
-                            'customer-email';
-
-                        email.textContent =
-                            customer?.email ||
-                            customer?.customer_email ||
-                            '';
-
-                        info.appendChild(name);
-                        info.appendChild(email);
-
-                        row.appendChild(
-                            checkbox
-                        );
-
-                        row.appendChild(
-                            info
-                        );
-
-                        customerList.appendChild(
-                            row
-                        );
+        const filtered =
+            customers.filter(
+                function (customer) {
+                    if (!keyword) {
+                        return true;
                     }
+
+                    const text =
+                        String(
+                            customer.name || ''
+                        ) +
+                        ' ' +
+                        String(
+                            customer.email || ''
+                        ) +
+                        ' ' +
+                        String(
+                            customer.company || ''
+                        );
+
+                    return text
+                        .toLowerCase()
+                        .includes(keyword);
+                }
+            );
+
+        filtered.forEach(
+            function (customer) {
+                const tr =
+                    document.createElement('tr');
+
+                const checkTd =
+                    document.createElement('td');
+
+                const check =
+                    document.createElement('input');
+
+                check.type = 'checkbox';
+                check.value =
+                    String(customer.id || '');
+
+                check.addEventListener(
+                    'change',
+                    updateSendSelection
                 );
-            };
 
-        renderSendCustomers(
-            state.customers
-        );
+                checkTd.appendChild(check);
 
-        search.addEventListener(
-            'input',
-            () => {
-                const keyword =
-                    search.value
-                        .trim()
-                        .toLowerCase();
+                const name =
+                    document.createElement('td');
 
-                const filtered =
-                    state.customers.filter(
-                        (customer) => {
-                            const name =
-                                String(
-                                    customer?.name ??
-                                    customer?.customer_name ??
-                                    ''
-                                ).toLowerCase();
+                name.textContent =
+                    String(customer.name || '');
 
-                            const email =
-                                String(
-                                    customer?.email ??
-                                    customer?.customer_email ??
-                                    ''
-                                ).toLowerCase();
+                const email =
+                    document.createElement('td');
 
-                            return (
-                                name.includes(keyword) ||
-                                email.includes(keyword)
-                            );
-                        }
-                    );
+                email.textContent =
+                    String(customer.email || '');
 
-                renderSendCustomers(
-                    filtered
-                );
+                const company =
+                    document.createElement('td');
+
+                company.textContent =
+                    String(customer.company || '');
+
+                tr.appendChild(checkTd);
+                tr.appendChild(name);
+                tr.appendChild(email);
+                tr.appendChild(company);
+
+                body.appendChild(tr);
             }
         );
+
+        updateSendSelection();
     }
 
-    /* =========================================================
-     * 回答者画面
-     * ========================================================= */
+    function updateSendSelection() {
+        const summary =
+            $('send-selection-summary');
 
-    async function loadPublicSurvey(surveyId) {
+        if (!summary) {
+            return;
+        }
+
+        const ids =
+            getSelectedCustomerIds();
+
+        summary.textContent =
+            '選択：' +
+            String(ids.length) +
+            '件';
+    }
+
+    async function sendSurvey(button) {
+        const ids =
+            getSelectedCustomerIds();
+
+        if (ids.length === 0) {
+            showToast(
+                '送信対象を選択してください。'
+            );
+            return;
+        }
+
+        if (
+            !window.confirm(
+                String(ids.length) +
+                '件の顧客へ送信しますか？'
+            )
+        ) {
+            return;
+        }
+
         try {
             const result =
-                await apiGet(
-                    'load_public_survey',
+                await apiPost(
+                    button,
+                    'send_survey',
                     {
-                        survey_id: surveyId
+                        survey_id:
+                            currentSurveyId,
+                        customer_ids: ids
                     }
                 );
 
-            const survey =
-                result?.data?.survey ?? null;
-
-            if (!survey) {
-                throw new Error(
-                    'アンケートを取得できませんでした。'
-                );
-            }
-
-            renderRespondentSurvey(
-                survey
+            showToast(
+                result.message ||
+                '送信対象を登録しました。'
             );
 
+            await openDetail(
+                currentSurveyId
+            );
         } catch (error) {
-            renderRespondentError(
-                error?.message ||
-                'アンケートを表示できませんでした。'
+            showToast(
+                error instanceof Error
+                    ? error.message
+                    : '送信処理に失敗しました。'
             );
         }
     }
 
-    function renderRespondentSurvey(survey) {
-        const app =
-            get('app');
-
-        const respondentPage =
-            get('respondent-page');
-
-        if (app) {
-            app.classList.add('hidden');
-        }
-
-        if (respondentPage) {
-            respondentPage.classList.remove(
-                'hidden'
+    async function renderDetailStatus(container) {
+        const response =
+            await loadAggregate(
+                currentSurveyId
             );
-        }
 
-        const content =
-            get('respondent-content');
+        const total =
+            Number(
+                response?.data?.total_responses || 0
+            );
 
-        if (!content) {
-            return;
-        }
+        const target =
+            Number(
+                currentSurvey?.target || 0
+            );
 
-        content.replaceChildren();
+        const rate =
+            target > 0
+                ? Math.round(
+                    total /
+                    target *
+                    1000
+                ) / 10
+                : 0;
 
-        const form =
-            document.createElement('form');
-
-        form.id =
-            'respondent-form';
-
-        const header =
+        const summary =
             document.createElement('div');
 
-        header.className =
-            'respondent-header';
+        summary.className =
+            'detail-summary';
+
+        [
+            ['回答数', String(total)],
+            ['回答率', String(rate) + '%'],
+            [
+                '未回答数',
+                String(
+                    Math.max(
+                        target - total,
+                        0
+                    )
+                )
+            ],
+            [
+                'メール送信済み',
+                String(
+                    Number(
+                        currentSurvey?.sent || 0
+                    )
+                )
+            ]
+        ].forEach(function (item) {
+            const card =
+                document.createElement('div');
+
+            card.className = 'stat-card';
+
+            const label =
+                document.createElement('div');
+
+            label.className = 'stat-label';
+            label.textContent = item[0];
+
+            const value =
+                document.createElement('div');
+
+            value.className = 'stat-value';
+            value.textContent = item[1];
+
+            card.appendChild(label);
+            card.appendChild(value);
+
+            summary.appendChild(card);
+        });
+
+        container.appendChild(summary);
+
+        const card =
+            document.createElement('div');
+
+        card.className = 'card';
 
         const title =
-            document.createElement('h1');
-
-        title.textContent =
-            survey?.title ||
-            'アンケート';
-
-        header.appendChild(title);
-
-        if (survey?.description) {
-            const description =
-                document.createElement('p');
-
-            description.textContent =
-                survey.description;
-
-            header.appendChild(
-                description
-            );
-        }
-
-        form.appendChild(header);
-
-        const questions = [];
-
-        if (Array.isArray(survey?.groups)) {
-            survey.groups.forEach(
-                (group) => {
-                    if (
-                        !Array.isArray(
-                            group?.questions
-                        )
-                    ) {
-                        return;
-                    }
-
-                    group.questions.forEach(
-                        (question) => {
-                            questions.push({
-                                group,
-                                question
-                            });
-                        }
-                    );
-                }
-            );
-        }
-
-        questions.forEach(
-            ({ question }, index) => {
-                const wrapper =
-                    document.createElement('section');
-
-                wrapper.className =
-                    'respondent-question';
-
-                const questionTitle =
-                    document.createElement('div');
-
-                questionTitle.className =
-                    'respondent-question-title';
-
-                questionTitle.textContent =
-                    (index + 1) +
-                    '. ' +
-                    (
-                        question?.title ||
-                        ''
-                    );
-
-                if (question?.required) {
-                    questionTitle.textContent +=
-                        '（必須）';
-                }
-
-                wrapper.appendChild(
-                    questionTitle
-                );
-
-                const questionId =
-                    String(
-                        question?.id ||
-                        'question_' + index
-                    );
-
-                if (
-                    question?.type === 'text' ||
-                    question?.type === 'textarea'
-                ) {
-                    const textarea =
-                        document.createElement(
-                            'textarea'
-                        );
-
-                    textarea.name =
-                        questionId;
-
-                    textarea.dataset.questionId =
-                        questionId;
-
-                    textarea.rows = 5;
-                    textarea.style.width =
-                        '100%';
-
-                    textarea.required =
-                        Boolean(
-                            question?.required
-                        );
-
-                    wrapper.appendChild(
-                        textarea
-                    );
-
-                } else if (
-                    Array.isArray(
-                        question?.options
-                    )
-                ) {
-                    question.options.forEach(
-                        (option, optionIndex) => {
-                            const row =
-                                document.createElement(
-                                    'div'
-                                );
-
-                            row.className =
-                                'respondent-option';
-
-                            const label =
-                                document.createElement(
-                                    'label'
-                                );
-
-                            const input =
-                                document.createElement(
-                                    'input'
-                                );
-
-                            input.type =
-                                question.type ===
-                                'multiple'
-                                    ? 'checkbox'
-                                    : 'radio';
-
-                            input.name =
-                                question.type ===
-                                'multiple'
-                                    ? questionId +
-                                      '[]'
-                                    : questionId;
-
-                            input.value =
-                                String(
-                                    option?.id ??
-                                    optionIndex
-                                );
-
-                            input.dataset.questionId =
-                                questionId;
-
-                            input.dataset.optionId =
-                                String(
-                                    option?.id ??
-                                    optionIndex
-                                );
-
-                            input.required =
-                                question.type !==
-                                'multiple' &&
-                                Boolean(
-                                    question?.required
-                                );
-
-                            const text =
-                                document.createElement(
-                                    'span'
-                                );
-
-                            text.textContent =
-                                option?.label ||
-                                '';
-
-                            label.appendChild(
-                                input
-                            );
-
-                            label.appendChild(
-                                text
-                            );
-
-                            row.appendChild(
-                                label
-                            );
-
-                            wrapper.appendChild(
-                                row
-                            );
-                        }
-                    );
-                }
-
-                form.appendChild(wrapper);
-            }
-        );
-
-        const action =
             document.createElement('div');
 
-        action.className =
-            'action-row right';
+        title.className = 'card-title';
+        title.textContent = '回答状況';
 
-        const submit =
-            document.createElement('button');
+        card.appendChild(title);
 
-        submit.type = 'submit';
-        submit.className =
-            'btn btn-primary';
+        const progress =
+            document.createElement('div');
 
-        submit.innerHTML =
-            '<span class="loading-spinner"></span>回答を送信';
+        progress.className = 'progress';
 
-        action.appendChild(submit);
+        const bar =
+            document.createElement('span');
 
-        form.appendChild(action);
+        bar.style.width =
+            Math.min(rate, 100) + '%';
 
-        form.addEventListener(
-            'submit',
-            async (event) => {
-                event.preventDefault();
+        progress.appendChild(bar);
 
-                setButtonLoadingImmediately(
-                    submit
-                );
+        card.appendChild(progress);
 
-                const answers = {};
-
-                questions.forEach(
-                    ({ question }) => {
-                        const questionId =
-                            String(
-                                question?.id ||
-                                ''
-                            );
-
-                        if (!questionId) {
-                            return;
-                        }
-
-                        if (
-                            question?.type ===
-                                'text' ||
-                            question?.type ===
-                                'textarea'
-                        ) {
-                            const field =
-                                form.querySelector(
-                                    '[name="' +
-                                    CSS.escape(
-                                        questionId
-                                    ) +
-                                    '"]'
-                                );
-
-                            answers[questionId] =
-                                field?.value ||
-                                '';
-
-                            return;
-                        }
-
-                        const fields =
-                            form.querySelectorAll(
-                                '[data-question-id="' +
-                                CSS.escape(
-                                    questionId
-                                ) +
-                                '"]'
-                            );
-
-                        const selected =
-                            Array.from(fields)
-                                .filter(
-                                    (field) =>
-                                        field.checked
-                                )
-                                .map(
-                                    (field) =>
-                                        field.dataset
-                                            .optionId ||
-                                        field.value
-                                );
-
-                        answers[questionId] =
-                            question?.type ===
-                            'multiple'
-                                ? selected
-                                : (
-                                    selected[0] ||
-                                    ''
-                                );
-                    }
-                );
-
-                try {
-                    await apiPost(
-                        'save_response',
-                        {
-                            survey_id:
-                                survey?.id ||
-                                '',
-                            response_token:
-                                survey?.response_token ||
-                                '',
-                            answers
-                        },
-                        submit
-                    );
-
-                    content.replaceChildren();
-
-                    const complete =
-                        document.createElement(
-                            'div'
-                        );
-
-                    complete.className =
-                        'respondent-complete';
-
-                    const heading =
-                        document.createElement(
-                            'h1'
-                        );
-
-                    heading.textContent =
-                        '回答ありがとうございました。';
-
-                    const message =
-                        document.createElement(
-                            'p'
-                        );
-
-                    message.textContent =
-                        '回答を受け付けました。';
-
-                    complete.appendChild(
-                        heading
-                    );
-
-                    complete.appendChild(
-                        message
-                    );
-
-                    content.appendChild(
-                        complete
-                    );
-
-                } catch (error) {
-                    setButtonLoading(
-                        submit,
-                        false
-                    );
-
-                    showToast(
-                        error?.message ||
-                        '回答を送信できませんでした。',
-                        'error'
-                    );
-                }
-            }
-        );
-
-        content.appendChild(form);
+        container.appendChild(card);
     }
 
-    function renderRespondentError(message) {
-        const app =
-            get('app');
-
-        const respondentPage =
-            get('respondent-page');
-
-        if (app) {
-            app.classList.add('hidden');
-        }
-
-        if (respondentPage) {
-            respondentPage.classList.remove(
-                'hidden'
+    async function renderDetailResult(container) {
+        const result =
+            await loadAggregate(
+                currentSurveyId
             );
-        }
 
-        const content =
-            get('respondent-content');
+        const results =
+            Array.isArray(
+                result?.data?.results
+            )
+                ? result.data.results
+                : [];
 
-        if (!content) {
+        if (results.length === 0) {
+            const notice =
+                document.createElement('div');
+
+            notice.className =
+                'notice';
+
+            notice.textContent =
+                '回答結果はまだありません。';
+
+            container.appendChild(notice);
+
             return;
         }
 
-        content.replaceChildren();
-
-        const box =
+        const layout =
             document.createElement('div');
 
-        box.className =
-            'respondent-complete';
+        layout.className =
+            'result-layout';
 
-        const heading =
-            document.createElement('h1');
+        const menu =
+            document.createElement('div');
 
-        heading.textContent =
-            'アンケートを表示できません。';
+        menu.className = 'card';
 
-        const messageElement =
-            document.createElement('p');
+        const content =
+            document.createElement('div');
 
-        messageElement.textContent =
-            String(message ?? '');
-
-        box.appendChild(heading);
-        box.appendChild(messageElement);
-
-        content.appendChild(box);
-    }
-
-    /* =========================================================
-     * 初期画面判定
-     * ========================================================= */
-
-    const urlParams =
-        new URLSearchParams(
-            window.location.search
-        );
-
-    const publicSurveyId =
-        urlParams.get(
-            'survey_id'
-        );
-
-    const publicMode =
-        urlParams.get(
-            'respond'
-        );
-
-    if (
-        publicMode === '1' &&
-        publicSurveyId
-    ) {
-        loadPublicSurvey(
-            publicSurveyId
-        );
-    } else {
-        showPage('dashboard');
-    }
-
-});
-</script>
-
-</body>
-</html>
+        content.className = '
