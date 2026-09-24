@@ -9,6 +9,25 @@ data/settings.json
 surveys.json
 
 
+---
+
+localStorage に保存している旧版のアプリデータは引き継がない。
+
+新しい index.php を初回表示した際、旧版の保存データを検出したら破棄する。
+
+特に、CSRFトークンを localStorage に保存しない。CSRFトークンはサーバー側セッションを正とする。
+
+メール設定など、サーバー側のJSONに保存済みの正式な設定は、localStorage ではなくサーバー側のデータを読み込む。
+
+localStorage を使う必要がある画面状態については、アプリのバージョン識別子を持たせる。
+
+index.php を差し替えてバージョンが変わったら、旧バージョンの localStorage をクリアして、新しい状態から開始する。
+
+ただし、サーバー側の data/settings.json に保存済みのメール設定まで消してはいけない。
+
+---
+
+
 PHP + HTML + CSS + JavaScript を全部 index.php 1ファイルにまとめる前提でも、かなりの行数を出せます。
 
 目安としては：
