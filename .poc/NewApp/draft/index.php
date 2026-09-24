@@ -3973,3 +3973,5721 @@ button:disabled{
 }
 </style>
 </head>
+<body>
+
+<header class="topbar" id="operator-header">
+    <div class="logo">アンケート業務運営</div>
+
+    <nav class="main-nav" aria-label="メインメニュー">
+        <button id="nav-list" type="button">アンケート一覧</button>
+        <button id="nav-create" type="button">アンケート作成</button>
+        <button id="nav-customers" type="button">顧客一覧</button>
+        <button id="nav-settings" type="button">設定</button>
+    </nav>
+</header>
+
+<main class="app" id="operator-app">
+
+<section id="page-list">
+    <div class="page-header">
+        <div>
+            <h1>アンケート一覧</h1>
+            <div class="subtext">作成済みのアンケートを管理します</div>
+        </div>
+
+        <button
+            id="btn-open-create"
+            class="btn btn-primary"
+            type="button"
+        >
+            <span class="loading-spinner"></span>
+            ＋ アンケート作成
+        </button>
+    </div>
+
+    <div id="list-notice"></div>
+
+    <div class="card">
+        <div class="table-wrap">
+            <table class="table">
+                <thead>
+                <tr>
+                    <th>アンケート名</th>
+                    <th>状態</th>
+                    <th>作成日</th>
+                    <th>公開期間</th>
+                    <th>回答数</th>
+                    <th>最終更新日</th>
+                    <th>操作</th>
+                </tr>
+                </thead>
+                <tbody id="survey-list-body"></tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+
+<section id="page-editor" class="hidden">
+
+    <div class="page-header">
+        <div>
+            <h1 id="editor-page-title">アンケート作成</h1>
+            <div class="subtext">
+                アンケート全体を1画面で編集できます
+            </div>
+        </div>
+    </div>
+
+    <div id="editor-notice"></div>
+
+    <div class="notice">
+        質問とグループはドラッグ＆ドロップで並べ替えできます。
+        質問番号は自動的に更新されます。
+    </div>
+
+    <div class="card">
+
+        <div class="form-grid">
+
+            <div class="field">
+                <label for="survey-name">
+                    アンケート名 *
+                </label>
+
+                <input
+                    id="survey-name"
+                    type="text"
+                    maxlength="200"
+                    placeholder="例：新商品アンケート"
+                >
+            </div>
+
+            <div class="field">
+                <label for="survey-status">
+                    公開状態
+                </label>
+
+                <select id="survey-status">
+                    <option value="draft">下書き</option>
+                    <option value="open">公開中</option>
+                    <option value="end">終了</option>
+                </select>
+            </div>
+
+        </div>
+
+
+        <div class="field">
+            <label for="survey-description">
+                説明
+            </label>
+
+            <textarea
+                id="survey-description"
+                maxlength="2000"
+                placeholder="回答者への説明を入力してください"
+            ></textarea>
+        </div>
+
+
+        <div class="form-grid">
+
+            <div class="field">
+                <label for="survey-start">
+                    公開開始日
+                </label>
+
+                <input
+                    id="survey-start"
+                    type="date"
+                >
+            </div>
+
+            <div class="field">
+                <label for="survey-end">
+                    公開終了日
+                </label>
+
+                <input
+                    id="survey-end"
+                    type="date"
+                >
+            </div>
+
+        </div>
+
+
+        <div class="field">
+
+            <label>
+                質問番号
+            </label>
+
+            <div class="radio-row">
+
+                <label>
+                    <input
+                        type="radio"
+                        name="numbering"
+                        value="global"
+                    >
+                    全体で通番（Q1、Q2、Q3…）
+                </label>
+
+                <label>
+                    <input
+                        type="radio"
+                        name="numbering"
+                        value="group"
+                    >
+                    グループごと（Q1-1、Q1-2、Q2-1…）
+                </label>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <div id="groups"></div>
+
+
+    <div class="add-group-area">
+
+        <button
+            id="btn-add-group"
+            class="btn btn-primary"
+            type="button"
+        >
+            ＋ グループ追加
+        </button>
+
+    </div>
+
+
+    <div class="editor-toolbar">
+
+        <div class="editor-actions">
+
+            <button
+                id="btn-editor-back"
+                class="btn"
+                type="button"
+            >
+                一覧へ戻る
+            </button>
+
+        </div>
+
+        <div class="editor-actions">
+
+            <button
+                id="btn-save-survey"
+                class="btn btn-primary"
+                type="button"
+            >
+                <span class="loading-spinner"></span>
+                保存する
+            </button>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+<section id="page-detail" class="hidden">
+
+    <div class="page-header">
+
+        <div>
+            <h1 id="detail-title">
+                アンケート詳細
+            </h1>
+
+            <div
+                id="detail-subtitle"
+                class="subtext"
+            ></div>
+        </div>
+
+        <div class="editor-actions">
+
+            <button
+                id="btn-detail-back"
+                class="btn"
+                type="button"
+            >
+                一覧へ戻る
+            </button>
+
+            <button
+                id="btn-detail-edit"
+                class="btn btn-primary"
+                type="button"
+            >
+                編集
+            </button>
+
+        </div>
+
+    </div>
+
+
+    <div id="detail-notice"></div>
+
+
+    <div class="detail-summary">
+
+        <div class="summary-item">
+            <div class="summary-label">
+                状態
+            </div>
+
+            <div
+                id="detail-status"
+                class="summary-value"
+            ></div>
+        </div>
+
+
+        <div class="summary-item">
+            <div class="summary-label">
+                回答数
+            </div>
+
+            <div
+                id="detail-answers"
+                class="summary-value"
+            >
+                0
+            </div>
+        </div>
+
+
+        <div class="summary-item">
+            <div class="summary-label">
+                対象者数
+            </div>
+
+            <div
+                id="detail-target"
+                class="summary-value"
+            >
+                0
+            </div>
+        </div>
+
+
+        <div class="summary-item">
+            <div class="summary-label">
+                送信数
+            </div>
+
+            <div
+                id="detail-sent"
+                class="summary-value"
+            >
+                0
+            </div>
+        </div>
+
+    </div>
+
+
+    <div class="card">
+
+        <div class="card-title">
+            アンケート情報
+        </div>
+
+        <div class="detail-grid">
+
+            <div>
+                <div class="detail-label">
+                    説明
+                </div>
+
+                <div
+                    id="detail-description"
+                    class="detail-value"
+                ></div>
+            </div>
+
+
+            <div>
+                <div class="detail-label">
+                    公開期間
+                </div>
+
+                <div
+                    id="detail-period"
+                    class="detail-value"
+                ></div>
+            </div>
+
+
+            <div>
+                <div class="detail-label">
+                    作成日
+                </div>
+
+                <div
+                    id="detail-created"
+                    class="detail-value"
+                ></div>
+            </div>
+
+
+            <div>
+                <div class="detail-label">
+                    最終更新日
+                </div>
+
+                <div
+                    id="detail-updated"
+                    class="detail-value"
+                ></div>
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <div class="card">
+
+        <div class="card-title">
+            質問内容
+        </div>
+
+        <div id="detail-questions"></div>
+
+    </div>
+
+
+    <div class="card">
+
+        <div class="card-title">
+            回答結果
+        </div>
+
+        <div class="editor-actions">
+
+            <button
+                id="btn-show-results"
+                class="btn btn-primary"
+                type="button"
+            >
+                <span class="loading-spinner"></span>
+                回答結果を表示
+            </button>
+
+        </div>
+
+        <div
+            id="detail-results"
+            class="hidden"
+        ></div>
+
+    </div>
+
+
+    <div class="card">
+
+        <div class="card-title">
+            回答依頼
+        </div>
+
+        <div class="send-layout">
+
+            <div>
+
+                <div class="field">
+
+                    <label for="send-subject">
+                        メール件名
+                    </label>
+
+                    <input
+                        id="send-subject"
+                        type="text"
+                        maxlength="200"
+                        placeholder="アンケートご協力のお願い"
+                    >
+
+                </div>
+
+
+                <div class="field">
+
+                    <label for="send-body">
+                        メール本文
+                    </label>
+
+                    <textarea
+                        id="send-body"
+                        maxlength="5000"
+                        placeholder="アンケートへのご協力をお願いいたします。"
+                    ></textarea>
+
+                </div>
+
+            </div>
+
+
+            <div>
+
+                <div class="field">
+
+                    <label>
+                        送信対象
+                    </label>
+
+                    <div
+                        id="send-target-count"
+                        class="target-count"
+                    >
+                        対象者：0名
+                    </div>
+
+                </div>
+
+
+                <button
+                    id="btn-send-survey"
+                    class="btn btn-primary"
+                    type="button"
+                >
+                    <span class="loading-spinner"></span>
+                    回答依頼を送信
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+<section id="page-customers" class="hidden">
+
+    <div class="page-header">
+
+        <div>
+
+            <h1>
+                顧客一覧
+            </h1>
+
+            <div class="subtext">
+                kintoneから取得した顧客情報を確認します
+            </div>
+
+        </div>
+
+
+        <button
+            id="btn-refresh-customers"
+            class="btn btn-primary"
+            type="button"
+        >
+            <span class="loading-spinner"></span>
+            顧客情報を更新
+        </button>
+
+    </div>
+
+
+    <div id="customers-notice"></div>
+
+
+    <div class="card">
+
+        <div class="table-wrap">
+
+            <table class="table">
+
+                <thead>
+
+                <tr>
+                    <th>顧客ID</th>
+                    <th>会社名</th>
+                    <th>顧客名</th>
+                    <th>メールアドレス</th>
+                </tr>
+
+                </thead>
+
+                <tbody id="customer-list-body"></tbody>
+
+            </table>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+<section id="page-settings" class="hidden">
+
+    <div class="page-header">
+
+        <div>
+
+            <h1>
+                設定
+            </h1>
+
+            <div class="subtext">
+                アンケート運営に必要な接続情報を設定します
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <div id="settings-notice"></div>
+
+
+    <div class="settings-tabs">
+
+        <button
+            id="settings-tab-kintone"
+            type="button"
+            class="active"
+        >
+            kintone設定
+        </button>
+
+        <button
+            id="settings-tab-mail"
+            type="button"
+        >
+            メール設定
+        </button>
+
+    </div>
+
+
+    <div
+        id="settings-panel-kintone"
+    >
+
+        <div class="card">
+
+            <div class="card-title">
+                kintone接続設定
+            </div>
+
+
+            <div
+                id="kintone-status-line"
+                class="status-line"
+            >
+
+                <span
+                    id="kintone-status-dot"
+                    class="status-dot"
+                ></span>
+
+                <span
+                    id="kintone-status-text"
+                >
+                    未確認
+                </span>
+
+            </div>
+
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="kintone-domain">
+                        kintoneドメイン *
+                    </label>
+
+                    <input
+                        id="kintone-domain"
+                        type="text"
+                        maxlength="200"
+                        placeholder="例：example.cybozu.com"
+                    >
+
+                    <div class="field-help">
+                        https:// や .cybozu.com を含めても設定できます。
+                    </div>
+
+                </div>
+
+
+                <div class="field">
+
+                    <label for="kintone-app-id">
+                        顧客アプリID
+                    </label>
+
+                    <input
+                        id="kintone-app-id"
+                        type="text"
+                        maxlength="50"
+                        inputmode="numeric"
+                        placeholder="例：123"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="kintone-login-name">
+                        ログイン名 *
+                    </label>
+
+                    <input
+                        id="kintone-login-name"
+                        type="text"
+                        maxlength="200"
+                        autocomplete="off"
+                    >
+
+                </div>
+
+
+                <div class="field">
+
+                    <label for="kintone-password">
+                        パスワード *
+                    </label>
+
+                    <input
+                        id="kintone-password"
+                        type="password"
+                        maxlength="500"
+                        autocomplete="new-password"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="kintone-proxy-host">
+                        プロキシホスト
+                    </label>
+
+                    <input
+                        id="kintone-proxy-host"
+                        type="text"
+                        maxlength="255"
+                        placeholder="例：proxy.example.local"
+                    >
+
+                </div>
+
+
+                <div class="field">
+
+                    <label for="kintone-proxy-port">
+                        プロキシポート
+                    </label>
+
+                    <input
+                        id="kintone-proxy-port"
+                        type="text"
+                        maxlength="10"
+                        inputmode="numeric"
+                        placeholder="例：8080"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div class="field">
+
+                <label>
+                    顧客アプリの項目設定
+                </label>
+
+            </div>
+
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="kintone-customer-id-field">
+                        顧客ID項目名
+                    </label>
+
+                    <input
+                        id="kintone-customer-id-field"
+                        type="text"
+                        maxlength="100"
+                        placeholder="例：customer_id"
+                    >
+
+                </div>
+
+
+                <div class="field">
+
+                    <label for="kintone-customer-name-field">
+                        顧客名項目名
+                    </label>
+
+                    <input
+                        id="kintone-customer-name-field"
+                        type="text"
+                        maxlength="100"
+                        placeholder="例：customer_name"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="kintone-customer-email-field">
+                        メールアドレス項目名
+                    </label>
+
+                    <input
+                        id="kintone-customer-email-field"
+                        type="text"
+                        maxlength="100"
+                        placeholder="例：email"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div class="editor-actions">
+
+                <button
+                    id="btn-test-kintone"
+                    class="btn"
+                    type="button"
+                >
+                    <span class="loading-spinner"></span>
+                    接続テスト
+                </button>
+
+
+                <button
+                    id="btn-save-kintone"
+                    class="btn btn-primary"
+                    type="button"
+                >
+                    <span class="loading-spinner"></span>
+                    kintone設定を保存
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <div
+        id="settings-panel-mail"
+        class="hidden"
+    >
+
+        <div class="card">
+
+            <div class="card-title">
+                メール設定
+            </div>
+
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="mail-smtp-server">
+                        SMTPサーバー
+                    </label>
+
+                    <input
+                        id="mail-smtp-server"
+                        type="text"
+                        maxlength="255"
+                    >
+
+                </div>
+
+
+                <div class="field">
+
+                    <label for="mail-smtp-port">
+                        SMTPポート
+                    </label>
+
+                    <input
+                        id="mail-smtp-port"
+                        type="text"
+                        maxlength="10"
+                        inputmode="numeric"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="mail-connection-type">
+                        接続方式
+                    </label>
+
+                    <select id="mail-connection-type">
+
+                        <option value="tls">
+                            TLS
+                        </option>
+
+                        <option value="ssl">
+                            SSL
+                        </option>
+
+                        <option value="none">
+                            なし
+                        </option>
+
+                    </select>
+
+                </div>
+
+
+                <div class="field">
+
+                    <label for="mail-username">
+                        SMTPユーザー名
+                    </label>
+
+                    <input
+                        id="mail-username"
+                        type="text"
+                        maxlength="255"
+                        autocomplete="off"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="mail-password">
+                        SMTPパスワード
+                    </label>
+
+                    <input
+                        id="mail-password"
+                        type="password"
+                        maxlength="500"
+                        autocomplete="new-password"
+                    >
+
+                </div>
+
+
+                <div class="field">
+
+                    <label for="mail-from-email">
+                        送信元メールアドレス
+                    </label>
+
+                    <input
+                        id="mail-from-email"
+                        type="email"
+                        maxlength="255"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div class="field">
+
+                <label for="mail-from-name">
+                    送信元名称
+                </label>
+
+                <input
+                    id="mail-from-name"
+                    type="text"
+                    maxlength="100"
+                >
+
+            </div>
+
+
+            <div class="editor-actions">
+
+                <button
+                    id="btn-test-mail"
+                    class="btn"
+                    type="button"
+                >
+                    <span class="loading-spinner"></span>
+                    メール設定を確認
+                </button>
+
+
+                <button
+                    id="btn-save-mail"
+                    class="btn btn-primary"
+                    type="button"
+                >
+                    <span class="loading-spinner"></span>
+                    メール設定を保存
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
+
+</main>
+
+
+<div
+    id="toast"
+    class="toast"
+    role="status"
+    aria-live="polite"
+></div>
+
+
+<div
+    id="modal"
+    class="modal-backdrop hidden"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="modal-title"
+>
+
+    <div class="modal">
+
+        <div class="modal-header">
+
+            <div
+                id="modal-title"
+                class="card-title"
+            >
+                確認
+            </div>
+
+            <button
+                id="modal-close"
+                class="btn btn-small"
+                type="button"
+                aria-label="閉じる"
+            >
+                ×
+            </button>
+
+        </div>
+
+
+        <div
+            id="modal-body"
+            class="modal-body"
+        ></div>
+
+
+        <div class="modal-footer">
+
+            <button
+                id="modal-cancel"
+                class="btn"
+                type="button"
+            >
+                キャンセル
+            </button>
+
+            <button
+                id="modal-ok"
+                class="btn btn-primary"
+                type="button"
+            >
+                実行
+            </button>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    'use strict';
+
+    /*
+     * 画面状態
+     */
+    let currentPage = 'list';
+    let surveys = [];
+    let customers = [];
+    let editingSurvey = null;
+    let selectedSurveyId = '';
+    let currentSettings = null;
+
+    let draggedGroup = '';
+    let draggedQuestion = '';
+
+    let modalResolve = null;
+
+
+    /*
+     * DOM取得
+     */
+    const apiPathElement =
+        document.querySelector('meta[name="api-path"]');
+
+    const csrfElement =
+        document.querySelector('meta[name="csrf-token"]');
+
+    const apiPath =
+        apiPathElement
+            ? String(apiPathElement.getAttribute('content') || '')
+            : '';
+
+    const csrfToken =
+        csrfElement
+            ? String(csrfElement.getAttribute('content') || '')
+            : '';
+
+
+    /*
+     * 要素取得ヘルパー
+     */
+    function getElement(id) {
+        return document.getElementById(id);
+    }
+
+
+    /*
+     * 通知表示
+     */
+    function showNotice(targetId, message, type) {
+        const target = getElement(targetId);
+
+        if (!target) {
+            return;
+        }
+
+        while (target.firstChild) {
+            target.removeChild(target.firstChild);
+        }
+
+        const box = document.createElement('div');
+
+        box.className =
+            'notice ' +
+            (type === 'error'
+                ? 'notice-error'
+                : type === 'success'
+                    ? 'notice-success'
+                    : '');
+
+        box.textContent = String(message || '');
+
+        target.appendChild(box);
+    }
+
+
+    /*
+     * トースト
+     */
+    let toastTimer = null;
+
+    function showToast(message) {
+        const toast = getElement('toast');
+
+        if (!toast) {
+            return;
+        }
+
+        toast.textContent = String(message || '');
+        toast.classList.add('show');
+
+        if (toastTimer !== null) {
+            window.clearTimeout(toastTimer);
+        }
+
+        toastTimer = window.setTimeout(
+            function () {
+                toast.classList.remove('show');
+            },
+            3000
+        );
+    }
+
+
+    /*
+     * API通信
+     */
+    async function apiRequest(
+        action,
+        method,
+        data,
+        button
+    ) {
+        const requestButton = button || null;
+
+        if (requestButton) {
+            requestButton.disabled = true;
+            requestButton.classList.add('is-loading');
+        }
+
+        try {
+            const requestOptions = {
+                method: method || 'GET',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            };
+
+            if (
+                requestOptions.method !== 'GET' &&
+                requestOptions.method !== 'HEAD'
+            ) {
+                requestOptions.headers['Content-Type'] =
+                    'application/json';
+
+                requestOptions.headers['X-CSRF-Token'] =
+                    csrfToken;
+
+                requestOptions.body =
+                    JSON.stringify(data || {});
+            }
+
+            const separator =
+                apiPath.indexOf('?') >= 0
+                    ? '&'
+                    : '?';
+
+            const url =
+                apiPath +
+                separator +
+                'action=' +
+                encodeURIComponent(String(action || ''));
+
+            const response =
+                await fetch(
+                    url,
+                    requestOptions
+                );
+
+            let result = null;
+
+            try {
+                result = await response.json();
+            } catch (error) {
+                throw new Error(
+                    'サーバーから正しい応答を取得できませんでした。'
+                );
+            }
+
+            if (!response.ok || !result || result.success !== true) {
+                const message =
+                    result &&
+                    typeof result.message === 'string' &&
+                    result.message !== ''
+                        ? result.message
+                        : '処理に失敗しました。';
+
+                throw new Error(message);
+            }
+
+            return result;
+
+        } finally {
+            if (requestButton) {
+                requestButton.disabled = false;
+                requestButton.classList.remove('is-loading');
+            }
+        }
+    }
+
+
+    /*
+     * 画面切り替え
+     */
+    function showPage(pageName) {
+        const pages = [
+            'page-list',
+            'page-editor',
+            'page-detail',
+            'page-customers',
+            'page-settings'
+        ];
+
+        pages.forEach(function (pageId) {
+            const page = getElement(pageId);
+
+            if (!page) {
+                return;
+            }
+
+            page.classList.toggle(
+                'hidden',
+                pageId !== 'page-' + pageName
+            );
+        });
+
+        currentPage = pageName;
+
+        const navMap = {
+            list: 'nav-list',
+            editor: 'nav-create',
+            detail: 'nav-list',
+            customers: 'nav-customers',
+            settings: 'nav-settings'
+        };
+
+        Object.keys(navMap).forEach(function (key) {
+            const button =
+                getElement(navMap[key]);
+
+            if (!button) {
+                return;
+            }
+
+            button.classList.toggle(
+                'active',
+                key === pageName ||
+                (
+                    pageName === 'detail' &&
+                    key === 'list'
+                )
+            );
+        });
+    }
+
+
+    /*
+     * 日付表示
+     */
+    function formatDate(value) {
+        const text = String(value || '');
+
+        if (text === '') {
+            return '－';
+        }
+
+        return text;
+    }
+
+
+    /*
+     * 状態表示
+     */
+    function statusLabel(status) {
+        const labels = {
+            draft: '下書き',
+            open: '公開中',
+            end: '終了'
+        };
+
+        return labels[String(status || '')] || '－';
+    }
+
+
+    /*
+     * 配列保証
+     */
+    function asArray(value) {
+        return Array.isArray(value)
+            ? value
+            : [];
+    }
+
+
+    /*
+     * アンケート一覧取得
+     */
+    async function loadSurveys(button) {
+        try {
+            const result =
+                await apiRequest(
+                    'list_surveys',
+                    'GET',
+                    {},
+                    button
+                );
+
+            surveys =
+                asArray(
+                    result &&
+                    result.data &&
+                    result.data.surveys
+                );
+
+            renderSurveyList();
+
+        } catch (error) {
+            showNotice(
+                'list-notice',
+                error instanceof Error
+                    ? error.message
+                    : 'アンケート一覧を取得できませんでした。',
+                'error'
+            );
+        }
+    }
+
+
+    /*
+     * アンケート一覧描画
+     */
+    function renderSurveyList() {
+        const body =
+            getElement('survey-list-body');
+
+        if (!body) {
+            return;
+        }
+
+        while (body.firstChild) {
+            body.removeChild(body.firstChild);
+        }
+
+        if (surveys.length === 0) {
+            const row =
+                document.createElement('tr');
+
+            const cell =
+                document.createElement('td');
+
+            cell.colSpan = 7;
+            cell.className = 'empty-cell';
+            cell.textContent =
+                '登録されているアンケートはありません。';
+
+            row.appendChild(cell);
+            body.appendChild(row);
+
+            return;
+        }
+
+        surveys.forEach(function (survey) {
+
+            if (!survey || typeof survey !== 'object') {
+                return;
+            }
+
+            const row =
+                document.createElement('tr');
+
+
+            const nameCell =
+                document.createElement('td');
+
+            const nameButton =
+                document.createElement('button');
+
+            nameButton.type = 'button';
+            nameButton.className = 'link-button';
+            nameButton.textContent =
+                String(survey.name || '名称未設定');
+
+            nameButton.addEventListener(
+                'click',
+                function () {
+                    openSurveyDetail(
+                        String(survey.id || '')
+                    );
+                }
+            );
+
+            nameCell.appendChild(nameButton);
+            row.appendChild(nameCell);
+
+
+            const statusCell =
+                document.createElement('td');
+
+            const statusBadge =
+                document.createElement('span');
+
+            statusBadge.className =
+                'status-badge status-' +
+                String(survey.status || 'draft');
+
+            statusBadge.textContent =
+                statusLabel(survey.status);
+
+            statusCell.appendChild(statusBadge);
+            row.appendChild(statusCell);
+
+
+            const createdCell =
+                document.createElement('td');
+
+            createdCell.textContent =
+                formatDate(survey.created);
+
+            row.appendChild(createdCell);
+
+
+            const periodCell =
+                document.createElement('td');
+
+            const start =
+                String(survey.start || '');
+
+            const end =
+                String(survey.end || '');
+
+            if (start === '' && end === '') {
+                periodCell.textContent = '－';
+            } else {
+                periodCell.textContent =
+                    (start || '－') +
+                    ' ～ ' +
+                    (end || '－');
+            }
+
+            row.appendChild(periodCell);
+
+
+            const answersCell =
+                document.createElement('td');
+
+            answersCell.textContent =
+                String(
+                    Number.isFinite(
+                        Number(survey.answers)
+                    )
+                        ? Number(survey.answers)
+                        : 0
+                );
+
+            row.appendChild(answersCell);
+
+
+            const updatedCell =
+                document.createElement('td');
+
+            updatedCell.textContent =
+                formatDate(survey.updated);
+
+            row.appendChild(updatedCell);
+
+
+            const actionCell =
+                document.createElement('td');
+
+            const actionArea =
+                document.createElement('div');
+
+            actionArea.className =
+                'table-actions';
+
+
+            const detailButton =
+                document.createElement('button');
+
+            detailButton.type = 'button';
+            detailButton.className =
+                'btn btn-small';
+
+            detailButton.textContent =
+                '詳細';
+
+            detailButton.addEventListener(
+                'click',
+                function () {
+                    openSurveyDetail(
+                        String(survey.id || '')
+                    );
+                }
+            );
+
+            actionArea.appendChild(detailButton);
+
+
+            const editButton =
+                document.createElement('button');
+
+            editButton.type = 'button';
+            editButton.className =
+                'btn btn-small';
+
+            editButton.textContent =
+                '編集';
+
+            editButton.addEventListener(
+                'click',
+                function () {
+                    openSurveyEditor(
+                        String(survey.id || '')
+                    );
+                }
+            );
+
+            actionArea.appendChild(editButton);
+
+
+            const deleteButton =
+                document.createElement('button');
+
+            deleteButton.type = 'button';
+            deleteButton.className =
+                'btn btn-small btn-danger';
+
+            deleteButton.textContent =
+                '削除';
+
+            deleteButton.addEventListener(
+                'click',
+                async function () {
+                    await deleteSurvey(
+                        String(survey.id || ''),
+                        deleteButton
+                    );
+                }
+            );
+
+            actionArea.appendChild(deleteButton);
+
+            actionCell.appendChild(actionArea);
+            row.appendChild(actionCell);
+
+            body.appendChild(row);
+        });
+    }
+
+
+    /*
+     * アンケート作成
+     */
+    function createEmptySurvey() {
+        return {
+            id: '',
+            name: '',
+            description: '',
+            status: 'draft',
+            created: '',
+            start: '',
+            end: '',
+            answers: 0,
+            target: 0,
+            sent: 0,
+            updated: '',
+            numbering: 'global',
+            groups: [
+                {
+                    id: createClientId('group'),
+                    name: 'グループ1',
+                    questions: [
+                        {
+                            id: createClientId('question'),
+                            text: '',
+                            type: 'free',
+                            required: false,
+                            options: []
+                        }
+                    ]
+                }
+            ]
+        };
+    }
+
+
+    /*
+     * ブラウザ側ID
+     */
+    function createClientId(prefix) {
+        return (
+            String(prefix || 'item') +
+            '_' +
+            Date.now().toString(36) +
+            '_' +
+            Math.random()
+                .toString(36)
+                .slice(2, 10)
+        );
+    }
+
+
+    /*
+     * 編集画面
+     */
+    function openSurveyEditor(surveyId) {
+        let survey = null;
+
+        surveys.forEach(function (item) {
+            if (
+                item &&
+                String(item.id || '') ===
+                    String(surveyId || '')
+            ) {
+                survey = item;
+            }
+        });
+
+        if (!survey) {
+            showNotice(
+                'list-notice',
+                '対象のアンケートが見つかりません。',
+                'error'
+            );
+            return;
+        }
+
+        editingSurvey =
+            JSON.parse(
+                JSON.stringify(survey)
+            );
+
+        setupEditorForm();
+        renderEditor();
+        showPage('editor');
+    }
+
+
+    /*
+     * 新規作成画面
+     */
+    function openNewSurveyEditor() {
+        editingSurvey =
+            createEmptySurvey();
+
+        setupEditorForm();
+        renderEditor();
+        showPage('editor');
+    }
+
+
+    /*
+     * 編集フォーム初期値
+     */
+    function setupEditorForm() {
+        if (!editingSurvey) {
+            return;
+        }
+
+        const title =
+            getElement('editor-page-title');
+
+        if (title) {
+            title.textContent =
+                editingSurvey.id
+                    ? 'アンケート編集'
+                    : 'アンケート作成';
+        }
+
+
+        const name =
+            getElement('survey-name');
+
+        if (name) {
+            name.value =
+                String(editingSurvey.name || '');
+        }
+
+
+        const status =
+            getElement('survey-status');
+
+        if (status) {
+            status.value =
+                String(
+                    editingSurvey.status || 'draft'
+                );
+        }
+
+
+        const description =
+            getElement('survey-description');
+
+        if (description) {
+            description.value =
+                String(
+                    editingSurvey.description || ''
+                );
+        }
+
+
+        const start =
+            getElement('survey-start');
+
+        if (start) {
+            start.value =
+                String(editingSurvey.start || '');
+        }
+
+
+        const end =
+            getElement('survey-end');
+
+        if (end) {
+            end.value =
+                String(editingSurvey.end || '');
+        }
+
+
+        const numbering =
+            String(
+                editingSurvey.numbering || 'global'
+            );
+
+        const numberingInputs =
+            document.querySelectorAll(
+                'input[name="numbering"]'
+            );
+
+        numberingInputs.forEach(
+            function (input) {
+                if (!input) {
+                    return;
+                }
+
+                input.checked =
+                    input.value === numbering;
+            }
+        );
+    }
+
+
+    /*
+     * 編集内容を状態へ反映
+     */
+    function syncEditorForm() {
+        if (!editingSurvey) {
+            return;
+        }
+
+        const name =
+            getElement('survey-name');
+
+        if (name) {
+            editingSurvey.name =
+                String(name.value || '').trim();
+        }
+
+
+        const status =
+            getElement('survey-status');
+
+        if (status) {
+            editingSurvey.status =
+                String(status.value || 'draft');
+        }
+
+
+        const description =
+            getElement('survey-description');
+
+        if (description) {
+            editingSurvey.description =
+                String(description.value || '');
+        }
+
+
+        const start =
+            getElement('survey-start');
+
+        if (start) {
+            editingSurvey.start =
+                String(start.value || '');
+        }
+
+
+        const end =
+            getElement('survey-end');
+
+        if (end) {
+            editingSurvey.end =
+                String(end.value || '');
+        }
+
+
+        const numbering =
+            document.querySelector(
+                'input[name="numbering"]:checked'
+            );
+
+        if (numbering) {
+            editingSurvey.numbering =
+                String(numbering.value || 'global');
+        }
+    }
+
+
+    /*
+     * グループ追加
+     */
+    function addGroup() {
+        if (!editingSurvey) {
+            return;
+        }
+
+        if (!Array.isArray(editingSurvey.groups)) {
+            editingSurvey.groups = [];
+        }
+
+        editingSurvey.groups.push({
+            id: createClientId('group'),
+            name:
+                'グループ' +
+                String(
+                    editingSurvey.groups.length + 1
+                ),
+            questions: [
+                {
+                    id: createClientId('question'),
+                    text: '',
+                    type: 'free',
+                    required: false,
+                    options: []
+                }
+            ]
+        });
+
+        renderEditor();
+    }
+
+
+    /*
+     * 質問追加
+     */
+    function addQuestion(groupId) {
+        if (!editingSurvey) {
+            return;
+        }
+
+        if (!Array.isArray(editingSurvey.groups)) {
+            editingSurvey.groups = [];
+        }
+
+        editingSurvey.groups.forEach(
+            function (group) {
+
+                if (
+                    !group ||
+                    String(group.id || '') !==
+                        String(groupId || '')
+                ) {
+                    return;
+                }
+
+                if (!Array.isArray(group.questions)) {
+                    group.questions = [];
+                }
+
+                group.questions.push({
+                    id: createClientId('question'),
+                    text: '',
+                    type: 'free',
+                    required: false,
+                    options: []
+                });
+            }
+        );
+
+        renderEditor();
+    }
+
+
+    /*
+     * 質問削除
+     */
+    function deleteQuestion(questionId) {
+        if (!editingSurvey) {
+            return;
+        }
+
+        editingSurvey.groups =
+            asArray(editingSurvey.groups);
+
+        editingSurvey.groups.forEach(
+            function (group) {
+
+                if (!group) {
+                    return;
+                }
+
+                group.questions =
+                    asArray(group.questions)
+                        .filter(
+                            function (question) {
+                                return String(
+                                    question.id || ''
+                                ) !==
+                                String(
+                                    questionId || ''
+                                );
+                            }
+                        );
+            }
+        );
+
+        renderEditor();
+    }
+
+
+    /*
+     * グループ削除
+     */
+    function deleteGroup(groupId) {
+        if (!editingSurvey) {
+            return;
+        }
+
+        editingSurvey.groups =
+            asArray(editingSurvey.groups);
+
+        if (editingSurvey.groups.length <= 1) {
+            showToast(
+                'グループは1つ以上必要です。'
+            );
+            return;
+        }
+
+        editingSurvey.groups =
+            editingSurvey.groups.filter(
+                function (group) {
+                    return String(
+                        group.id || ''
+                    ) !==
+                    String(groupId || '');
+                }
+            );
+
+        renderEditor();
+    }
+
+
+    /*
+     * エディタ描画
+     */
+    function renderEditor() {
+        if (!editingSurvey) {
+            return;
+        }
+
+        syncEditorForm();
+
+        const groupsElement =
+            getElement('groups');
+
+        if (!groupsElement) {
+            return;
+        }
+
+        while (groupsElement.firstChild) {
+            groupsElement.removeChild(
+                groupsElement.firstChild
+            );
+        }
+
+        const groupList =
+            asArray(editingSurvey.groups);
+
+        groupList.forEach(
+            function (group, groupIndex) {
+
+                if (!group) {
+                    return;
+                }
+
+                const groupCard =
+                    document.createElement('div');
+
+                groupCard.className =
+                    'group-card';
+
+                groupCard.draggable = true;
+
+                groupCard.dataset.groupId =
+                    String(group.id || '');
+
+
+                groupCard.addEventListener(
+                    'dragstart',
+                    function () {
+                        draggedGroup =
+                            String(group.id || '');
+
+                        groupCard.classList.add(
+                            'dragging'
+                        );
+                    }
+                );
+
+
+                groupCard.addEventListener(
+                    'dragend',
+                    function () {
+                        draggedGroup = '';
+
+                        groupCard.classList.remove(
+                            'dragging'
+                        );
+                    }
+                );
+
+
+                groupCard.addEventListener(
+                    'dragover',
+                    function (event) {
+                        event.preventDefault();
+
+                        groupCard.classList.add(
+                            'drag-over'
+                        );
+                    }
+                );
+
+
+                groupCard.addEventListener(
+                    'dragleave',
+                    function () {
+                        groupCard.classList.remove(
+                            'drag-over'
+                        );
+                    }
+                );
+
+
+                groupCard.addEventListener(
+                    'drop',
+                    function (event) {
+                        event.preventDefault();
+
+                        groupCard.classList.remove(
+                            'drag-over'
+                        );
+
+                        const targetId =
+                            String(group.id || '');
+
+                        if (
+                            draggedGroup &&
+                            draggedGroup !== targetId
+                        ) {
+                            moveGroup(
+                                draggedGroup,
+                                targetId
+                            );
+                        }
+                    }
+                );
+
+
+                const groupHeader =
+                    document.createElement('div');
+
+                groupHeader.className =
+                    'group-header';
+
+
+                const dragHandle =
+                    document.createElement('span');
+
+                dragHandle.className =
+                    'drag-handle';
+
+                dragHandle.textContent =
+                    '☷';
+
+                dragHandle.setAttribute(
+                    'aria-label',
+                    'グループを並べ替え'
+                );
+
+
+                const groupTitle =
+                    document.createElement('div');
+
+                groupTitle.className =
+                    'group-title';
+
+
+                const groupInput =
+                    document.createElement('input');
+
+                groupInput.type = 'text';
+                groupInput.maxLength = 200;
+
+                groupInput.value =
+                    String(group.name || '');
+
+                groupInput.placeholder =
+                    'グループ名';
+
+
+                groupInput.addEventListener(
+                    'input',
+                    function () {
+                        group.name =
+                            groupInput.value;
+                    }
+                );
+
+
+                groupTitle.appendChild(
+                    groupInput
+                );
+
+
+                const groupActions =
+                    document.createElement('div');
+
+                groupActions.className =
+                    'group-actions';
+
+
+                const deleteGroupButton =
+                    document.createElement('button');
+
+                deleteGroupButton.type = 'button';
+                deleteGroupButton.className =
+                    'btn btn-small btn-danger';
+
+                deleteGroupButton.textContent =
+                    'グループ削除';
+
+
+                deleteGroupButton.addEventListener(
+                    'click',
+                    function () {
+                        deleteGroup(
+                            String(group.id || '')
+                        );
+                    }
+                );
+
+
+                groupActions.appendChild(
+                    deleteGroupButton
+                );
+
+
+                groupHeader.appendChild(
+                    dragHandle
+                );
+
+                groupHeader.appendChild(
+                    groupTitle
+                );
+
+                groupHeader.appendChild(
+                    groupActions
+                );
+
+
+                groupCard.appendChild(
+                    groupHeader
+                );
+
+
+                const questions =
+                    document.createElement('div');
+
+                questions.className =
+                    'questions';
+
+
+                const questionList =
+                    asArray(group.questions);
+
+
+                questionList.forEach(
+                    function (
+                        question,
+                        questionIndex
+                    ) {
+
+                        if (!question) {
+                            return;
+                        }
+
+                        questions.appendChild(
+                            renderQuestion(
+                                group,
+                                question,
+                                groupIndex,
+                                questionIndex
+                            )
+                        );
+                    }
+                );
+
+
+                groupCard.appendChild(
+                    questions
+                );
+
+
+                const addArea =
+                    document.createElement('div');
+
+                addArea.className =
+                    'add-question-area';
+
+
+                const addButton =
+                    document.createElement('button');
+
+                addButton.type = 'button';
+                addButton.className =
+                    'btn btn-small btn-primary';
+
+                addButton.textContent =
+                    '＋ 質問追加';
+
+
+                addButton.addEventListener(
+                    'click',
+                    function () {
+                        addQuestion(
+                            String(group.id || '')
+                        );
+                    }
+                );
+
+
+                addArea.appendChild(
+                    addButton
+                );
+
+                groupCard.appendChild(
+                    addArea
+                );
+
+
+                groupsElement.appendChild(
+                    groupCard
+                );
+            }
+        );
+    }
+
+
+    /*
+     * 質問番号
+     */
+    function questionNumber(
+        groupIndex,
+        questionIndex
+    ) {
+        if (!editingSurvey) {
+            return '';
+        }
+
+        const numbering =
+            String(
+                editingSurvey.numbering || 'global'
+            );
+
+        if (numbering === 'group') {
+            return (
+                'Q' +
+                String(groupIndex + 1) +
+                '-' +
+                String(questionIndex + 1)
+            );
+        }
+
+        let number = 0;
+
+        asArray(
+            editingSurvey.groups
+        ).forEach(
+            function (group, index) {
+
+                if (index > groupIndex) {
+                    return;
+                }
+
+                const questions =
+                    asArray(
+                        group &&
+                        group.questions
+                    );
+
+                if (index === groupIndex) {
+                    number +=
+                        questionIndex + 1;
+                } else {
+                    number += questions.length;
+                }
+            }
+        );
+
+        return 'Q' + String(number);
+    }
+    /*
+     * 質問編集UI
+     */
+    function renderQuestion(
+        group,
+        question,
+        groupIndex,
+        questionIndex
+    ) {
+        const wrapper =
+            document.createElement('div');
+
+        wrapper.className =
+            'question-card';
+
+        wrapper.draggable = true;
+
+        wrapper.dataset.questionId =
+            String(question.id || '');
+
+
+        wrapper.addEventListener(
+            'dragstart',
+            function () {
+                draggedQuestion =
+                    String(question.id || '');
+
+                wrapper.classList.add(
+                    'dragging'
+                );
+            }
+        );
+
+
+        wrapper.addEventListener(
+            'dragend',
+            function () {
+                draggedQuestion = '';
+
+                wrapper.classList.remove(
+                    'dragging'
+                );
+            }
+        );
+
+
+        wrapper.addEventListener(
+            'dragover',
+            function (event) {
+                event.preventDefault();
+
+                wrapper.classList.add(
+                    'drag-over'
+                );
+            }
+        );
+
+
+        wrapper.addEventListener(
+            'dragleave',
+            function () {
+                wrapper.classList.remove(
+                    'drag-over'
+                );
+            }
+        );
+
+
+        wrapper.addEventListener(
+            'drop',
+            function (event) {
+                event.preventDefault();
+
+                wrapper.classList.remove(
+                    'drag-over'
+                );
+
+                const targetId =
+                    String(question.id || '');
+
+                if (
+                    draggedQuestion &&
+                    draggedQuestion !== targetId
+                ) {
+                    moveQuestion(
+                        draggedQuestion,
+                        targetId
+                    );
+                }
+            }
+        );
+
+
+        const header =
+            document.createElement('div');
+
+        header.className =
+            'question-header';
+
+
+        const left =
+            document.createElement('div');
+
+        left.className =
+            'question-header-left';
+
+
+        const handle =
+            document.createElement('span');
+
+        handle.className =
+            'drag-handle';
+
+        handle.textContent =
+            '☷';
+
+        handle.setAttribute(
+            'aria-label',
+            '質問を並べ替え'
+        );
+
+
+        const number =
+            document.createElement('span');
+
+        number.className =
+            'question-number';
+
+        number.textContent =
+            questionNumber(
+                groupIndex,
+                questionIndex
+            );
+
+
+        left.appendChild(handle);
+        left.appendChild(number);
+
+
+        const right =
+            document.createElement('div');
+
+        right.className =
+            'question-actions';
+
+
+        const deleteButton =
+            document.createElement('button');
+
+        deleteButton.type = 'button';
+        deleteButton.className =
+            'btn btn-small btn-danger';
+
+        deleteButton.textContent =
+            '削除';
+
+
+        deleteButton.addEventListener(
+            'click',
+            function () {
+                deleteQuestion(
+                    String(question.id || '')
+                );
+            }
+        );
+
+
+        right.appendChild(
+            deleteButton
+        );
+
+
+        header.appendChild(left);
+        header.appendChild(right);
+
+        wrapper.appendChild(header);
+
+
+        const content =
+            document.createElement('div');
+
+        content.className =
+            'question-content';
+
+
+        const textField =
+            document.createElement('div');
+
+        textField.className =
+            'field';
+
+
+        const textLabel =
+            document.createElement('label');
+
+        textLabel.textContent =
+            '質問文';
+
+
+        const textInput =
+            document.createElement('textarea');
+
+        textInput.rows = 2;
+        textInput.maxLength = 2000;
+
+        textInput.value =
+            String(question.text || '');
+
+        textInput.placeholder =
+            '質問文を入力してください';
+
+
+        textInput.addEventListener(
+            'input',
+            function () {
+                question.text =
+                    textInput.value;
+            }
+        );
+
+
+        textField.appendChild(
+            textLabel
+        );
+
+        textField.appendChild(
+            textInput
+        );
+
+        content.appendChild(
+            textField
+        );
+
+
+        const settings =
+            document.createElement('div');
+
+        settings.className =
+            'question-settings';
+
+
+        const typeField =
+            document.createElement('div');
+
+        typeField.className =
+            'field';
+
+
+        const typeLabel =
+            document.createElement('label');
+
+        typeLabel.textContent =
+            '回答形式';
+
+
+        const typeSelect =
+            document.createElement('select');
+
+
+        const typeOptions = [
+            {
+                value: 'free',
+                label: '自由記述'
+            },
+            {
+                value: 'single',
+                label: '単一選択'
+            },
+            {
+                value: 'multiple',
+                label: '複数選択'
+            },
+            {
+                value: 'scale',
+                label: '5段階評価'
+            },
+            {
+                value: 'date',
+                label: '日付'
+            }
+        ];
+
+
+        typeOptions.forEach(
+            function (option) {
+
+                const optionElement =
+                    document.createElement('option');
+
+                optionElement.value =
+                    option.value;
+
+                optionElement.textContent =
+                    option.label;
+
+                typeSelect.appendChild(
+                    optionElement
+                );
+            }
+        );
+
+
+        typeSelect.value =
+            String(
+                question.type || 'free'
+            );
+
+
+        typeSelect.addEventListener(
+            'change',
+            function () {
+
+                question.type =
+                    String(
+                        typeSelect.value || 'free'
+                    );
+
+                if (
+                    question.type !== 'single' &&
+                    question.type !== 'multiple'
+                ) {
+                    question.options = [];
+                }
+
+                renderEditor();
+            }
+        );
+
+
+        typeField.appendChild(
+            typeLabel
+        );
+
+        typeField.appendChild(
+            typeSelect
+        );
+
+
+        const requiredField =
+            document.createElement('div');
+
+        requiredField.className =
+            'field required-field';
+
+
+        const requiredLabel =
+            document.createElement('label');
+
+
+        const requiredInput =
+            document.createElement('input');
+
+        requiredInput.type = 'checkbox';
+
+        requiredInput.checked =
+            Boolean(question.required);
+
+
+        requiredInput.addEventListener(
+            'change',
+            function () {
+                question.required =
+                    requiredInput.checked;
+            }
+        );
+
+
+        const requiredText =
+            document.createElement('span');
+
+        requiredText.textContent =
+            '必須回答';
+
+
+        requiredLabel.appendChild(
+            requiredInput
+        );
+
+        requiredLabel.appendChild(
+            requiredText
+        );
+
+
+        requiredField.appendChild(
+            requiredLabel
+        );
+
+
+        settings.appendChild(
+            typeField
+        );
+
+        settings.appendChild(
+            requiredField
+        );
+
+
+        content.appendChild(
+            settings
+        );
+
+
+        if (
+            question.type === 'single' ||
+            question.type === 'multiple'
+        ) {
+            content.appendChild(
+                renderOptionsEditor(
+                    question
+                )
+            );
+        }
+
+
+        wrapper.appendChild(
+            content
+        );
+
+        return wrapper;
+    }
+
+
+    /*
+     * 選択肢編集
+     */
+    function renderOptionsEditor(question) {
+        const area =
+            document.createElement('div');
+
+        area.className =
+            'options-editor';
+
+
+        const title =
+            document.createElement('div');
+
+        title.className =
+            'options-title';
+
+        title.textContent =
+            '選択肢';
+
+
+        area.appendChild(title);
+
+
+        if (!Array.isArray(question.options)) {
+            question.options = [];
+        }
+
+
+        question.options.forEach(
+            function (option, index) {
+
+                const row =
+                    document.createElement('div');
+
+                row.className =
+                    'option-row';
+
+
+                const input =
+                    document.createElement('input');
+
+                input.type = 'text';
+                input.maxLength = 500;
+
+                input.value =
+                    String(option || '');
+
+                input.placeholder =
+                    '選択肢' +
+                    String(index + 1);
+
+
+                input.addEventListener(
+                    'input',
+                    function () {
+                        question.options[index] =
+                            input.value;
+                    }
+                );
+
+
+                const deleteButton =
+                    document.createElement('button');
+
+                deleteButton.type = 'button';
+                deleteButton.className =
+                    'btn btn-small btn-danger';
+
+                deleteButton.textContent =
+                    '削除';
+
+
+                deleteButton.addEventListener(
+                    'click',
+                    function () {
+
+                        question.options.splice(
+                            index,
+                            1
+                        );
+
+                        renderEditor();
+                    }
+                );
+
+
+                row.appendChild(input);
+                row.appendChild(deleteButton);
+
+                area.appendChild(row);
+            }
+        );
+
+
+        const addButton =
+            document.createElement('button');
+
+        addButton.type = 'button';
+        addButton.className =
+            'btn btn-small';
+
+        addButton.textContent =
+            '＋ 選択肢追加';
+
+
+        addButton.addEventListener(
+            'click',
+            function () {
+
+                if (
+                    !Array.isArray(
+                        question.options
+                    )
+                ) {
+                    question.options = [];
+                }
+
+                question.options.push('');
+
+                renderEditor();
+            }
+        );
+
+
+        area.appendChild(
+            addButton
+        );
+
+        return area;
+    }
+
+
+    /*
+     * グループ並べ替え
+     */
+    function moveGroup(
+        sourceId,
+        targetId
+    ) {
+        if (!editingSurvey) {
+            return;
+        }
+
+        const groups =
+            asArray(
+                editingSurvey.groups
+            );
+
+        const sourceIndex =
+            groups.findIndex(
+                function (group) {
+                    return String(
+                        group &&
+                        group.id || ''
+                    ) ===
+                    String(sourceId || '');
+                }
+            );
+
+        const targetIndex =
+            groups.findIndex(
+                function (group) {
+                    return String(
+                        group &&
+                        group.id || ''
+                    ) ===
+                    String(targetId || '');
+                }
+            );
+
+
+        if (
+            sourceIndex < 0 ||
+            targetIndex < 0 ||
+            sourceIndex === targetIndex
+        ) {
+            return;
+        }
+
+
+        const moved =
+            groups.splice(
+                sourceIndex,
+                1
+            )[0];
+
+
+        groups.splice(
+            targetIndex,
+            0,
+            moved
+        );
+
+
+        editingSurvey.groups =
+            groups;
+
+        renderEditor();
+    }
+
+
+    /*
+     * 質問並べ替え
+     *
+     * 同一グループ内だけでなく、
+     * 別グループへの移動にも対応する。
+     */
+    function moveQuestion(
+        sourceId,
+        targetId
+    ) {
+        if (!editingSurvey) {
+            return;
+        }
+
+
+        let sourceQuestion = null;
+        let sourceGroup = null;
+        let sourceIndex = -1;
+
+
+        editingSurvey.groups =
+            asArray(
+                editingSurvey.groups
+            );
+
+
+        editingSurvey.groups.forEach(
+            function (group) {
+
+                if (
+                    !group ||
+                    sourceQuestion
+                ) {
+                    return;
+                }
+
+                const questions =
+                    asArray(
+                        group.questions
+                    );
+
+
+                questions.forEach(
+                    function (
+                        question,
+                        index
+                    ) {
+
+                        if (
+                            question &&
+                            String(
+                                question.id || ''
+                            ) ===
+                            String(
+                                sourceId || ''
+                            )
+                        ) {
+                            sourceQuestion =
+                                question;
+
+                            sourceGroup =
+                                group;
+
+                            sourceIndex =
+                                index;
+                        }
+                    }
+                );
+            }
+        );
+
+
+        if (
+            !sourceQuestion ||
+            !sourceGroup ||
+            sourceIndex < 0
+        ) {
+            return;
+        }
+
+
+        let targetGroup = null;
+        let targetIndex = -1;
+
+
+        editingSurvey.groups.forEach(
+            function (group) {
+
+                if (
+                    !group ||
+                    targetGroup
+                ) {
+                    return;
+                }
+
+                const questions =
+                    asArray(
+                        group.questions
+                    );
+
+
+                questions.forEach(
+                    function (
+                        question,
+                        index
+                    ) {
+
+                        if (
+                            question &&
+                            String(
+                                question.id || ''
+                            ) ===
+                            String(
+                                targetId || ''
+                            )
+                        ) {
+                            targetGroup =
+                                group;
+
+                            targetIndex =
+                                index;
+                        }
+                    }
+                );
+            }
+        );
+
+
+        if (
+            !targetGroup ||
+            targetIndex < 0
+        ) {
+            return;
+        }
+
+
+        sourceGroup.questions =
+            asArray(
+                sourceGroup.questions
+            );
+
+
+        sourceGroup.questions.splice(
+            sourceIndex,
+            1
+        );
+
+
+        if (
+            sourceGroup === targetGroup &&
+            sourceIndex < targetIndex
+        ) {
+            targetIndex -= 1;
+        }
+
+
+        targetGroup.questions =
+            asArray(
+                targetGroup.questions
+            );
+
+
+        targetGroup.questions.splice(
+            targetIndex,
+            0,
+            sourceQuestion
+        );
+
+
+        renderEditor();
+    }
+
+
+    /*
+     * 編集内容の検証
+     */
+    function validateSurvey() {
+        if (!editingSurvey) {
+            return {
+                valid: false,
+                message: '編集対象がありません。'
+            };
+        }
+
+
+        syncEditorForm();
+
+
+        if (
+            String(
+                editingSurvey.name || ''
+            ).trim() === ''
+        ) {
+            return {
+                valid: false,
+                message:
+                    'アンケート名を入力してください。'
+            };
+        }
+
+
+        if (
+            editingSurvey.start &&
+            editingSurvey.end &&
+            String(editingSurvey.start) >
+                String(editingSurvey.end)
+        ) {
+            return {
+                valid: false,
+                message:
+                    '公開終了日は公開開始日以降にしてください。'
+            };
+        }
+
+
+        const groups =
+            asArray(
+                editingSurvey.groups
+            );
+
+
+        if (groups.length === 0) {
+            return {
+                valid: false,
+                message:
+                    'グループを1つ以上登録してください。'
+            };
+        }
+
+
+        for (
+            let groupIndex = 0;
+            groupIndex < groups.length;
+            groupIndex += 1
+        ) {
+            const group =
+                groups[groupIndex];
+
+            if (!group) {
+                continue;
+            }
+
+
+            if (
+                String(
+                    group.name || ''
+                ).trim() === ''
+            ) {
+                return {
+                    valid: false,
+                    message:
+                        'グループ名を入力してください。'
+                };
+            }
+
+
+            const questions =
+                asArray(
+                    group.questions
+                );
+
+
+            if (questions.length === 0) {
+                return {
+                    valid: false,
+                    message:
+                        '各グループには質問を1つ以上登録してください。'
+                };
+            }
+
+
+            for (
+                let questionIndex = 0;
+                questionIndex < questions.length;
+                questionIndex += 1
+            ) {
+                const question =
+                    questions[questionIndex];
+
+                if (!question) {
+                    continue;
+                }
+
+
+                if (
+                    String(
+                        question.text || ''
+                    ).trim() === ''
+                ) {
+                    return {
+                        valid: false,
+                        message:
+                            '質問文を入力してください。'
+                    };
+                }
+
+
+                if (
+                    question.type === 'single' ||
+                    question.type === 'multiple'
+                ) {
+                    const options =
+                        asArray(
+                            question.options
+                        ).filter(
+                            function (option) {
+                                return String(
+                                    option || ''
+                                ).trim() !== '';
+                            }
+                        );
+
+
+                    if (options.length < 2) {
+                        return {
+                            valid: false,
+                            message:
+                                '選択式の質問には2つ以上の選択肢を登録してください。'
+                        };
+                    }
+                }
+            }
+        }
+
+
+        return {
+            valid: true,
+            message: ''
+        };
+    }
+
+
+    /*
+     * アンケート保存
+     */
+    async function saveSurvey(button) {
+        const validation =
+            validateSurvey();
+
+
+        if (!validation.valid) {
+            showNotice(
+                'editor-notice',
+                validation.message,
+                'error'
+            );
+
+            return;
+        }
+
+
+        try {
+            const result =
+                await apiRequest(
+                    'save_survey',
+                    'POST',
+                    {
+                        survey: editingSurvey
+                    },
+                    button
+                );
+
+
+            if (
+                result &&
+                result.data &&
+                result.data.survey
+            ) {
+                editingSurvey =
+                    result.data.survey;
+            }
+
+
+            showToast(
+                'アンケートを保存しました。'
+            );
+
+
+            await loadSurveys();
+
+
+            if (editingSurvey.id) {
+                openSurveyDetail(
+                    String(
+                        editingSurvey.id
+                    )
+                );
+            } else {
+                showPage('list');
+            }
+
+        } catch (error) {
+            showNotice(
+                'editor-notice',
+                error instanceof Error
+                    ? error.message
+                    : 'アンケートを保存できませんでした。',
+                'error'
+            );
+        }
+    }
+
+
+    /*
+     * アンケート削除
+     */
+    async function deleteSurvey(
+        surveyId,
+        button
+    ) {
+        if (
+            String(surveyId || '') === ''
+        ) {
+            return;
+        }
+
+
+        const confirmed =
+            await openConfirmModal(
+                'アンケート削除',
+                'このアンケートを削除します。よろしいですか？'
+            );
+
+
+        if (!confirmed) {
+            return;
+        }
+
+
+        try {
+            await apiRequest(
+                'delete_survey',
+                'POST',
+                {
+                    id: String(surveyId)
+                },
+                button
+            );
+
+
+            showToast(
+                'アンケートを削除しました。'
+            );
+
+
+            await loadSurveys();
+
+        } catch (error) {
+            showNotice(
+                'list-notice',
+                error instanceof Error
+                    ? error.message
+                    : 'アンケートを削除できませんでした。',
+                'error'
+            );
+        }
+    }
+
+
+    /*
+     * 詳細取得
+     */
+    async function openSurveyDetail(
+        surveyId
+    ) {
+        if (
+            String(surveyId || '') === ''
+        ) {
+            return;
+        }
+
+
+        selectedSurveyId =
+            String(surveyId);
+
+
+        showPage('detail');
+
+
+        showNotice(
+            'detail-notice',
+            'アンケート情報を読み込んでいます。',
+            ''
+        );
+
+
+        try {
+            const result =
+                await apiRequest(
+                    'get_survey',
+                    'GET',
+                    {
+                        id: selectedSurveyId
+                    },
+                    null
+                );
+
+
+            const survey =
+                result &&
+                result.data &&
+                result.data.survey
+                    ? result.data.survey
+                    : null;
+
+
+            if (!survey) {
+                throw new Error(
+                    'アンケート情報を取得できませんでした。'
+                );
+            }
+
+
+            renderSurveyDetail(
+                survey
+            );
+
+
+            showNotice(
+                'detail-notice',
+                '',
+                ''
+            );
+
+        } catch (error) {
+            showNotice(
+                'detail-notice',
+                error instanceof Error
+                    ? error.message
+                    : 'アンケート詳細を取得できませんでした。',
+                'error'
+            );
+        }
+    }
+
+
+    /*
+     * 詳細画面描画
+     */
+    function renderSurveyDetail(
+        survey
+    ) {
+        if (!survey) {
+            return;
+        }
+
+
+        const title =
+            getElement('detail-title');
+
+        if (title) {
+            title.textContent =
+                String(
+                    survey.name ||
+                    'アンケート詳細'
+                );
+        }
+
+
+        const subtitle =
+            getElement('detail-subtitle');
+
+        if (subtitle) {
+            subtitle.textContent =
+                String(
+                    survey.description || ''
+                );
+        }
+
+
+        const status =
+            getElement('detail-status');
+
+        if (status) {
+            status.textContent =
+                statusLabel(
+                    survey.status
+                );
+
+            status.className =
+                'summary-value status-text-' +
+                String(
+                    survey.status || 'draft'
+                );
+        }
+
+
+        const answers =
+            getElement('detail-answers');
+
+        if (answers) {
+            answers.textContent =
+                String(
+                    Number.isFinite(
+                        Number(survey.answers)
+                    )
+                        ? Number(survey.answers)
+                        : 0
+                );
+        }
+
+
+        const target =
+            getElement('detail-target');
+
+        if (target) {
+            target.textContent =
+                String(
+                    Number.isFinite(
+                        Number(survey.target)
+                    )
+                        ? Number(survey.target)
+                        : 0
+                );
+        }
+
+
+        const sent =
+            getElement('detail-sent');
+
+        if (sent) {
+            sent.textContent =
+                String(
+                    Number.isFinite(
+                        Number(survey.sent)
+                    )
+                        ? Number(survey.sent)
+                        : 0
+                );
+        }
+
+
+        const description =
+            getElement('detail-description');
+
+        if (description) {
+            description.textContent =
+                String(
+                    survey.description || '－'
+                );
+        }
+
+
+        const period =
+            getElement('detail-period');
+
+        if (period) {
+
+            const start =
+                String(survey.start || '');
+
+            const end =
+                String(survey.end || '');
+
+
+            if (
+                start === '' &&
+                end === ''
+            ) {
+                period.textContent =
+                    '－';
+            } else {
+                period.textContent =
+                    (start || '－') +
+                    ' ～ ' +
+                    (end || '－');
+            }
+        }
+
+
+        const created =
+            getElement('detail-created');
+
+        if (created) {
+            created.textContent =
+                formatDate(
+                    survey.created
+                );
+        }
+
+
+        const updated =
+            getElement('detail-updated');
+
+        if (updated) {
+            updated.textContent =
+                formatDate(
+                    survey.updated
+                );
+        }
+
+
+        const targetCount =
+            getElement(
+                'send-target-count'
+            );
+
+        if (targetCount) {
+            const count =
+                Number.isFinite(
+                    Number(survey.target)
+                )
+                    ? Number(survey.target)
+                    : 0;
+
+            targetCount.textContent =
+                '対象者：' +
+                String(count) +
+                '名';
+        }
+
+
+        const questions =
+            getElement(
+                'detail-questions'
+            );
+
+        if (!questions) {
+            return;
+        }
+
+
+        while (questions.firstChild) {
+            questions.removeChild(
+                questions.firstChild
+            );
+        }
+
+
+        const groups =
+            asArray(
+                survey.groups
+            );
+
+
+        if (groups.length === 0) {
+            const empty =
+                document.createElement('div');
+
+            empty.className =
+                'empty-cell';
+
+            empty.textContent =
+                '質問は登録されていません。';
+
+            questions.appendChild(empty);
+
+            return;
+        }
+
+
+        groups.forEach(
+            function (
+                group,
+                groupIndex
+            ) {
+
+                if (!group) {
+                    return;
+                }
+
+
+                const groupBlock =
+                    document.createElement('div');
+
+                groupBlock.className =
+                    'detail-group';
+
+
+                const groupTitle =
+                    document.createElement('h3');
+
+                groupTitle.textContent =
+                    String(
+                        group.name ||
+                        'グループ' +
+                        String(groupIndex + 1)
+                    );
+
+
+                groupBlock.appendChild(
+                    groupTitle
+                );
+
+
+                const questionList =
+                    document.createElement('div');
+
+                questionList.className =
+                    'detail-question-list';
+
+
+                asArray(
+                    group.questions
+                ).forEach(
+                    function (
+                        question,
+                        questionIndex
+                    ) {
+
+                        if (!question) {
+                            return;
+                        }
+
+
+                        const item =
+                            document.createElement('div');
+
+                        item.className =
+                            'detail-question';
+
+
+                        const number =
+                            document.createElement('div');
+
+                        number.className =
+                            'detail-question-number';
+
+                        number.textContent =
+                            survey.numbering === 'group'
+                                ? (
+                                    'Q' +
+                                    String(
+                                        groupIndex + 1
+                                    ) +
+                                    '-' +
+                                    String(
+                                        questionIndex + 1
+                                    )
+                                )
+                                : getGlobalQuestionNumber(
+                                    groups,
+                                    groupIndex,
+                                    questionIndex
+                                );
+
+
+                        const body =
+                            document.createElement('div');
+
+                        body.className =
+                            'detail-question-body';
+
+
+                        const text =
+                            document.createElement('div');
+
+                        text.className =
+                            'detail-question-text';
+
+                        text.textContent =
+                            String(
+                                question.text || ''
+                            );
+
+
+                        const meta =
+                            document.createElement('div');
+
+                        meta.className =
+                            'detail-question-meta';
+
+                        meta.textContent =
+                            getQuestionTypeLabel(
+                                question.type
+                            ) +
+                            (
+                                question.required
+                                    ? ' ／ 必須'
+                                    : ' ／ 任意'
+                            );
+
+
+                        body.appendChild(text);
+                        body.appendChild(meta);
+
+
+                        if (
+                            question.type === 'single' ||
+                            question.type === 'multiple'
+                        ) {
+                            const options =
+                                document.createElement('ul');
+
+                            options.className =
+                                'detail-options';
+
+
+                            asArray(
+                                question.options
+                            ).forEach(
+                                function (option) {
+
+                                    const optionItem =
+                                        document.createElement('li');
+
+                                    optionItem.textContent =
+                                        String(
+                                            option || ''
+                                        );
+
+                                    options.appendChild(
+                                        optionItem
+                                    );
+                                }
+                            );
+
+
+                            body.appendChild(
+                                options
+                            );
+                        }
+
+
+                        item.appendChild(number);
+                        item.appendChild(body);
+
+                        questionList.appendChild(
+                            item
+                        );
+                    }
+                );
+
+
+                groupBlock.appendChild(
+                    questionList
+                );
+
+                questions.appendChild(
+                    groupBlock
+                );
+            }
+        );
+    }
+
+
+    /*
+     * 詳細画面用の通番
+     */
+    function getGlobalQuestionNumber(
+        groups,
+        groupIndex,
+        questionIndex
+    ) {
+        let number = 0;
+
+
+        for (
+            let index = 0;
+            index <= groupIndex;
+            index += 1
+        ) {
+            const group =
+                groups[index];
+
+
+            const questions =
+                asArray(
+                    group &&
+                    group.questions
+                );
+
+
+            if (index === groupIndex) {
+                number +=
+                    questionIndex + 1;
+            } else {
+                number +=
+                    questions.length;
+            }
+        }
+
+
+        return 'Q' + String(number);
+    }
+
+
+    /*
+     * 回答形式表示
+     */
+    function getQuestionTypeLabel(
+        type
+    ) {
+        const labels = {
+            free: '自由記述',
+            single: '単一選択',
+            multiple: '複数選択',
+            scale: '5段階評価',
+            date: '日付'
+        };
+
+
+        return labels[
+            String(type || '')
+        ] || '回答形式未設定';
+    }
+
+
+    /*
+     * 回答結果表示
+     */
+    async function loadSurveyResults(
+        button
+    ) {
+        if (
+            String(
+                selectedSurveyId || ''
+            ) === ''
+        ) {
+            return;
+        }
+
+
+        const resultArea =
+            getElement(
+                'detail-results'
+            );
+
+
+        if (!resultArea) {
+            return;
+        }
+
+
+        try {
+            const result =
+                await apiRequest(
+                    'survey_results',
+                    'GET',
+                    {
+                        id: selectedSurveyId
+                    },
+                    button
+                );
+
+
+            renderSurveyResults(
+                resultArea,
+                result &&
+                result.data
+                    ? result.data
+                    : {}
+            );
+
+
+            resultArea.classList.remove(
+                'hidden'
+            );
+
+        } catch (error) {
+            showNotice(
+                'detail-notice',
+                error instanceof Error
+                    ? error.message
+                    : '回答結果を取得できませんでした。',
+                'error'
+            );
+        }
+    }
+
+
+    /*
+     * 回答結果描画
+     */
+    function renderSurveyResults(
+        target,
+        data
+    ) {
+        if (!target) {
+            return;
+        }
+
+
+        while (target.firstChild) {
+            target.removeChild(
+                target.firstChild
+            );
+        }
+
+
+        const results =
+            asArray(
+                data.results
+            );
+
+
+        if (results.length === 0) {
+            const empty =
+                document.createElement('div');
+
+            empty.className =
+                'empty-cell';
+
+            empty.textContent =
+                '回答結果はありません。';
+
+            target.appendChild(empty);
+
+            return;
+        }
+
+
+        const tableWrap =
+            document.createElement('div');
+
+        tableWrap.className =
+            'table-wrap';
+
+
+        const table =
+            document.createElement('table');
+
+        table.className =
+            'table';
+
+
+        const thead =
+            document.createElement('thead');
+
+
+        const headRow =
+            document.createElement('tr');
+
+
+        [
+            '回答日時',
+            '回答者',
+            '回答内容'
+        ].forEach(
+            function (label) {
+
+                const th =
+                    document.createElement('th');
+
+                th.textContent =
+                    label;
+
+                headRow.appendChild(th);
+            }
+        );
+
+
+        thead.appendChild(
+            headRow
+        );
+
+        table.appendChild(
+            thead
+        );
+
+
+        const tbody =
+            document.createElement('tbody');
+
+
+        results.forEach(
+            function (result) {
+
+                if (
+                    !result ||
+                    typeof result !== 'object'
+                ) {
+                    return;
+                }
+
+
+                const row =
+                    document.createElement('tr');
+
+
+                const date =
+                    document.createElement('td');
+
+                date.textContent =
+                    String(
+                        result.created || '－'
+                    );
+
+
+                const respondent =
+                    document.createElement('td');
+
+                respondent.textContent =
+                    String(
+                        result.respondent ||
+                        '－'
+                    );
+
+
+                const answer =
+                    document.createElement('td');
+
+                answer.textContent =
+                    formatAnswerSummary(
+                        result.answers
+                    );
+
+
+                row.appendChild(date);
+                row.appendChild(respondent);
+                row.appendChild(answer);
+
+                tbody.appendChild(row);
+            }
+        );
+
+
+        table.appendChild(tbody);
+        tableWrap.appendChild(table);
+
+        target.appendChild(
+            tableWrap
+        );
+    }
+
+
+    /*
+     * 回答内容の安全な表示用文字列化
+     */
+    function formatAnswerSummary(
+        answers
+    ) {
+        if (
+            answers === null ||
+            answers === undefined
+        ) {
+            return '－';
+        }
+
+
+        if (
+            typeof answers === 'string'
+        ) {
+            return answers;
+        }
+
+
+        if (Array.isArray(answers)) {
+            return answers
+                .map(
+                    function (value) {
+                        return String(
+                            value ?? ''
+                        );
+                    }
+                )
+                .join('、');
+        }
+
+
+        if (
+            typeof answers === 'object'
+        ) {
+            return Object.keys(
+                answers
+            )
+                .map(
+                    function (key) {
+                        return (
+                            String(key) +
+                            '：' +
+                            String(
+                                answers[key] ?? ''
+                            )
+                        );
+                    }
+                )
+                .join(' / ');
+        }
+
+
+        return String(answers);
+    }
+
+
+    /*
+     * 顧客一覧取得
+     */
+    async function loadCustomers(
+        button
+    ) {
+        try {
+            const result =
+                await apiRequest(
+                    'list_customers',
+                    'GET',
+                    {},
+                    button
+                );
+
+
+            customers =
+                asArray(
+                    result &&
+                    result.data &&
+                    result.data.customers
+                );
+
+
+            renderCustomerList();
+
+        } catch (error) {
+            showNotice(
+                'customers-notice',
+                error instanceof Error
+                    ? error.message
+                    : '顧客情報を取得できませんでした。',
+                'error'
+            );
+        }
+    }
+
+
+    /*
+     * 顧客一覧描画
+     */
+    function renderCustomerList() {
+        const body =
+            getElement(
+                'customer-list-body'
+            );
+
+
+        if (!body) {
+            return;
+        }
+
+
+        while (body.firstChild) {
+            body.removeChild(
+                body.firstChild
+            );
+        }
+
+
+        if (customers.length === 0) {
+            const row =
+                document.createElement('tr');
+
+
+            const cell =
+                document.createElement('td');
+
+            cell.colSpan = 4;
+            cell.className =
+                'empty-cell';
+
+            cell.textContent =
+                '顧客情報はありません。';
+
+
+            row.appendChild(cell);
+            body.appendChild(row);
+
+            return;
+        }
+
+
+        customers.forEach(
+            function (customer) {
+
+                if (
+                    !customer ||
+                    typeof customer !== 'object'
+                ) {
+                    return;
+                }
+
+
+                const row =
+                    document.createElement('tr');
+
+
+                const id =
+                    document.createElement('td');
+
+                id.textContent =
+                    String(
+                        customer.id || '－'
+                    );
+
+
+                const company =
+                    document.createElement('td');
+
+                company.textContent =
+                    String(
+                        customer.company || '－'
+                    );
+
+
+                const name =
+                    document.createElement('td');
+
+                name.textContent =
+                    String(
+                        customer.name || '－'
+                    );
+
+
+                const email =
+                    document.createElement('td');
+
+                email.textContent =
+                    String(
+                        customer.email || '－'
+                    );
+
+
+                row.appendChild(id);
+                row.appendChild(company);
+                row.appendChild(name);
+                row.appendChild(email);
+
+
+                body.appendChild(row);
+            }
+        );
+    }
+
+
+    /*
+     * 設定情報取得
+     */
+    async function loadSettings() {
+        try {
+            const result =
+                await apiRequest(
+                    'get_settings',
+                    'GET',
+                    {},
+                    null
+                );
+
+
+            currentSettings =
+                result &&
+                result.data &&
+                result.data.settings
+                    ? result.data.settings
+                    : {};
+
+
+            renderSettings();
+
+        } catch (error) {
+            showNotice(
+                'settings-notice',
+                error instanceof Error
+                    ? error.message
+                    : '設定情報を取得できませんでした。',
+                'error'
+            );
+        }
+    }
+
+
+    /*
+     * 設定画面描画
+     */
+    function renderSettings() {
+        const settings =
+            currentSettings &&
+            typeof currentSettings === 'object'
+                ? currentSettings
+                : {};
+
+
+        const kintone =
+            settings.kintone &&
+            typeof settings.kintone === 'object'
+                ? settings.kintone
+                : {};
+
+
+        const mail =
+            settings.mail &&
+            typeof settings.mail === 'object'
+                ? settings.mail
+                : {};
+
+
+        setInputValue(
+            'kintone-domain',
+            kintone.domain
+        );
+
+
+        setInputValue(
+            'kintone-app-id',
+            kintone.app_id
+        );
+
+
+        setInputValue(
+            'kintone-login-name',
+            kintone.login_name
+        );
+
+
+        setInputValue(
+            'kintone-password',
+            ''
+        );
+
+
+        setInputValue(
+            'kintone-proxy-host',
+            kintone.proxy_host
+        );
+
+
+        setInputValue(
+            'kintone-proxy-port',
+            kintone.proxy_port
+        );
+
+
+        setInputValue(
+            'kintone-customer-id-field',
+            kintone.customer_id_field
+        );
+
+
+        setInputValue(
+            'kintone-customer-name-field',
+            kintone.customer_name_field
+        );
+
+
+        setInputValue(
+            'kintone-customer-email-field',
+            kintone.customer_email_field
+        );
+
+
+        setInputValue(
+            'mail-smtp-server',
+            mail.smtp_server
+        );
+
+
+        setInputValue(
+            'mail-smtp-port',
+            mail.smtp_port
+        );
+
+
+        setInputValue(
+            'mail-connection-type',
+            mail.connection_type ||
+            'tls'
+        );
+
+
+        setInputValue(
+            'mail-username',
+            mail.username
+        );
+
+
+        setInputValue(
+            'mail-password',
+            ''
+        );
+
+
+        setInputValue(
+            'mail-from-email',
+            mail.from_email
+        );
+
+
+        setInputValue(
+            'mail-from-name',
+            mail.from_name
+        );
+    }
+
+
+    /*
+     * input/select値設定
+     */
+    function setInputValue(
+        id,
+        value
+    ) {
+        const element =
+            getElement(id);
+
+
+        if (!element) {
+            return;
+        }
+
+
+        element.value =
+            value === null ||
+            value === undefined
+                ? ''
+                : String(value);
+    }
+
+
+    /*
+     * kintone設定保存用データ
+     */
+    function collectKintoneSettings() {
+        return {
+            domain:
+                getInputValue(
+                    'kintone-domain'
+                ),
+
+            app_id:
+                getInputValue(
+                    'kintone-app-id'
+                ),
+
+            login_name:
+                getInputValue(
+                    'kintone-login-name'
+                ),
+
+            password:
+                getInputValue(
+                    'kintone-password'
+                ),
+
+            proxy_host:
+                getInputValue(
+                    'kintone-proxy-host'
+                ),
+
+            proxy_port:
+                getInputValue(
+                    'kintone-proxy-port'
+                ),
+
+            customer_id_field:
+                getInputValue(
+                    'kintone-customer-id-field'
+                ),
+
+            customer_name_field:
+                getInputValue(
+                    'kintone-customer-name-field'
+                ),
+
+            customer_email_field:
+                getInputValue(
+                    'kintone-customer-email-field'
+                )
+        };
+    }
+
+
+    /*
+     * メール設定保存用データ
+     */
+    function collectMailSettings() {
+        return {
+            smtp_server:
+                getInputValue(
+                    'mail-smtp-server'
+                ),
+
+            smtp_port:
+                getInputValue(
+                    'mail-smtp-port'
+                ),
+
+            connection_type:
+                getInputValue(
+                    'mail-connection-type'
+                ),
+
+            username:
+                getInputValue(
+                    'mail-username'
+                ),
+
+            password:
+                getInputValue(
+                    'mail-password'
+                ),
+
+            from_email:
+                getInputValue(
+                    'mail-from-email'
+                ),
+
+            from_name:
+                getInputValue(
+                    'mail-from-name'
+                )
+        };
+    }
+
+
+    /*
+     * 入力値取得
+     */
+    function getInputValue(id) {
+        const element =
+            getElement(id);
+
+
+        if (!element) {
+            return '';
+        }
+
+
+        return String(
+            element.value || ''
+        ).trim();
+    }
+
+
+    /*
+     * kintone設定保存
+     */
+    async function saveKintoneSettings(
+        button
+    ) {
+        const settings =
+            collectKintoneSettings();
+
+
+        if (
+            settings.domain === ''
+        ) {
+            showNotice(
+                'settings-notice',
+                'kintoneドメインを入力してください。',
+                'error'
+            );
+
+            return;
+        }
+
+
+        try {
+            await apiRequest(
+                'save_kintone_settings',
+                'POST',
+                {
+                    settings: settings
+                },
+                button
+            );
+
+
+            showToast(
+                'kintone設定を保存しました。'
+            );
+
+
+            setInputValue(
+                'kintone-password',
+                ''
+            );
+
+
+            await loadSettings();
+
+        } catch (error) {
+            showNotice(
+                'settings-notice',
+                error instanceof Error
+                    ? error.message
+                    : 'kintone設定を保存できませんでした。',
+                'error'
+            );
+        }
+    }
+
+
+    /*
+     * kintone接続テスト
+     */
+    async function testKintone(
+        button
+    ) {
+        const settings =
+            collectKintoneSettings();
+
+
+        if (
+            settings.domain === ''
+        ) {
+            showNotice(
+                'settings-notice',
+                'kintoneドメインを入力してください。',
+                'error'
+            );
+
+            return;
+        }
+
+
+        try {
+            const result =
+                await apiRequest(
+                    'test_kintone',
+                    'POST',
+                    {
+                        settings: settings
+                    },
+                    button
+                );
+
+
+            setKintoneStatus(
+                true,
+                result &&
+                result.message
+                    ? String(result.message)
+                    : 'kintoneへの接続に成功しました。'
+            );
+
+
+            showToast(
+                'kintoneへの接続を確認しました。'
+            );
+
+        } catch (error) {
+
+            setKintoneStatus(
+                false,
+                error instanceof Error
+                    ? error.message
+                    : 'kintoneへの接続に失敗しました。'
+            );
+
+
+            showNotice(
+                'settings-notice',
+                error instanceof Error
+                    ? error.message
+                    : 'kintoneへの接続に失敗しました。',
+                'error'
+            );
+        }
+    }
+
+
+    /*
+     * kintone接続状態表示
+     */
+    function setKintoneStatus(
+        success,
+        message
+    ) {
+        const dot =
+            getElement(
+                'kintone-status-dot'
+            );
+
+
+        const text =
+            getElement(
+                'kintone-status-text'
+            );
+
+
+        if (dot) {
+            dot.classList.toggle(
+                'success',
+                Boolean(success)
+            );
+
+            dot.classList.toggle(
+                'error',
+                !success
+            );
+        }
+
+
+        if (text) {
+            text.textContent =
+                String(
+                    message ||
+                    (
+                        success
+                            ? '接続成功'
+                            : '接続失敗'
+                    )
+                );
+        }
+    }
+
+
+    /*
+     * メール設定保存
+     */
+    async function saveMailSettings(
+        button
+    ) {
+        const settings =
+            collectMailSettings();
+
+
+        try {
+            await apiRequest(
+                'save_mail_settings',
+                'POST',
+                {
+                    settings: settings
+                },
+                button
+            );
+
+
+            showToast(
+                'メール設定を保存しました。'
+            );
+
+
+            setInputValue(
+                'mail-password',
+                ''
+            );
+
+
+            await loadSettings();
+
+        } catch (error) {
+            showNotice(
+                'settings-notice',
+                error instanceof Error
+                    ? error.message
+                    : 'メール設定を保存できませんでした。',
+                'error'
+            );
+        }
+    }
+
+
+    /*
+     * メール設定確認
+     */
+    async function testMail(
+        button
+    ) {
+        const settings =
+            collectMailSettings();
+
+
+        try {
+            await apiRequest(
+                'test_mail',
+                'POST',
+                {
+                    settings: settings
+                },
+                button
+            );
+
+
+            showToast(
+                'メール設定を確認しました。'
+            );
+
+        } catch (error) {
+            showNotice(
+                'settings-notice',
+                error instanceof Error
+                    ? error.message
+                    : 'メール設定の確認に失敗しました。',
+                'error'
+            );
+        }
+    }
+
+
+    /*
+     * 回答依頼送信
+     */
+    async function sendSurveyRequest(
+        button
+    ) {
+        if (
+            String(
+                selectedSurveyId || ''
+            ) === ''
+        ) {
+            return;
+        }
+
+
+        const subject =
+            getInputValue(
+                'send-subject'
+            );
+
+
+        const body =
+            getInputValue(
+                'send-body'
+            );
+
+
+        if (subject === '') {
+            showNotice(
+                'detail-notice',
+                'メール件名を入力してください。',
+                'error'
+            );
+
+            return;
+        }
+
+
+        if (body === '') {
+            showNotice(
+                'detail-notice',
+                'メール本文を入力してください。',
+                'error'
+            );
+
+            return;
+        }
+
+
+        const confirmed =
+            await openConfirmModal(
+                '回答依頼の送信',
+                '対象者へ回答依頼メールを送信します。よろしいですか？'
+            );
+
+
+        if (!confirmed) {
+            return;
+        }
+
+
+        try {
+            const result =
+                await apiRequest(
+                    'send_survey',
+                    'POST',
+                    {
+                        id:
+                            selectedSurveyId,
+
+                        subject:
+                            subject,
+
+                        body:
+                            body
+                    },
+                    button
+                );
+
+
+            const sentCount =
+                result &&
+                result.data &&
+                Number.isFinite(
+                    Number(
+                        result.data.sent
+                    )
+                )
+                    ? Number(
+                        result.data.sent
+                    )
+                    : 0;
+
+
+            showToast(
+                '回答依頼を送信しました。送信数：' +
+                String(sentCount) +
+                '件'
+            );
+
+
+            await openSurveyDetail(
+                selectedSurveyId
+            );
+
+        } catch (error) {
+            showNotice(
+                'detail-notice',
+                error instanceof Error
+                    ? error.message
+                    : '回答依頼を送信できませんでした。',
+                'error'
+            );
+        }
+    }
+
+
+    /*
+     * モーダル
+     */
+    function openConfirmModal(
+        title,
+        message
+    ) {
+        return new Promise(
+            function (resolve) {
+
+                const modal =
+                    getElement('modal');
+
+                const modalTitle =
+                    getElement('modal-title');
+
+                const modalBody =
+                    getElement('modal-body');
+
+
+                if (
+                    !modal ||
+                    !modalTitle ||
+                    !modalBody
+                ) {
+                    resolve(false);
+                    return;
+                }
+
+
+                modalTitle.textContent =
+                    String(title || '確認');
+
+
+                modalBody.textContent =
+                    String(message || '');
+
+
+                modal.classList.remove(
+                    'hidden'
+                );
+
+
+                modalResolve =
+                    resolve;
+            }
+        );
+    }
+
+
+    /*
+     * モーダル終了
+     */
+    function closeModal(
+        result
+    ) {
+        const modal =
+            getElement('modal');
+
+
+        if (modal) {
+            modal.classList.add(
+                'hidden'
+            );
+        }
+
+
+        if (
+            typeof modalResolve ===
+            'function'
+        ) {
+            const resolve =
+                modalResolve;
+
+            modalResolve = null;
+
+            resolve(
+                Boolean(result)
+            );
+        }
+    }
+
+
+    /*
+     * 設定タブ切り替え
+     */
+    function showSettingsTab(
+        tabName
+    ) {
+        const kintonePanel =
+            getElement(
+                'settings-panel-kintone'
+            );
+
+        const mailPanel =
+            getElement(
+                'settings-panel-mail'
+            );
+
+        const kintoneTab =
+            getElement(
+                'settings-tab-kintone'
+            );
+
+        const mailTab =
+            getElement(
+                'settings-tab-mail'
+            );
+
+
+        if (kintonePanel) {
+            kintonePanel.classList.toggle(
+                'hidden',
+                tabName !== 'kintone'
+            );
+        }
+
+
+        if (mailPanel) {
+            mailPanel.classList.toggle(
+                'hidden',
+                tabName !== 'mail'
+            );
+        }
+
+
+        if (kintoneTab) {
+            kintoneTab.classList.toggle(
+                'active',
+                tabName === 'kintone'
+            );
+        }
+
+
+        if (mailTab) {
+            mailTab.classList.toggle(
+                'active',
+                tabName === 'mail'
+            );
+        }
+    }
+
+
+    /*
+     * ナビゲーションイベント
+     */
+    const navList =
+        getElement('nav-list');
+
+    if (navList) {
+        navList.addEventListener(
+            'click',
+            function () {
+                showPage('list');
+                loadSurveys();
+            }
+        );
+    }
+
+
+    const navCreate =
+        getElement('nav-create');
+
+    if (navCreate) {
+        navCreate.addEventListener(
+            'click',
+            function () {
+                openNewSurveyEditor();
+            }
+        );
+    }
+
+
+    const navCustomers =
+        getElement('nav-customers');
+
+    if (navCustomers) {
+        navCustomers.addEventListener(
+            'click',
+            function () {
+                showPage('customers');
+                loadCustomers();
+            }
+        );
+    }
+
+
+    const navSettings =
+        getElement('nav-settings');
+
+    if (navSettings) {
+        navSettings.addEventListener(
+            'click',
+            function () {
+                showPage('settings');
+                loadSettings();
+            }
+        );
+    }
+
+
+    /*
+     * 一覧から新規作成
+     */
+    const openCreate =
+        getElement('btn-open-create');
+
+    if (openCreate) {
+        openCreate.addEventListener(
+            'click',
+            function () {
+                openNewSurveyEditor();
+            }
+        );
+    }
+
+
+    /*
+     * グループ追加
+     */
+    const addGroupButton =
+        getElement('btn-add-group');
+
+    if (addGroupButton) {
+        addGroupButton.addEventListener(
+            'click',
+            function () {
+                addGroup();
+            }
+        );
+    }
+
+
+    /*
+     * 編集画面から一覧へ戻る
+     */
+    const editorBack =
+        getElement('btn-editor-back');
+
+    if (editorBack) {
+        editorBack.addEventListener(
+            'click',
+            function () {
+                showPage('list');
+                loadSurveys();
+            }
+        );
+    }
+
+
+    /*
+     * アンケート保存
+     */
+    const saveSurveyButton =
+        getElement(
+            'btn-save-survey'
+        );
+
+    if (saveSurveyButton) {
+        saveSurveyButton.addEventListener(
+            'click',
+            function () {
+
+                saveSurvey(
+                    saveSurveyButton
+                );
+            }
+        );
+    }
+
+
+    /*
+     * 詳細から一覧へ
+     */
+    const detailBack =
+        getElement(
+            'btn-detail-back'
+        );
+
+    if (detailBack) {
+        detailBack.addEventListener(
+            'click',
+            function () {
+                showPage('list');
+                loadSurveys();
+            }
+        );
+    }
+
+
+    /*
+     * 詳細から編集
+     */
+    const detailEdit =
+        getElement(
+            'btn-detail-edit'
+        );
+
+    if (detailEdit) {
+        detailEdit.addEventListener(
+            'click',
+            function () {
+
+                if (
+                    String(
+                        selectedSurveyId || ''
+                    ) === ''
+                ) {
+                    return;
+                }
+
+                openSurveyEditor(
+                    selectedSurveyId
+                );
+            }
+        );
+    }
+
+
+    /*
+     * 回答結果
+     */
+    const showResults =
+        getElement(
+            'btn-show-results'
+        );
+
+    if (showResults) {
+        showResults.addEventListener(
+            'click',
+            function () {
+
+                loadSurveyResults(
+                    showResults
+                );
+            }
+        );
+    }
+
+
+    /*
+     * 顧客更新
+     */
+    const refreshCustomers =
+        getElement(
+            'btn-refresh-customers'
+        );
+
+    if (refreshCustomers) {
+        refreshCustomers.addEventListener(
+            'click',
+            function () {
+
+                loadCustomers(
+                    refreshCustomers
+                );
+            }
+        );
+    }
+
+
+    /*
+     * kintone接続テスト
+     */
+    const testKintoneButton =
+        getElement(
+            'btn-test-kintone'
+        );
+
+    if (testKintoneButton) {
+        testKintoneButton.addEventListener(
+            'click',
+            function () {
+
+                testKintone(
+                    testKintoneButton
+                );
+            }
+        );
+    }
+
+
+    /*
+     * kintone設定保存
+     */
+    const saveKintoneButton =
+        getElement(
+            'btn-save-kintone'
+        );
+
+    if (saveKintoneButton) {
+        saveKintoneButton.addEventListener(
+            'click',
+            function () {
+
+                saveKintoneSettings(
+                    saveKintoneButton
+                );
+            }
+        );
+    }
+
+
+    /*
+     * メール設定確認
+     */
+    const testMailButton =
+        getElement(
+            'btn-test-mail'
+        );
+
+    if (testMailButton) {
+        testMailButton.addEventListener(
+            'click',
+            function () {
+
+                testMail(
+                    testMailButton
+                );
+            }
+        );
+    }
+
+
+    /*
+     * メール設定保存
+     */
+    const saveMailButton =
+        getElement(
+            'btn-save-mail'
+        );
+
+    if (saveMailButton) {
+        saveMailButton.addEventListener(
+            'click',
+            function () {
+
+                saveMailSettings(
+                    saveMailButton
+                );
+            }
+        );
+    }
+
+
+    /*
+     * 回答依頼送信
+     */
+    const sendSurveyButton =
+        getElement(
+            'btn-send-survey'
+        );
+
+    if (sendSurveyButton) {
+        sendSurveyButton.addEventListener(
+            'click',
+            function () {
+
+                sendSurveyRequest(
+                    sendSurveyButton
+                );
+            }
+        );
+    }
+
+
+    /*
+     * 設定タブ
+     */
+    const kintoneTab =
+        getElement(
+            'settings-tab-kintone'
+        );
+
+    if (kintoneTab) {
+        kintoneTab.addEventListener(
+            'click',
+            function () {
+                showSettingsTab(
+                    'kintone'
+                );
+            }
+        );
+    }
+
+
+    const mailTab =
+        getElement(
+            'settings-tab-mail'
+        );
+
+    if (mailTab) {
+        mailTab.addEventListener(
+            'click',
+            function () {
+                showSettingsTab(
+                    'mail'
+                );
+            }
+        );
+    }
+
+
+    /*
+     * モーダル閉じる
+     */
+    const modalClose =
+        getElement(
+            'modal-close'
+        );
+
+    if (modalClose) {
+        modalClose.addEventListener(
+            'click',
+            function () {
+                closeModal(false);
+            }
+        );
+    }
+
+
+    const modalCancel =
+        getElement(
+            'modal-cancel'
+        );
+
+    if (modalCancel) {
+        modalCancel.addEventListener(
+            'click',
+            function () {
+                closeModal(false);
+            }
+        );
+    }
+
+
+    const modalOk =
+        getElement(
+            'modal-ok'
+        );
+
+    if (modalOk) {
+        modalOk.addEventListener(
+            'click',
+            function () {
+                closeModal(true);
+            }
+        );
+    }
+
+
+    /*
+     * モーダル背景クリック
+     */
+    const modal =
+        getElement('modal');
+
+    if (modal) {
+        modal.addEventListener(
+            'click',
+            function (event) {
+
+                if (
+                    event.target === modal
+                ) {
+                    closeModal(false);
+                }
+            }
+        );
+    }
+
+
+    /*
+     * Escapeキー
+     */
+    document.addEventListener(
+        'keydown',
+        function (event) {
+
+            if (
+                event.key === 'Escape'
+            ) {
+                const modal =
+                    getElement('modal');
+
+                if (
+                    modal &&
+                    !modal.classList.contains(
+                        'hidden'
+                    )
+                ) {
+                    closeModal(false);
+                }
+            }
+        }
+    );
+
+
+    /*
+     * 初期表示
+     */
+    showPage('list');
+
+    showSettingsTab(
+        'kintone'
+    );
+
+    loadSurveys();
+});
+</script>
+
+</body>
+</html>
