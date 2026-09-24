@@ -4011,3 +4011,4775 @@ textarea {
 }
 </style>
 </head>
+<body>
+
+<div id="app" class="app">
+
+    <!-- =====================================================
+         管理画面ヘッダー
+         ===================================================== -->
+    <header class="topbar">
+        <div class="logo">アンケート業務運営</div>
+
+        <nav class="main-nav" id="main-nav">
+            <button type="button" class="active" data-page="dashboard">回答状況</button>
+            <button type="button" data-page="surveys">アンケート管理</button>
+            <button type="button" data-page="customers">顧客管理</button>
+            <button type="button" data-page="settings">設定</button>
+        </nav>
+    </header>
+
+    <!-- =====================================================
+         通知
+         ===================================================== -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+    <!-- =====================================================
+         メイン：回答状況
+         ===================================================== -->
+    <main id="page-dashboard" class="page">
+
+        <div class="page-header">
+            <div>
+                <h1>回答状況</h1>
+                <div class="subtext">
+                    アンケートの送信状況と回答状況を確認できます。
+                </div>
+            </div>
+
+            <div class="action-row">
+                <button
+                    type="button"
+                    id="dashboard-refresh-button"
+                    class="btn btn-primary"
+                >
+                    <span class="loading-spinner"></span>
+                    最新状態に更新
+                </button>
+            </div>
+        </div>
+
+        <div class="dashboard-grid">
+
+            <div class="stat-card">
+                <div class="stat-label">アンケート数</div>
+                <div id="stat-survey-count" class="stat-value">0</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">公開中</div>
+                <div id="stat-open-count" class="stat-value">0</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">送信件数</div>
+                <div id="stat-sent-count" class="stat-value">0</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">回答件数</div>
+                <div id="stat-response-count" class="stat-value">0</div>
+            </div>
+
+        </div>
+
+        <section class="card">
+            <div class="card-title">
+                アンケート別回答状況
+            </div>
+
+            <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                    <tr>
+                        <th>アンケート名</th>
+                        <th>状態</th>
+                        <th>送信</th>
+                        <th>回答</th>
+                        <th>回答率</th>
+                        <th>操作</th>
+                    </tr>
+                    </thead>
+                    <tbody id="dashboard-survey-list">
+                    <tr>
+                        <td colspan="6" class="empty">
+                            読み込み中です。
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- =====================================================
+         アンケート管理
+         ===================================================== -->
+    <main id="page-surveys" class="page hidden">
+
+        <div class="page-header">
+            <div>
+                <h1>アンケート管理</h1>
+                <div class="subtext">
+                    アンケートの作成、編集、公開、終了、送信を行います。
+                </div>
+            </div>
+
+            <div class="action-row">
+                <button
+                    type="button"
+                    id="survey-new-button"
+                    class="btn btn-primary"
+                >
+                    新しいアンケートを作成
+                </button>
+            </div>
+        </div>
+
+        <section id="survey-list-section" class="card">
+
+            <div class="card-title">
+                アンケート一覧
+            </div>
+
+            <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                    <tr>
+                        <th>アンケート名</th>
+                        <th>状態</th>
+                        <th>質問数</th>
+                        <th>更新日時</th>
+                        <th>操作</th>
+                    </tr>
+                    </thead>
+
+                    <tbody id="survey-list">
+                    <tr>
+                        <td colspan="5" class="empty">
+                            読み込み中です。
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+
+        </section>
+
+        <!-- =================================================
+             アンケート編集
+             ================================================= -->
+        <section id="survey-editor-section" class="hidden">
+
+            <div class="page-header">
+
+                <div>
+                    <h1 id="survey-editor-title">
+                        アンケート作成
+                    </h1>
+
+                    <div
+                        id="survey-editor-status"
+                        class="subtext"
+                    >
+                        下書き
+                    </div>
+                </div>
+
+                <div class="action-row">
+
+                    <button
+                        type="button"
+                        id="survey-editor-back-button"
+                        class="btn"
+                    >
+                        一覧へ戻る
+                    </button>
+
+                    <button
+                        type="button"
+                        id="survey-editor-save-button"
+                        class="btn btn-primary"
+                    >
+                        <span class="loading-spinner"></span>
+                        保存
+                    </button>
+
+                    <button
+                        type="button"
+                        id="survey-editor-preview-button"
+                        class="btn"
+                    >
+                        内容を確認
+                    </button>
+
+                </div>
+
+            </div>
+
+            <div id="survey-editor-message"></div>
+
+            <section class="card">
+
+                <div class="card-title">
+                    基本情報
+                </div>
+
+                <div class="form-grid">
+
+                    <div class="field">
+                        <label for="survey-title">
+                            アンケート名
+                        </label>
+
+                        <input
+                            type="text"
+                            id="survey-title"
+                            maxlength="200"
+                            autocomplete="off"
+                        >
+
+                        <div
+                            id="survey-title-error"
+                            class="error-text"
+                        ></div>
+                    </div>
+
+                    <div class="field">
+                        <label for="survey-description">
+                            説明
+                        </label>
+
+                        <input
+                            type="text"
+                            id="survey-description"
+                            maxlength="500"
+                        >
+                    </div>
+
+                </div>
+
+                <div class="form-grid">
+
+                    <div class="field">
+                        <label for="survey-start-date">
+                            公開開始日時
+                        </label>
+
+                        <input
+                            type="datetime-local"
+                            id="survey-start-date"
+                        >
+                    </div>
+
+                    <div class="field">
+                        <label for="survey-end-date">
+                            公開終了日時
+                        </label>
+
+                        <input
+                            type="datetime-local"
+                            id="survey-end-date"
+                        >
+                    </div>
+
+                </div>
+
+            </section>
+
+            <section class="card">
+
+                <div class="card-title">
+                    質問
+                    <small>
+                        グループ単位で整理できます
+                    </small>
+                </div>
+
+                <div
+                    id="survey-groups"
+                    class="groups"
+                ></div>
+
+                <div class="add-group-area">
+                    <button
+                        type="button"
+                        id="add-group-button"
+                        class="btn"
+                    >
+                        ＋ 質問グループを追加
+                    </button>
+                </div>
+
+            </section>
+
+            <div class="action-row right">
+
+                <button
+                    type="button"
+                    id="survey-editor-cancel-button"
+                    class="btn"
+                >
+                    キャンセル
+                </button>
+
+                <button
+                    type="button"
+                    id="survey-editor-save-button-bottom"
+                    class="btn btn-primary"
+                >
+                    <span class="loading-spinner"></span>
+                    保存する
+                </button>
+
+            </div>
+
+        </section>
+
+        <!-- =================================================
+             アンケート内容確認
+             ================================================= -->
+        <section
+            id="survey-preview-section"
+            class="card hidden"
+        >
+
+            <div class="page-header">
+
+                <div>
+                    <h1>アンケート内容確認</h1>
+                    <div class="subtext">
+                        回答者に表示される内容を確認してください。
+                    </div>
+                </div>
+
+                <div class="action-row">
+
+                    <button
+                        type="button"
+                        id="survey-preview-back-button"
+                        class="btn"
+                    >
+                        編集画面へ戻る
+                    </button>
+
+                    <button
+                        type="button"
+                        id="survey-preview-save-button"
+                        class="btn btn-primary"
+                    >
+                        <span class="loading-spinner"></span>
+                        保存
+                    </button>
+
+                </div>
+
+            </div>
+
+            <div
+                id="survey-preview-content"
+            ></div>
+
+        </section>
+
+    </main>
+
+    <!-- =====================================================
+         顧客管理
+         ===================================================== -->
+    <main id="page-customers" class="page hidden">
+
+        <div class="page-header">
+
+            <div>
+                <h1>顧客管理</h1>
+
+                <div class="subtext">
+                    kintoneから顧客情報を取得します。
+                </div>
+            </div>
+
+            <div class="action-row">
+
+                <button
+                    type="button"
+                    id="customer-refresh-button"
+                    class="btn btn-primary"
+                >
+                    <span class="loading-spinner"></span>
+                    kintoneから更新
+                </button>
+
+            </div>
+
+        </div>
+
+        <section class="card">
+
+            <div class="card-title">
+                顧客検索
+            </div>
+
+            <div class="customer-search">
+
+                <input
+                    type="search"
+                    id="customer-search-input"
+                    placeholder="顧客名・メールアドレスで検索"
+                    autocomplete="off"
+                >
+
+                <button
+                    type="button"
+                    id="customer-search-clear-button"
+                    class="btn"
+                >
+                    クリア
+                </button>
+
+            </div>
+
+        </section>
+
+        <section class="card">
+
+            <div class="card-title">
+                顧客一覧
+                <small id="customer-count-label">
+                    0件
+                </small>
+            </div>
+
+            <div class="table-wrap">
+
+                <table class="table">
+
+                    <thead>
+                    <tr>
+                        <th>選択</th>
+                        <th>顧客名</th>
+                        <th>メールアドレス</th>
+                        <th>顧客ID</th>
+                    </tr>
+                    </thead>
+
+                    <tbody id="customer-list">
+                    <tr>
+                        <td colspan="4" class="empty">
+                            顧客情報がありません。
+                        </td>
+                    </tr>
+                    </tbody>
+
+                </table>
+
+            </div>
+
+        </section>
+
+    </main>
+
+    <!-- =====================================================
+         設定
+         ===================================================== -->
+    <main id="page-settings" class="page hidden">
+
+        <div class="page-header">
+
+            <div>
+                <h1>設定</h1>
+
+                <div class="subtext">
+                    kintoneおよびメール送信の設定を行います。
+                </div>
+            </div>
+
+        </div>
+
+        <div id="settings-message"></div>
+
+        <!-- =================================================
+             kintone設定
+             ================================================= -->
+        <section class="card settings-section">
+
+            <div class="card-title">
+                kintone設定
+            </div>
+
+            <div
+                id="kintone-status"
+                class="settings-status"
+            >
+                <span
+                    id="kintone-status-dot"
+                    class="status-dot"
+                ></span>
+
+                <span id="kintone-status-text">
+                    未設定
+                </span>
+            </div>
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="kintone-domain">
+                        サブドメイン
+                    </label>
+
+                    <input
+                        type="text"
+                        id="kintone-domain"
+                        placeholder="example"
+                        autocomplete="off"
+                    >
+
+                </div>
+
+                <div class="field">
+
+                    <label for="kintone-app-id">
+                        顧客アプリID
+                    </label>
+
+                    <input
+                        type="text"
+                        id="kintone-app-id"
+                        inputmode="numeric"
+                    >
+
+                </div>
+
+            </div>
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="kintone-login-name">
+                        ログイン名
+                    </label>
+
+                    <input
+                        type="text"
+                        id="kintone-login-name"
+                        autocomplete="username"
+                    >
+
+                </div>
+
+                <div class="field">
+
+                    <label for="kintone-password">
+                        パスワード
+                    </label>
+
+                    <input
+                        type="password"
+                        id="kintone-password"
+                        autocomplete="current-password"
+                    >
+
+                </div>
+
+            </div>
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="kintone-id-field">
+                        顧客IDフィールド
+                    </label>
+
+                    <input
+                        type="text"
+                        id="kintone-id-field"
+                        placeholder="customer_id"
+                    >
+
+                </div>
+
+                <div class="field">
+
+                    <label for="kintone-name-field">
+                        顧客名フィールド
+                    </label>
+
+                    <input
+                        type="text"
+                        id="kintone-name-field"
+                        placeholder="customer_name"
+                    >
+
+                </div>
+
+            </div>
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="kintone-email-field">
+                        メールアドレスフィールド
+                    </label>
+
+                    <input
+                        type="text"
+                        id="kintone-email-field"
+                        placeholder="email"
+                    >
+
+                </div>
+
+                <div class="field">
+
+                    <label for="kintone-proxy">
+                        プロキシサーバ
+                    </label>
+
+                    <input
+                        type="text"
+                        id="kintone-proxy"
+                        placeholder="host:port"
+                        autocomplete="off"
+                    >
+
+                </div>
+
+            </div>
+
+            <div class="action-row">
+
+                <button
+                    type="button"
+                    id="kintone-save-button"
+                    class="btn btn-primary"
+                >
+                    <span class="loading-spinner"></span>
+                    kintone設定を保存
+                </button>
+
+                <button
+                    type="button"
+                    id="kintone-test-button"
+                    class="btn"
+                >
+                    <span class="loading-spinner"></span>
+                    接続テスト
+                </button>
+
+            </div>
+
+        </section>
+
+        <!-- =================================================
+             メール設定
+             ================================================= -->
+        <section class="card settings-section">
+
+            <div class="card-title">
+                メール設定
+            </div>
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="smtp-server">
+                        SMTPサーバ
+                    </label>
+
+                    <input
+                        type="text"
+                        id="smtp-server"
+                    >
+
+                </div>
+
+                <div class="field">
+
+                    <label for="smtp-port">
+                        SMTPポート
+                    </label>
+
+                    <input
+                        type="number"
+                        id="smtp-port"
+                        min="1"
+                        max="65535"
+                        value="587"
+                    >
+
+                </div>
+
+            </div>
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="smtp-connection-type">
+                        接続方式
+                    </label>
+
+                    <select id="smtp-connection-type">
+
+                        <option value="tls">
+                            TLS
+                        </option>
+
+                        <option value="ssl">
+                            SSL
+                        </option>
+
+                        <option value="none">
+                            なし
+                        </option>
+
+                    </select>
+
+                </div>
+
+                <div class="field">
+
+                    <label for="smtp-username">
+                        SMTPユーザー名
+                    </label>
+
+                    <input
+                        type="text"
+                        id="smtp-username"
+                        autocomplete="username"
+                    >
+
+                </div>
+
+            </div>
+
+            <div class="form-grid">
+
+                <div class="field">
+
+                    <label for="smtp-password">
+                        SMTPパスワード
+                    </label>
+
+                    <input
+                        type="password"
+                        id="smtp-password"
+                        autocomplete="current-password"
+                    >
+
+                </div>
+
+                <div class="field">
+
+                    <label for="mail-from-email">
+                        送信元メールアドレス
+                    </label>
+
+                    <input
+                        type="email"
+                        id="mail-from-email"
+                    >
+
+                </div>
+
+            </div>
+
+            <div class="field">
+
+                <label for="mail-from-name">
+                    送信元名
+                </label>
+
+                <input
+                    type="text"
+                    id="mail-from-name"
+                >
+
+            </div>
+
+            <div class="action-row">
+
+                <button
+                    type="button"
+                    id="mail-save-button"
+                    class="btn btn-primary"
+                >
+                    <span class="loading-spinner"></span>
+                    メール設定を保存
+                </button>
+
+                <button
+                    type="button"
+                    id="mail-test-button"
+                    class="btn"
+                >
+                    <span class="loading-spinner"></span>
+                    接続テスト
+                </button>
+
+            </div>
+
+        </section>
+
+    </main>
+
+</div>
+
+<!-- =========================================================
+     回答者画面
+     ========================================================= -->
+<main
+    id="respondent-page"
+    class="respondent-page hidden"
+>
+
+    <div
+        id="respondent-content"
+    ></div>
+
+</main>
+
+<!-- =========================================================
+     モーダル
+     ========================================================= -->
+<div
+    id="modal-backdrop"
+    class="modal-backdrop hidden"
+    role="presentation"
+>
+
+    <div
+        id="modal"
+        class="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-title"
+    >
+
+        <div
+            id="modal-title"
+            class="modal-header"
+        >
+            確認
+        </div>
+
+        <div
+            id="modal-body"
+            class="modal-body"
+        ></div>
+
+        <div class="modal-footer">
+
+            <button
+                type="button"
+                id="modal-cancel-button"
+                class="btn"
+            >
+                キャンセル
+            </button>
+
+            <button
+                type="button"
+                id="modal-ok-button"
+                class="btn btn-primary"
+            >
+                OK
+            </button>
+
+        </div>
+
+    </div>
+
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    'use strict';
+
+    /* =========================================================
+     * 基本値
+     * ========================================================= */
+
+    const API_PATH = <?= json_encode(
+        application_api_path(),
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+    ) ?>;
+
+    const CSRF_TOKEN = <?= json_encode(
+        csrf_token(),
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+    ) ?>;
+
+    const state = {
+        currentPage: 'dashboard',
+        surveys: [],
+        customers: [],
+        responses: [],
+        currentSurvey: null,
+        selectedCustomerIds: [],
+        editingSurveyId: '',
+        modalResolver: null
+    };
+
+    /* =========================================================
+     * DOM取得
+     * ========================================================= */
+
+    const get = (id) => document.getElementById(id);
+
+    const toastContainer = get('toast-container');
+    const modalBackdrop = get('modal-backdrop');
+    const modalTitle = get('modal-title');
+    const modalBody = get('modal-body');
+    const modalCancelButton = get('modal-cancel-button');
+    const modalOkButton = get('modal-ok-button');
+
+    /* =========================================================
+     * 共通表示
+     * ========================================================= */
+
+    function showToast(message, type = 'success') {
+        if (!toastContainer) {
+            return;
+        }
+
+        const toast = document.createElement('div');
+        toast.className = 'toast ' + type;
+        toast.textContent = String(message ?? '');
+
+        toastContainer.appendChild(toast);
+
+        window.setTimeout(() => {
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+            }
+        }, 4000);
+    }
+
+    function setButtonLoading(button, loading) {
+        if (!button) {
+            return;
+        }
+
+        button.disabled = loading;
+
+        if (loading) {
+            button.classList.add('loading');
+        } else {
+            button.classList.remove('loading');
+        }
+    }
+
+    function setButtonLoadingImmediately(button) {
+        if (!button) {
+            return;
+        }
+
+        button.disabled = true;
+        button.classList.add('loading');
+    }
+
+    function escapeHtml(value) {
+        const div = document.createElement('div');
+        div.textContent = String(value ?? '');
+        return div.innerHTML;
+    }
+
+    function formatDateTime(value) {
+        if (!value) {
+            return '';
+        }
+
+        const date = new Date(value);
+
+        if (Number.isNaN(date.getTime())) {
+            return String(value);
+        }
+
+        return date.toLocaleString('ja-JP', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    }
+
+    function surveyStatusLabel(status) {
+        switch (status) {
+            case 'open':
+                return '公開中';
+            case 'closed':
+                return '終了';
+            case 'draft':
+            default:
+                return '下書き';
+        }
+    }
+
+    function surveyStatusClass(status) {
+        switch (status) {
+            case 'open':
+                return 'badge badge-open';
+            case 'closed':
+                return 'badge badge-closed';
+            default:
+                return 'badge badge-draft';
+        }
+    }
+
+    function questionTypeLabel(type) {
+        switch (type) {
+            case 'single':
+                return '単一選択';
+            case 'multiple':
+                return '複数選択';
+            case 'text':
+                return '自由記述';
+            case 'textarea':
+                return '自由記述';
+            default:
+                return type || '選択';
+        }
+    }
+
+    /* =========================================================
+     * API通信
+     * ========================================================= */
+
+    async function apiGet(action, params = {}) {
+        const query = new URLSearchParams();
+
+        query.set('action', action);
+
+        Object.keys(params).forEach((key) => {
+            const value = params[key];
+
+            if (
+                value !== null &&
+                value !== undefined &&
+                String(value) !== ''
+            ) {
+                query.set(key, String(value));
+            }
+        });
+
+        const response = await fetch(
+            API_PATH + '?' + query.toString(),
+            {
+                method: 'GET',
+                credentials: 'same-origin',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+            throw new Error(
+                data?.message ||
+                'データの取得に失敗しました。'
+            );
+        }
+
+        return data;
+    }
+
+    async function apiPost(action, payload = {}, button = null) {
+        if (button) {
+            setButtonLoadingImmediately(button);
+        }
+
+        try {
+            const response = await fetch(
+                API_PATH + '?action=' + encodeURIComponent(action),
+                {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'X-CSRF-Token': CSRF_TOKEN
+                    },
+                    body: JSON.stringify(payload)
+                }
+            );
+
+            const data = await response.json();
+
+            if (!response.ok || !data.success) {
+                throw new Error(
+                    data?.message ||
+                    '処理に失敗しました。'
+                );
+            }
+
+            return data;
+
+        } finally {
+            if (button) {
+                setButtonLoading(button, false);
+            }
+        }
+    }
+
+    /* =========================================================
+     * ページ切替
+     * ========================================================= */
+
+    function showPage(pageName) {
+        const pages = [
+            'dashboard',
+            'surveys',
+            'customers',
+            'settings'
+        ];
+
+        pages.forEach((name) => {
+            const page = get('page-' + name);
+
+            if (!page) {
+                return;
+            }
+
+            page.classList.toggle(
+                'hidden',
+                name !== pageName
+            );
+        });
+
+        const respondentPage = get('respondent-page');
+
+        if (respondentPage) {
+            respondentPage.classList.add('hidden');
+        }
+
+        const navButtons = document.querySelectorAll(
+            '#main-nav button[data-page]'
+        );
+
+        navButtons.forEach((button) => {
+            button.classList.toggle(
+                'active',
+                button.dataset.page === pageName
+            );
+        });
+
+        state.currentPage = pageName;
+
+        if (pageName === 'dashboard') {
+            loadDashboard();
+        } else if (pageName === 'surveys') {
+            loadSurveys();
+        } else if (pageName === 'customers') {
+            loadCustomers();
+        } else if (pageName === 'settings') {
+            loadSettings();
+        }
+    }
+
+    /* =========================================================
+     * ダッシュボード
+     * ========================================================= */
+
+    async function loadDashboard(button = null) {
+        try {
+            const result = await apiGet(
+                'aggregate_responses'
+            );
+
+            const data = result?.data ?? {};
+
+            const surveys = Array.isArray(data.surveys)
+                ? data.surveys
+                : [];
+
+            const stats = data.stats ?? {};
+
+            const surveyCount = Number(
+                stats.survey_count ?? surveys.length
+            );
+
+            const openCount = Number(
+                stats.open_count ?? 0
+            );
+
+            const sentCount = Number(
+                stats.sent_count ?? 0
+            );
+
+            const responseCount = Number(
+                stats.response_count ?? 0
+            );
+
+            const surveyCountElement =
+                get('stat-survey-count');
+
+            const openCountElement =
+                get('stat-open-count');
+
+            const sentCountElement =
+                get('stat-sent-count');
+
+            const responseCountElement =
+                get('stat-response-count');
+
+            if (surveyCountElement) {
+                surveyCountElement.textContent =
+                    String(surveyCount);
+            }
+
+            if (openCountElement) {
+                openCountElement.textContent =
+                    String(openCount);
+            }
+
+            if (sentCountElement) {
+                sentCountElement.textContent =
+                    String(sentCount);
+            }
+
+            if (responseCountElement) {
+                responseCountElement.textContent =
+                    String(responseCount);
+            }
+
+            renderDashboardSurveys(surveys);
+
+        } catch (error) {
+            showToast(
+                error?.message ||
+                '回答状況を取得できませんでした。',
+                'error'
+            );
+        } finally {
+            if (button) {
+                setButtonLoading(button, false);
+            }
+        }
+    }
+
+    function renderDashboardSurveys(surveys) {
+        const tbody = get('dashboard-survey-list');
+
+        if (!tbody) {
+            return;
+        }
+
+        tbody.replaceChildren();
+
+        if (!Array.isArray(surveys) || surveys.length === 0) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+
+            td.colSpan = 6;
+            td.className = 'empty';
+            td.textContent =
+                'アンケートがありません。';
+
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+            return;
+        }
+
+        surveys.forEach((survey) => {
+            const tr = document.createElement('tr');
+
+            const titleTd = document.createElement('td');
+            titleTd.textContent =
+                survey?.title || '名称未設定';
+
+            const statusTd = document.createElement('td');
+
+            const badge = document.createElement('span');
+            badge.className =
+                surveyStatusClass(survey?.status);
+
+            badge.textContent =
+                surveyStatusLabel(survey?.status);
+
+            statusTd.appendChild(badge);
+
+            const sentTd = document.createElement('td');
+            sentTd.textContent =
+                String(survey?.sent_count ?? 0);
+
+            const responseTd = document.createElement('td');
+            responseTd.textContent =
+                String(survey?.response_count ?? 0);
+
+            const rateTd = document.createElement('td');
+
+            const sent = Number(
+                survey?.sent_count ?? 0
+            );
+
+            const responses = Number(
+                survey?.response_count ?? 0
+            );
+
+            const rate = sent > 0
+                ? Math.round(
+                    responses / sent * 100
+                )
+                : 0;
+
+            rateTd.textContent = rate + '%';
+
+            const actionTd = document.createElement('td');
+
+            const button = document.createElement('button');
+
+            button.type = 'button';
+            button.className = 'btn btn-small';
+            button.textContent = '詳細';
+
+            button.addEventListener(
+                'click',
+                () => {
+                    if (!survey?.id) {
+                        return;
+                    }
+
+                    openSurvey(survey.id);
+                }
+            );
+
+            actionTd.appendChild(button);
+
+            tr.appendChild(titleTd);
+            tr.appendChild(statusTd);
+            tr.appendChild(sentTd);
+            tr.appendChild(responseTd);
+            tr.appendChild(rateTd);
+            tr.appendChild(actionTd);
+
+            tbody.appendChild(tr);
+        });
+    }
+
+    /* =========================================================
+     * アンケート一覧
+     * ========================================================= */
+
+    async function loadSurveys() {
+        const tbody = get('survey-list');
+
+        if (tbody) {
+            tbody.replaceChildren();
+
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+
+            td.colSpan = 5;
+            td.className = 'empty';
+            td.textContent = '読み込み中です。';
+
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+        }
+
+        try {
+            const result = await apiGet('load_surveys');
+
+            const surveys =
+                Array.isArray(result?.data?.surveys)
+                    ? result.data.surveys
+                    : [];
+
+            state.surveys = surveys;
+
+            renderSurveyList(surveys);
+
+        } catch (error) {
+            showToast(
+                error?.message ||
+                'アンケート一覧を取得できませんでした。',
+                'error'
+            );
+        }
+    }
+
+    function renderSurveyList(surveys) {
+        const tbody = get('survey-list');
+
+        if (!tbody) {
+            return;
+        }
+
+        tbody.replaceChildren();
+
+        if (!Array.isArray(surveys) || surveys.length === 0) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+
+            td.colSpan = 5;
+            td.className = 'empty';
+            td.textContent =
+                'アンケートがありません。';
+
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+            return;
+        }
+
+        surveys.forEach((survey) => {
+            const tr = document.createElement('tr');
+
+            const titleTd = document.createElement('td');
+            titleTd.textContent =
+                survey?.title || '名称未設定';
+
+            const statusTd = document.createElement('td');
+
+            const badge = document.createElement('span');
+
+            badge.className =
+                surveyStatusClass(survey?.status);
+
+            badge.textContent =
+                surveyStatusLabel(survey?.status);
+
+            statusTd.appendChild(badge);
+
+            const questionTd = document.createElement('td');
+
+            let questionCount = 0;
+
+            if (Array.isArray(survey?.groups)) {
+                survey.groups.forEach((group) => {
+                    if (Array.isArray(group?.questions)) {
+                        questionCount +=
+                            group.questions.length;
+                    }
+                });
+            }
+
+            questionTd.textContent =
+                String(questionCount);
+
+            const updatedTd = document.createElement('td');
+
+            updatedTd.textContent =
+                formatDateTime(
+                    survey?.updated_at
+                );
+
+            const actionTd = document.createElement('td');
+
+            const actionRow =
+                document.createElement('div');
+
+            actionRow.className = 'action-row';
+
+            const editButton =
+                document.createElement('button');
+
+            editButton.type = 'button';
+            editButton.className =
+                'btn btn-small';
+            editButton.textContent = '編集';
+
+            editButton.addEventListener(
+                'click',
+                () => {
+                    if (!survey?.id) {
+                        return;
+                    }
+
+                    openSurvey(survey.id);
+                }
+            );
+
+            actionRow.appendChild(editButton);
+
+            if (survey?.status === 'draft') {
+                const publishButton =
+                    document.createElement('button');
+
+                publishButton.type = 'button';
+                publishButton.className =
+                    'btn btn-small btn-success';
+                publishButton.textContent = '公開';
+
+                publishButton.addEventListener(
+                    'click',
+                    async () => {
+                        if (!survey?.id) {
+                            return;
+                        }
+
+                        const confirmed =
+                            await confirmDialog(
+                                'アンケートを公開しますか？'
+                            );
+
+                        if (!confirmed) {
+                            return;
+                        }
+
+                        setButtonLoadingImmediately(
+                            publishButton
+                        );
+
+                        try {
+                            await apiPost(
+                                'publish_survey',
+                                {
+                                    survey_id: survey.id
+                                }
+                            );
+
+                            showToast(
+                                'アンケートを公開しました。'
+                            );
+
+                            await loadSurveys();
+
+                        } catch (error) {
+                            showToast(
+                                error?.message ||
+                                '公開に失敗しました。',
+                                'error'
+                            );
+                        } finally {
+                            setButtonLoading(
+                                publishButton,
+                                false
+                            );
+                        }
+                    }
+                );
+
+                actionRow.appendChild(
+                    publishButton
+                );
+            }
+
+            if (survey?.status === 'open') {
+                const closeButton =
+                    document.createElement('button');
+
+                closeButton.type = 'button';
+                closeButton.className =
+                    'btn btn-small';
+                closeButton.textContent = '終了';
+
+                closeButton.addEventListener(
+                    'click',
+                    async () => {
+                        if (!survey?.id) {
+                            return;
+                        }
+
+                        const confirmed =
+                            await confirmDialog(
+                                'アンケートを終了しますか？'
+                            );
+
+                        if (!confirmed) {
+                            return;
+                        }
+
+                        setButtonLoadingImmediately(
+                            closeButton
+                        );
+
+                        try {
+                            await apiPost(
+                                'close_survey',
+                                {
+                                    survey_id: survey.id
+                                }
+                            );
+
+                            showToast(
+                                'アンケートを終了しました。'
+                            );
+
+                            await loadSurveys();
+
+                        } catch (error) {
+                            showToast(
+                                error?.message ||
+                                '終了処理に失敗しました。',
+                                'error'
+                            );
+                        } finally {
+                            setButtonLoading(
+                                closeButton,
+                                false
+                            );
+                        }
+                    }
+                );
+
+                actionRow.appendChild(
+                    closeButton
+                );
+
+                const sendButton =
+                    document.createElement('button');
+
+                sendButton.type = 'button';
+                sendButton.className =
+                    'btn btn-small btn-primary';
+                sendButton.textContent = '送信';
+
+                sendButton.addEventListener(
+                    'click',
+                    () => {
+                        if (!survey?.id) {
+                            return;
+                        }
+
+                        openSendScreen(
+                            survey.id
+                        );
+                    }
+                );
+
+                actionRow.appendChild(
+                    sendButton
+                );
+            }
+
+            const deleteButton =
+                document.createElement('button');
+
+            deleteButton.type = 'button';
+            deleteButton.className =
+                'btn btn-small btn-danger';
+            deleteButton.textContent = '削除';
+
+            deleteButton.addEventListener(
+                'click',
+                async () => {
+                    if (!survey?.id) {
+                        return;
+                    }
+
+                    const confirmed =
+                        await confirmDialog(
+                            'このアンケートを削除しますか？'
+                        );
+
+                    if (!confirmed) {
+                        return;
+                    }
+
+                    setButtonLoadingImmediately(
+                        deleteButton
+                    );
+
+                    try {
+                        await apiPost(
+                            'delete_survey',
+                            {
+                                survey_id: survey.id
+                            }
+                        );
+
+                        showToast(
+                            'アンケートを削除しました。'
+                        );
+
+                        await loadSurveys();
+
+                    } catch (error) {
+                        showToast(
+                            error?.message ||
+                            '削除に失敗しました。',
+                            'error'
+                        );
+                    } finally {
+                        setButtonLoading(
+                            deleteButton,
+                            false
+                        );
+                    }
+                }
+            );
+
+            actionRow.appendChild(deleteButton);
+
+            actionTd.appendChild(actionRow);
+
+            tr.appendChild(titleTd);
+            tr.appendChild(statusTd);
+            tr.appendChild(questionTd);
+            tr.appendChild(updatedTd);
+            tr.appendChild(actionTd);
+
+            tbody.appendChild(tr);
+        });
+    }
+
+    /* =========================================================
+     * アンケート編集
+     * ========================================================= */
+
+    function createEmptyQuestion() {
+        return {
+            id: crypto.randomUUID
+                ? crypto.randomUUID()
+                : 'q_' + Date.now(),
+            title: '',
+            type: 'single',
+            required: false,
+            options: [
+                {
+                    id: 'o_' + Date.now() + '_1',
+                    label: '',
+                    next_group_id: ''
+                }
+            ]
+        };
+    }
+
+    function createEmptyGroup() {
+        return {
+            id: crypto.randomUUID
+                ? crypto.randomUUID()
+                : 'g_' + Date.now(),
+            title: '質問グループ',
+            questions: [
+                createEmptyQuestion()
+            ]
+        };
+    }
+
+    function createEmptySurvey() {
+        return {
+            id: '',
+            title: '',
+            description: '',
+            status: 'draft',
+            start_at: '',
+            end_at: '',
+            groups: [
+                createEmptyGroup()
+            ]
+        };
+    }
+
+    async function openSurvey(surveyId) {
+        try {
+            const result = await apiGet(
+                'load_survey',
+                {
+                    survey_id: surveyId
+                }
+            );
+
+            const survey =
+                result?.data?.survey ?? null;
+
+            if (!survey) {
+                throw new Error(
+                    'アンケートを取得できませんでした。'
+                );
+            }
+
+            state.currentSurvey =
+                JSON.parse(JSON.stringify(survey));
+
+            state.editingSurveyId =
+                survey.id || '';
+
+            showSurveyEditor();
+
+        } catch (error) {
+            showToast(
+                error?.message ||
+                'アンケートを開けませんでした。',
+                'error'
+            );
+        }
+    }
+
+    function showSurveyEditor() {
+        const listSection =
+            get('survey-list-section');
+
+        const editorSection =
+            get('survey-editor-section');
+
+        const previewSection =
+            get('survey-preview-section');
+
+        if (listSection) {
+            listSection.classList.add('hidden');
+        }
+
+        if (editorSection) {
+            editorSection.classList.remove('hidden');
+        }
+
+        if (previewSection) {
+            previewSection.classList.add('hidden');
+        }
+
+        const survey =
+            state.currentSurvey || createEmptySurvey();
+
+        const editorTitle =
+            get('survey-editor-title');
+
+        if (editorTitle) {
+            editorTitle.textContent =
+                survey.id
+                    ? 'アンケート編集'
+                    : 'アンケート作成';
+        }
+
+        const status =
+            get('survey-editor-status');
+
+        if (status) {
+            status.textContent =
+                surveyStatusLabel(
+                    survey.status
+                );
+        }
+
+        const title =
+            get('survey-title');
+
+        if (title) {
+            title.value =
+                survey.title || '';
+        }
+
+        const description =
+            get('survey-description');
+
+        if (description) {
+            description.value =
+                survey.description || '';
+        }
+
+        const startDate =
+            get('survey-start-date');
+
+        if (startDate) {
+            startDate.value =
+                toDatetimeLocal(
+                    survey.start_at
+                );
+        }
+
+        const endDate =
+            get('survey-end-date');
+
+        if (endDate) {
+            endDate.value =
+                toDatetimeLocal(
+                    survey.end_at
+                );
+        }
+
+        renderSurveyGroups(
+            Array.isArray(survey.groups)
+                ? survey.groups
+                : []
+        );
+    }
+
+    function toDatetimeLocal(value) {
+        if (!value) {
+            return '';
+        }
+
+        const date = new Date(value);
+
+        if (Number.isNaN(date.getTime())) {
+            return '';
+        }
+
+        const pad = (number) =>
+            String(number).padStart(2, '0');
+
+        return (
+            date.getFullYear() +
+            '-' +
+            pad(date.getMonth() + 1) +
+            '-' +
+            pad(date.getDate()) +
+            'T' +
+            pad(date.getHours()) +
+            ':' +
+            pad(date.getMinutes())
+        );
+    }
+
+    function renderSurveyGroups(groups) {
+        const container =
+            get('survey-groups');
+
+        if (!container) {
+            return;
+        }
+
+        container.replaceChildren();
+
+        if (
+            !Array.isArray(groups) ||
+            groups.length === 0
+        ) {
+            container.textContent =
+                '質問グループがありません。';
+
+            return;
+        }
+
+        groups.forEach(
+            (group, groupIndex) => {
+                container.appendChild(
+                    createGroupElement(
+                        group,
+                        groupIndex
+                    )
+                );
+            }
+        );
+    }
+
+    function createGroupElement(group, groupIndex) {
+        const wrapper =
+            document.createElement('div');
+
+        wrapper.className = 'group-card';
+        wrapper.dataset.groupId =
+            group.id || '';
+
+        const header =
+            document.createElement('div');
+
+        header.className = 'group-header';
+
+        const handle =
+            document.createElement('span');
+
+        handle.className = 'drag-handle';
+        handle.textContent = '☷';
+        handle.title = '並べ替え';
+
+        const titleWrapper =
+            document.createElement('div');
+
+        titleWrapper.className = 'group-title';
+
+        const titleInput =
+            document.createElement('input');
+
+        titleInput.type = 'text';
+        titleInput.value =
+            group.title || '';
+        titleInput.placeholder =
+            '質問グループ名';
+
+        titleInput.addEventListener(
+            'input',
+            () => {
+                if (
+                    state.currentSurvey &&
+                    Array.isArray(
+                        state.currentSurvey.groups
+                    ) &&
+                    state.currentSurvey.groups[
+                        groupIndex
+                    ]
+                ) {
+                    state.currentSurvey.groups[
+                        groupIndex
+                    ].title =
+                        titleInput.value;
+                }
+            }
+        );
+
+        titleWrapper.appendChild(titleInput);
+
+        const actions =
+            document.createElement('div');
+
+        actions.className =
+            'group-actions';
+
+        const removeGroupButton =
+            document.createElement('button');
+
+        removeGroupButton.type = 'button';
+        removeGroupButton.className =
+            'btn btn-small btn-danger';
+        removeGroupButton.textContent = '削除';
+
+        removeGroupButton.addEventListener(
+            'click',
+            async () => {
+                const confirmed =
+                    await confirmDialog(
+                        'この質問グループを削除しますか？'
+                    );
+
+                if (!confirmed) {
+                    return;
+                }
+
+                if (
+                    state.currentSurvey &&
+                    Array.isArray(
+                        state.currentSurvey.groups
+                    )
+                ) {
+                    state.currentSurvey.groups.splice(
+                        groupIndex,
+                        1
+                    );
+
+                    renderSurveyGroups(
+                        state.currentSurvey.groups
+                    );
+                }
+            }
+        );
+
+        actions.appendChild(
+            removeGroupButton
+        );
+
+        header.appendChild(handle);
+        header.appendChild(titleWrapper);
+        header.appendChild(actions);
+
+        wrapper.appendChild(header);
+
+        const questionContainer =
+            document.createElement('div');
+
+        if (
+            Array.isArray(group.questions)
+        ) {
+            group.questions.forEach(
+                (question, questionIndex) => {
+                    questionContainer.appendChild(
+                        createQuestionElement(
+                            group,
+                            groupIndex,
+                            question,
+                            questionIndex
+                        )
+                    );
+                }
+            );
+        }
+
+        wrapper.appendChild(
+            questionContainer
+        );
+
+        const addQuestionArea =
+            document.createElement('div');
+
+        addQuestionArea.className =
+            'add-question-area';
+
+        const addQuestionButton =
+            document.createElement('button');
+
+        addQuestionButton.type = 'button';
+        addQuestionButton.className =
+            'btn btn-small';
+        addQuestionButton.textContent =
+            '＋ 質問を追加';
+
+        addQuestionButton.addEventListener(
+            'click',
+            () => {
+                if (
+                    !state.currentSurvey ||
+                    !Array.isArray(
+                        state.currentSurvey.groups
+                    )
+                ) {
+                    return;
+                }
+
+                const targetGroup =
+                    state.currentSurvey.groups[
+                        groupIndex
+                    ];
+
+                if (!targetGroup) {
+                    return;
+                }
+
+                if (
+                    !Array.isArray(
+                        targetGroup.questions
+                    )
+                ) {
+                    targetGroup.questions = [];
+                }
+
+                targetGroup.questions.push(
+                    createEmptyQuestion()
+                );
+
+                renderSurveyGroups(
+                    state.currentSurvey.groups
+                );
+            }
+        );
+
+        addQuestionArea.appendChild(
+            addQuestionButton
+        );
+
+        wrapper.appendChild(
+            addQuestionArea
+        );
+
+        return wrapper;
+    }
+
+    function createQuestionElement(
+        group,
+        groupIndex,
+        question,
+        questionIndex
+    ) {
+        const card =
+            document.createElement('div');
+
+        card.className = 'question-card';
+
+        const head =
+            document.createElement('div');
+
+        head.className = 'question-head';
+
+        const number =
+            document.createElement('div');
+
+        number.className = 'question-number';
+        number.textContent =
+            '質問 ' + (questionIndex + 1);
+
+        const title =
+            document.createElement('div');
+
+        title.className = 'question-title';
+
+        const titleInput =
+            document.createElement('input');
+
+        titleInput.type = 'text';
+        titleInput.value =
+            question.title || '';
+        titleInput.placeholder =
+            '質問文を入力してください';
+
+        titleInput.addEventListener(
+            'input',
+            () => {
+                question.title =
+                    titleInput.value;
+            }
+        );
+
+        title.appendChild(titleInput);
+
+        const tools =
+            document.createElement('div');
+
+        tools.className = 'question-tools';
+
+        const typeSelect =
+            document.createElement('select');
+
+        [
+            ['single', '単一選択'],
+            ['multiple', '複数選択'],
+            ['text', '自由記述']
+        ].forEach(([value, label]) => {
+            const option =
+                document.createElement('option');
+
+            option.value = value;
+            option.textContent = label;
+
+            if (question.type === value) {
+                option.selected = true;
+            }
+
+            typeSelect.appendChild(option);
+        });
+
+        typeSelect.addEventListener(
+            'change',
+            () => {
+                question.type =
+                    typeSelect.value;
+
+                if (
+                    question.type === 'text'
+                ) {
+                    question.options = [];
+                } else if (
+                    !Array.isArray(
+                        question.options
+                    ) ||
+                    question.options.length === 0
+                ) {
+                    question.options = [
+                        {
+                            id:
+                                'o_' +
+                                Date.now(),
+                            label: '',
+                            next_group_id: ''
+                        }
+                    ];
+                }
+
+                renderSurveyGroups(
+                    state.currentSurvey.groups
+                );
+            }
+        );
+
+        tools.appendChild(typeSelect);
+
+        const removeButton =
+            document.createElement('button');
+
+        removeButton.type = 'button';
+        removeButton.className =
+            'btn btn-small btn-danger';
+        removeButton.textContent = '削除';
+
+        removeButton.addEventListener(
+            'click',
+            async () => {
+                const confirmed =
+                    await confirmDialog(
+                        'この質問を削除しますか？'
+                    );
+
+                if (!confirmed) {
+                    return;
+                }
+
+                if (
+                    Array.isArray(
+                        group.questions
+                    )
+                ) {
+                    group.questions.splice(
+                        questionIndex,
+                        1
+                    );
+
+                    renderSurveyGroups(
+                        state.currentSurvey.groups
+                    );
+                }
+            }
+        );
+
+        tools.appendChild(removeButton);
+
+        head.appendChild(number);
+        head.appendChild(title);
+        head.appendChild(tools);
+
+        card.appendChild(head);
+
+        const meta =
+            document.createElement('div');
+
+        meta.className = 'question-meta';
+
+        const requiredLabel =
+            document.createElement('label');
+
+        const requiredCheckbox =
+            document.createElement('input');
+
+        requiredCheckbox.type = 'checkbox';
+        requiredCheckbox.checked =
+            Boolean(question.required);
+
+        requiredCheckbox.addEventListener(
+            'change',
+            () => {
+                question.required =
+                    requiredCheckbox.checked;
+            }
+        );
+
+        requiredLabel.appendChild(
+            requiredCheckbox
+        );
+
+        requiredLabel.appendChild(
+            document.createTextNode(
+                ' 必須回答'
+            )
+        );
+
+        meta.appendChild(
+            requiredLabel
+        );
+
+        const typeText =
+            document.createElement('span');
+
+        typeText.textContent =
+            '形式：' +
+            questionTypeLabel(
+                question.type
+            );
+
+        meta.appendChild(typeText);
+
+        card.appendChild(meta);
+
+        if (
+            question.type !== 'text' &&
+            question.type !== 'textarea'
+        ) {
+            const options =
+                document.createElement('div');
+
+            options.className =
+                'question-options';
+
+            if (
+                Array.isArray(
+                    question.options
+                )
+            ) {
+                question.options.forEach(
+                    (option, optionIndex) => {
+                        const row =
+                            document.createElement(
+                                'div'
+                            );
+
+                        row.className =
+                            'option-row';
+
+                        const label =
+                            document.createElement(
+                                'span'
+                            );
+
+                        label.className =
+                            'branch-label';
+
+                        label.textContent =
+                            '選択肢 ' +
+                            (optionIndex + 1);
+
+                        const input =
+                            document.createElement(
+                                'input'
+                            );
+
+                        input.type = 'text';
+                        input.value =
+                            option.label || '';
+                        input.placeholder =
+                            '選択肢';
+
+                        input.addEventListener(
+                            'input',
+                            () => {
+                                option.label =
+                                    input.value;
+                            }
+                        );
+
+                        const removeOption =
+                            document.createElement(
+                                'button'
+                            );
+
+                        removeOption.type = 'button';
+                        removeOption.className =
+                            'btn btn-small btn-danger';
+                        removeOption.textContent =
+                            '削除';
+
+                        removeOption.addEventListener(
+                            'click',
+                            () => {
+                                question.options.splice(
+                                    optionIndex,
+                                    1
+                                );
+
+                                renderSurveyGroups(
+                                    state.currentSurvey.groups
+                                );
+                            }
+                        );
+
+                        row.appendChild(label);
+                        row.appendChild(input);
+                        row.appendChild(
+                            removeOption
+                        );
+
+                        options.appendChild(row);
+                    }
+                );
+            }
+
+            const addOption =
+                document.createElement('button');
+
+            addOption.type = 'button';
+            addOption.className =
+                'btn btn-small';
+
+            addOption.textContent =
+                '＋ 選択肢を追加';
+
+            addOption.addEventListener(
+                'click',
+                () => {
+                    if (
+                        !Array.isArray(
+                            question.options
+                        )
+                    ) {
+                        question.options = [];
+                    }
+
+                    question.options.push({
+                        id:
+                            'o_' +
+                            Date.now() +
+                            '_' +
+                            question.options.length,
+                        label: '',
+                        next_group_id: ''
+                    });
+
+                    renderSurveyGroups(
+                        state.currentSurvey.groups
+                    );
+                }
+            );
+
+            options.appendChild(addOption);
+
+            card.appendChild(options);
+        }
+
+        return card;
+    }
+
+    function collectSurveyFromForm() {
+        const survey =
+            state.currentSurvey ||
+            createEmptySurvey();
+
+        const title =
+            get('survey-title');
+
+        const description =
+            get('survey-description');
+
+        const start =
+            get('survey-start-date');
+
+        const end =
+            get('survey-end-date');
+
+        survey.title =
+            title?.value.trim() || '';
+
+        survey.description =
+            description?.value.trim() || '';
+
+        survey.start_at =
+            start?.value || '';
+
+        survey.end_at =
+            end?.value || '';
+
+        return survey;
+    }
+
+    function validateSurvey(survey) {
+        if (!survey.title) {
+            showToast(
+                'アンケート名を入力してください。',
+                'error'
+            );
+
+            const title =
+                get('survey-title');
+
+            if (title) {
+                title.focus();
+            }
+
+            return false;
+        }
+
+        if (
+            !Array.isArray(survey.groups) ||
+            survey.groups.length === 0
+        ) {
+            showToast(
+                '質問グループを1つ以上作成してください。',
+                'error'
+            );
+
+            return false;
+        }
+
+        for (
+            let groupIndex = 0;
+            groupIndex < survey.groups.length;
+            groupIndex++
+        ) {
+            const group =
+                survey.groups[groupIndex];
+
+            if (
+                !group?.title ||
+                !group.title.trim()
+            ) {
+                showToast(
+                    '質問グループ名を入力してください。',
+                    'error'
+                );
+
+                return false;
+            }
+
+            if (
+                !Array.isArray(group.questions) ||
+                group.questions.length === 0
+            ) {
+                showToast(
+                    '各質問グループには質問を1つ以上設定してください。',
+                    'error'
+                );
+
+                return false;
+            }
+
+            for (
+                let questionIndex = 0;
+                questionIndex < group.questions.length;
+                questionIndex++
+            ) {
+                const question =
+                    group.questions[questionIndex];
+
+                if (
+                    !question?.title ||
+                    !question.title.trim()
+                ) {
+                    showToast(
+                        '質問文を入力してください。',
+                        'error'
+                    );
+
+                    return false;
+                }
+
+                if (
+                    question.type !== 'text' &&
+                    question.type !== 'textarea'
+                ) {
+                    if (
+                        !Array.isArray(
+                            question.options
+                        ) ||
+                        question.options.length < 1
+                    ) {
+                        showToast(
+                            '選択式の質問には選択肢を設定してください。',
+                            'error'
+                        );
+
+                        return false;
+                    }
+
+                    for (
+                        const option
+                        of question.options
+                    ) {
+                        if (
+                            !option?.label ||
+                            !option.label.trim()
+                        ) {
+                            showToast(
+                                '空の選択肢があります。',
+                                'error'
+                            );
+
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    async function saveSurvey(button = null) {
+        const survey =
+            collectSurveyFromForm();
+
+        if (!validateSurvey(survey)) {
+            return;
+        }
+
+        try {
+            const result = await apiPost(
+                'save_survey',
+                {
+                    survey
+                },
+                button
+            );
+
+            const savedSurvey =
+                result?.data?.survey ?? survey;
+
+            state.currentSurvey =
+                savedSurvey;
+
+            state.editingSurveyId =
+                savedSurvey.id || '';
+
+            showToast(
+                'アンケートを保存しました。'
+            );
+
+            await loadSurveys();
+
+            showSurveyEditor();
+
+        } catch (error) {
+            showToast(
+                error?.message ||
+                'アンケートの保存に失敗しました。',
+                'error'
+            );
+        }
+    }
+
+    /* =========================================================
+     * アンケートプレビュー
+     * ========================================================= */
+
+    function showSurveyPreview() {
+        const survey =
+            collectSurveyFromForm();
+
+        if (!validateSurvey(survey)) {
+            return;
+        }
+
+        const editorSection =
+            get('survey-editor-section');
+
+        const previewSection =
+            get('survey-preview-section');
+
+        const content =
+            get('survey-preview-content');
+
+        if (!previewSection || !content) {
+            return;
+        }
+
+        if (editorSection) {
+            editorSection.classList.add('hidden');
+        }
+
+        previewSection.classList.remove(
+            'hidden'
+        );
+
+        content.replaceChildren();
+
+        const title =
+            document.createElement('h2');
+
+        title.textContent =
+            survey.title;
+
+        content.appendChild(title);
+
+        if (survey.description) {
+            const description =
+                document.createElement('p');
+
+            description.textContent =
+                survey.description;
+
+            content.appendChild(
+                description
+            );
+        }
+
+        if (Array.isArray(survey.groups)) {
+            survey.groups.forEach(
+                (group, groupIndex) => {
+                    const groupElement =
+                        document.createElement('div');
+
+                    groupElement.className =
+                        'preview-group';
+
+                    const groupTitle =
+                        document.createElement('div');
+
+                    groupTitle.className =
+                        'preview-group-title';
+
+                    groupTitle.textContent =
+                        group.title ||
+                        '質問グループ ' +
+                        (groupIndex + 1);
+
+                    groupElement.appendChild(
+                        groupTitle
+                    );
+
+                    if (
+                        Array.isArray(
+                            group.questions
+                        )
+                    ) {
+                        group.questions.forEach(
+                            (question, questionIndex) => {
+                                const questionElement =
+                                    document.createElement(
+                                        'div'
+                                    );
+
+                                questionElement.className =
+                                    'preview-question';
+
+                                const questionTitle =
+                                    document.createElement(
+                                        'div'
+                                    );
+
+                                questionTitle.className =
+                                    'preview-question-title';
+
+                                questionTitle.textContent =
+                                    (questionIndex + 1) +
+                                    '. ' +
+                                    question.title;
+
+                                if (question.required) {
+                                    questionTitle.textContent +=
+                                        '（必須）';
+                                }
+
+                                questionElement.appendChild(
+                                    questionTitle
+                                );
+
+                                if (
+                                    Array.isArray(
+                                        question.options
+                                    )
+                                ) {
+                                    question.options.forEach(
+                                        (option) => {
+                                            const optionElement =
+                                                document.createElement(
+                                                    'div'
+                                                );
+
+                                            optionElement.className =
+                                                'preview-option';
+
+                                            optionElement.textContent =
+                                                '・' +
+                                                (
+                                                    option?.label ||
+                                                    ''
+                                                );
+
+                                            questionElement.appendChild(
+                                                optionElement
+                                            );
+                                        }
+                                    );
+                                }
+
+                                groupElement.appendChild(
+                                    questionElement
+                                );
+                            }
+                        );
+                    }
+
+                    content.appendChild(
+                        groupElement
+                    );
+                }
+            );
+        }
+    }
+
+    /* =========================================================
+     * 顧客
+     * ========================================================= */
+
+    async function loadCustomers() {
+        const tbody =
+            get('customer-list');
+
+        if (tbody) {
+            tbody.replaceChildren();
+
+            const tr =
+                document.createElement('tr');
+
+            const td =
+                document.createElement('td');
+
+            td.colSpan = 4;
+            td.className = 'empty';
+            td.textContent =
+                '読み込み中です。';
+
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+        }
+
+        try {
+            const result =
+                await apiGet('load_customers');
+
+            const customers =
+                Array.isArray(
+                    result?.data?.customers
+                )
+                    ? result.data.customers
+                    : [];
+
+            state.customers =
+                customers;
+
+            renderCustomers(
+                customers
+            );
+
+        } catch (error) {
+            showToast(
+                error?.message ||
+                '顧客情報を取得できませんでした。',
+                'error'
+            );
+        }
+    }
+
+    function renderCustomers(customers) {
+        const tbody =
+            get('customer-list');
+
+        if (!tbody) {
+            return;
+        }
+
+        tbody.replaceChildren();
+
+        const countLabel =
+            get('customer-count-label');
+
+        if (countLabel) {
+            countLabel.textContent =
+                customers.length + '件';
+        }
+
+        if (customers.length === 0) {
+            const tr =
+                document.createElement('tr');
+
+            const td =
+                document.createElement('td');
+
+            td.colSpan = 4;
+            td.className = 'empty';
+            td.textContent =
+                '顧客情報がありません。';
+
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+            return;
+        }
+
+        customers.forEach(
+            (customer) => {
+                const tr =
+                    document.createElement('tr');
+
+                const selectTd =
+                    document.createElement('td');
+
+                const checkbox =
+                    document.createElement(
+                        'input'
+                    );
+
+                checkbox.type = 'checkbox';
+
+                const customerId =
+                    String(
+                        customer?.id ??
+                        customer?.customer_id ??
+                        ''
+                    );
+
+                checkbox.value =
+                    customerId;
+
+                checkbox.checked =
+                    state.selectedCustomerIds.includes(
+                        customerId
+                    );
+
+                checkbox.addEventListener(
+                    'change',
+                    () => {
+                        if (
+                            checkbox.checked
+                        ) {
+                            if (
+                                !state.selectedCustomerIds.includes(
+                                    customerId
+                                )
+                            ) {
+                                state.selectedCustomerIds.push(
+                                    customerId
+                                );
+                            }
+                        } else {
+                            state.selectedCustomerIds =
+                                state.selectedCustomerIds.filter(
+                                    (id) =>
+                                        id !== customerId
+                                );
+                        }
+                    }
+                );
+
+                selectTd.appendChild(
+                    checkbox
+                );
+
+                const nameTd =
+                    document.createElement('td');
+
+                nameTd.textContent =
+                    customer?.name ||
+                    customer?.customer_name ||
+                    '';
+
+                const emailTd =
+                    document.createElement('td');
+
+                emailTd.textContent =
+                    customer?.email ||
+                    customer?.customer_email ||
+                    '';
+
+                const idTd =
+                    document.createElement('td');
+
+                idTd.textContent =
+                    customerId;
+
+                tr.appendChild(selectTd);
+                tr.appendChild(nameTd);
+                tr.appendChild(emailTd);
+                tr.appendChild(idTd);
+
+                tbody.appendChild(tr);
+            }
+        );
+    }
+
+    function filterCustomers(keyword) {
+        const text =
+            String(keyword ?? '')
+                .trim()
+                .toLowerCase();
+
+        if (!text) {
+            renderCustomers(
+                state.customers
+            );
+            return;
+        }
+
+        const filtered =
+            state.customers.filter(
+                (customer) => {
+                    const values = [
+                        customer?.id,
+                        customer?.customer_id,
+                        customer?.name,
+                        customer?.customer_name,
+                        customer?.email,
+                        customer?.customer_email
+                    ];
+
+                    return values.some(
+                        (value) =>
+                            String(
+                                value ?? ''
+                            )
+                                .toLowerCase()
+                                .includes(text)
+                    );
+                }
+            );
+
+        renderCustomers(filtered);
+    }
+
+    /* =========================================================
+     * 設定
+     * ========================================================= */
+
+    async function loadSettings() {
+        try {
+            const result =
+                await apiGet(
+                    'load_settings'
+                );
+
+            const settings =
+                result?.data?.settings ?? {};
+
+            const kintone =
+                settings?.kintone ?? {};
+
+            const mail =
+                settings?.mail ?? {};
+
+            setValue(
+                'kintone-domain',
+                kintone.domain
+            );
+
+            setValue(
+                'kintone-app-id',
+                kintone.customer_app_id
+            );
+
+            setValue(
+                'kintone-login-name',
+                kintone.login_name
+            );
+
+            setValue(
+                'kintone-password',
+                ''
+            );
+
+            setValue(
+                'kintone-id-field',
+                kintone.customer_id_field
+            );
+
+            setValue(
+                'kintone-name-field',
+                kintone.customer_name_field
+            );
+
+            setValue(
+                'kintone-email-field',
+                kintone.customer_email_field
+            );
+
+            setValue(
+                'kintone-proxy',
+                buildProxyValue(kintone)
+            );
+
+            setValue(
+                'smtp-server',
+                mail.smtp_server
+            );
+
+            setValue(
+                'smtp-port',
+                mail.smtp_port || 587
+            );
+
+            setValue(
+                'smtp-connection-type',
+                mail.connection_type || 'tls'
+            );
+
+            setValue(
+                'smtp-username',
+                mail.username
+            );
+
+            setValue(
+                'smtp-password',
+                ''
+            );
+
+            setValue(
+                'mail-from-email',
+                mail.from_email
+            );
+
+            setValue(
+                'mail-from-name',
+                mail.from_name
+            );
+
+            updateKintoneStatus(
+                kintone
+            );
+
+        } catch (error) {
+            showToast(
+                error?.message ||
+                '設定を取得できませんでした。',
+                'error'
+            );
+        }
+    }
+
+    function setValue(id, value) {
+        const element =
+            get(id);
+
+        if (!element) {
+            return;
+        }
+
+        element.value =
+            value === null ||
+            value === undefined
+                ? ''
+                : String(value);
+    }
+
+    function buildProxyValue(kintone) {
+        const host =
+            String(
+                kintone?.proxy_host ?? ''
+            ).trim();
+
+        const port =
+            String(
+                kintone?.proxy_port ?? ''
+            ).trim();
+
+        if (!host) {
+            return '';
+        }
+
+        if (
+            host.includes(':') ||
+            !port
+        ) {
+            return host;
+        }
+
+        return host + ':' + port;
+    }
+
+    function updateKintoneStatus(kintone) {
+        const dot =
+            get('kintone-status-dot');
+
+        const text =
+            get('kintone-status-text');
+
+        if (!dot || !text) {
+            return;
+        }
+
+        dot.classList.remove(
+            'ready',
+            'error',
+            'warning'
+        );
+
+        const status =
+            kintone?.connection_status ||
+            'not_configured';
+
+        if (
+            status === 'connected'
+        ) {
+            dot.classList.add('ready');
+            text.textContent =
+                '接続確認済み';
+        } else if (
+            status === 'error'
+        ) {
+            dot.classList.add('error');
+            text.textContent =
+                '接続エラー';
+        } else {
+            dot.classList.add('warning');
+            text.textContent =
+                '未確認';
+        }
+    }
+
+    function collectKintoneSettings() {
+        const proxy =
+            get('kintone-proxy')?.value.trim() ||
+            '';
+
+        let proxyHost = '';
+        let proxyPort = '';
+
+        if (proxy) {
+            const separator =
+                proxy.lastIndexOf(':');
+
+            if (
+                separator > 0 &&
+                separator <
+                    proxy.length - 1
+            ) {
+                proxyHost =
+                    proxy.slice(
+                        0,
+                        separator
+                    ).trim();
+
+                proxyPort =
+                    proxy.slice(
+                        separator + 1
+                    ).trim();
+            } else {
+                proxyHost =
+                    proxy.trim();
+            }
+        }
+
+        return {
+            domain:
+                get('kintone-domain')?.value.trim() ||
+                '',
+
+            login_name:
+                get('kintone-login-name')?.value.trim() ||
+                '',
+
+            password:
+                get('kintone-password')?.value ||
+                '',
+
+            customer_app_id:
+                get('kintone-app-id')?.value.trim() ||
+                '',
+
+            customer_id_field:
+                get('kintone-id-field')?.value.trim() ||
+                '',
+
+            customer_name_field:
+                get('kintone-name-field')?.value.trim() ||
+                '',
+
+            customer_email_field:
+                get('kintone-email-field')?.value.trim() ||
+                '',
+
+            proxy_host:
+                proxyHost,
+
+            proxy_port:
+                proxyPort
+        };
+    }
+
+    function collectMailSettings() {
+        return {
+            smtp_server:
+                get('smtp-server')?.value.trim() ||
+                '',
+
+            smtp_port:
+                Number(
+                    get('smtp-port')?.value ||
+                    587
+                ),
+
+            connection_type:
+                get('smtp-connection-type')?.value ||
+                'tls',
+
+            username:
+                get('smtp-username')?.value.trim() ||
+                '',
+
+            password:
+                get('smtp-password')?.value ||
+                '',
+
+            from_email:
+                get('mail-from-email')?.value.trim() ||
+                '',
+
+            from_name:
+                get('mail-from-name')?.value.trim() ||
+                ''
+        };
+    }
+
+    /* =========================================================
+     * モーダル
+     * ========================================================= */
+
+    function confirmDialog(message) {
+        return new Promise((resolve) => {
+            state.modalResolver =
+                resolve;
+
+            if (modalTitle) {
+                modalTitle.textContent =
+                    '確認';
+            }
+
+            if (modalBody) {
+                modalBody.textContent =
+                    String(message ?? '');
+            }
+
+            if (modalBackdrop) {
+                modalBackdrop.classList.remove(
+                    'hidden'
+                );
+            }
+        });
+    }
+
+    function closeModal(result) {
+        if (modalBackdrop) {
+            modalBackdrop.classList.add(
+                'hidden'
+            );
+        }
+
+        const resolver =
+            state.modalResolver;
+
+        state.modalResolver =
+            null;
+
+        if (typeof resolver === 'function') {
+            resolver(Boolean(result));
+        }
+    }
+
+    /* =========================================================
+     * イベント
+     * ========================================================= */
+
+    const nav =
+        get('main-nav');
+
+    if (nav) {
+        nav.querySelectorAll(
+            'button[data-page]'
+        ).forEach((button) => {
+            if (!button) {
+                return;
+            }
+
+            button.addEventListener(
+                'click',
+                () => {
+                    const page =
+                        button.dataset.page;
+
+                    if (!page) {
+                        return;
+                    }
+
+                    showPage(page);
+                }
+            );
+        });
+    }
+
+    const dashboardRefresh =
+        get('dashboard-refresh-button');
+
+    if (dashboardRefresh) {
+        dashboardRefresh.addEventListener(
+            'click',
+            () => {
+                setButtonLoadingImmediately(
+                    dashboardRefresh
+                );
+
+                loadDashboard(
+                    dashboardRefresh
+                );
+            }
+        );
+    }
+
+    const surveyNew =
+        get('survey-new-button');
+
+    if (surveyNew) {
+        surveyNew.addEventListener(
+            'click',
+            () => {
+                state.currentSurvey =
+                    createEmptySurvey();
+
+                state.editingSurveyId =
+                    '';
+
+                showSurveyEditor();
+            }
+        );
+    }
+
+    const surveyEditorBack =
+        get('survey-editor-back-button');
+
+    if (surveyEditorBack) {
+        surveyEditorBack.addEventListener(
+            'click',
+            () => {
+                const editor =
+                    get('survey-editor-section');
+
+                if (editor) {
+                    editor.classList.add(
+                        'hidden'
+                    );
+                }
+
+                const list =
+                    get('survey-list-section');
+
+                if (list) {
+                    list.classList.remove(
+                        'hidden'
+                    );
+                }
+
+                const preview =
+                    get('survey-preview-section');
+
+                if (preview) {
+                    preview.classList.add(
+                        'hidden'
+                    );
+                }
+
+                loadSurveys();
+            }
+        );
+    }
+
+    const addGroup =
+        get('add-group-button');
+
+    if (addGroup) {
+        addGroup.addEventListener(
+            'click',
+            () => {
+                if (
+                    !state.currentSurvey
+                ) {
+                    state.currentSurvey =
+                        createEmptySurvey();
+                }
+
+                if (
+                    !Array.isArray(
+                        state.currentSurvey.groups
+                    )
+                ) {
+                    state.currentSurvey.groups =
+                        [];
+                }
+
+                state.currentSurvey.groups.push(
+                    createEmptyGroup()
+                );
+
+                renderSurveyGroups(
+                    state.currentSurvey.groups
+                );
+            }
+        );
+    }
+
+    const surveySave =
+        get('survey-editor-save-button');
+
+    if (surveySave) {
+        surveySave.addEventListener(
+            'click',
+            () => {
+                saveSurvey(
+                    surveySave
+                );
+            }
+        );
+    }
+
+    const surveySaveBottom =
+        get('survey-editor-save-button-bottom');
+
+    if (surveySaveBottom) {
+        surveySaveBottom.addEventListener(
+            'click',
+            () => {
+                saveSurvey(
+                    surveySaveBottom
+                );
+            }
+        );
+    }
+
+    const surveyPreview =
+        get('survey-editor-preview-button');
+
+    if (surveyPreview) {
+        surveyPreview.addEventListener(
+            'click',
+            () => {
+                showSurveyPreview();
+            }
+        );
+    }
+
+    const surveyPreviewBack =
+        get('survey-preview-back-button');
+
+    if (surveyPreviewBack) {
+        surveyPreviewBack.addEventListener(
+            'click',
+            () => {
+                const preview =
+                    get('survey-preview-section');
+
+                const editor =
+                    get('survey-editor-section');
+
+                if (preview) {
+                    preview.classList.add(
+                        'hidden'
+                    );
+                }
+
+                if (editor) {
+                    editor.classList.remove(
+                        'hidden'
+                    );
+                }
+            }
+        );
+    }
+
+    const surveyPreviewSave =
+        get('survey-preview-save-button');
+
+    if (surveyPreviewSave) {
+        surveyPreviewSave.addEventListener(
+            'click',
+            () => {
+                saveSurvey(
+                    surveyPreviewSave
+                );
+            }
+        );
+    }
+
+    const customerRefresh =
+        get('customer-refresh-button');
+
+    if (customerRefresh) {
+        customerRefresh.addEventListener(
+            'click',
+            async () => {
+                setButtonLoadingImmediately(
+                    customerRefresh
+                );
+
+                try {
+                    await apiPost(
+                        'refresh_customers',
+                        {},
+                        customerRefresh
+                    );
+
+                    showToast(
+                        '顧客情報を更新しました。'
+                    );
+
+                    await loadCustomers();
+
+                } catch (error) {
+                    showToast(
+                        error?.message ||
+                        '顧客情報の更新に失敗しました。',
+                        'error'
+                    );
+
+                    setButtonLoading(
+                        customerRefresh,
+                        false
+                    );
+                }
+            }
+        );
+    }
+
+    const customerSearch =
+        get('customer-search-input');
+
+    if (customerSearch) {
+        customerSearch.addEventListener(
+            'input',
+            () => {
+                filterCustomers(
+                    customerSearch.value
+                );
+            }
+        );
+    }
+
+    const customerSearchClear =
+        get(
+            'customer-search-clear-button'
+        );
+
+    if (customerSearchClear) {
+        customerSearchClear.addEventListener(
+            'click',
+            () => {
+                if (customerSearch) {
+                    customerSearch.value = '';
+                }
+
+                renderCustomers(
+                    state.customers
+                );
+            }
+        );
+    }
+
+    const kintoneSave =
+        get('kintone-save-button');
+
+    if (kintoneSave) {
+        kintoneSave.addEventListener(
+            'click',
+            async () => {
+                const settings =
+                    collectKintoneSettings();
+
+                try {
+                    await apiPost(
+                        'save_kintone_settings',
+                        {
+                            kintone: settings
+                        },
+                        kintoneSave
+                    );
+
+                    showToast(
+                        'kintone設定を保存しました。'
+                    );
+
+                    await loadSettings();
+
+                } catch (error) {
+                    showToast(
+                        error?.message ||
+                        'kintone設定の保存に失敗しました。',
+                        'error'
+                    );
+                }
+            }
+        );
+    }
+
+    const kintoneTest =
+        get('kintone-test-button');
+
+    if (kintoneTest) {
+        kintoneTest.addEventListener(
+            'click',
+            async () => {
+                const settings =
+                    collectKintoneSettings();
+
+                try {
+                    const result =
+                        await apiPost(
+                            'test_kintone_connection',
+                            {
+                                kintone: settings
+                            },
+                            kintoneTest
+                        );
+
+                    updateKintoneStatus({
+                        connection_status:
+                            'connected'
+                    });
+
+                    showToast(
+                        result?.message ||
+                        'kintoneへの接続を確認しました。'
+                    );
+
+                } catch (error) {
+                    updateKintoneStatus({
+                        connection_status:
+                            'error'
+                    });
+
+                    showToast(
+                        error?.message ||
+                        'kintoneへの接続に失敗しました。',
+                        'error'
+                    );
+                }
+            }
+        );
+    }
+
+    const mailSave =
+        get('mail-save-button');
+
+    if (mailSave) {
+        mailSave.addEventListener(
+            'click',
+            async () => {
+                const settings =
+                    collectMailSettings();
+
+                try {
+                    await apiPost(
+                        'save_mail_settings',
+                        {
+                            mail: settings
+                        },
+                        mailSave
+                    );
+
+                    showToast(
+                        'メール設定を保存しました。'
+                    );
+
+                    await loadSettings();
+
+                } catch (error) {
+                    showToast(
+                        error?.message ||
+                        'メール設定の保存に失敗しました。',
+                        'error'
+                    );
+                }
+            }
+        );
+    }
+
+    const mailTest =
+        get('mail-test-button');
+
+    if (mailTest) {
+        mailTest.addEventListener(
+            'click',
+            async () => {
+                const settings =
+                    collectMailSettings();
+
+                try {
+                    const result =
+                        await apiPost(
+                            'test_mail_settings',
+                            {
+                                mail: settings
+                            },
+                            mailTest
+                        );
+
+                    showToast(
+                        result?.message ||
+                        'メール設定を確認しました。'
+                    );
+
+                } catch (error) {
+                    showToast(
+                        error?.message ||
+                        'メール設定の確認に失敗しました。',
+                        'error'
+                    );
+                }
+            }
+        );
+    }
+
+    if (modalCancelButton) {
+        modalCancelButton.addEventListener(
+            'click',
+            () => {
+                closeModal(false);
+            }
+        );
+    }
+
+    if (modalOkButton) {
+        modalOkButton.addEventListener(
+            'click',
+            () => {
+                closeModal(true);
+            }
+        );
+    }
+
+    if (modalBackdrop) {
+        modalBackdrop.addEventListener(
+            'click',
+            (event) => {
+                if (
+                    event.target ===
+                    modalBackdrop
+                ) {
+                    closeModal(false);
+                }
+            }
+        );
+    }
+
+    /* =========================================================
+     * 送信画面
+     * ========================================================= */
+
+    async function openSendScreen(surveyId) {
+        try {
+            const result =
+                await apiGet(
+                    'prepare_survey_send',
+                    {
+                        survey_id: surveyId
+                    }
+                );
+
+            const survey =
+                result?.data?.survey ?? null;
+
+            if (!survey) {
+                throw new Error(
+                    '送信対象のアンケートを取得できませんでした。'
+                );
+            }
+
+            state.currentSurvey =
+                survey;
+
+            renderSendScreen();
+
+        } catch (error) {
+            showToast(
+                error?.message ||
+                '送信画面を開けませんでした。',
+                'error'
+            );
+        }
+    }
+
+    function renderSendScreen() {
+        const editor =
+            get('survey-editor-section');
+
+        const list =
+            get('survey-list-section');
+
+        const preview =
+            get('survey-preview-section');
+
+        if (editor) {
+            editor.classList.add('hidden');
+        }
+
+        if (preview) {
+            preview.classList.add('hidden');
+        }
+
+        if (list) {
+            list.classList.add('hidden');
+        }
+
+        const section =
+            document.createElement('section');
+
+        section.id =
+            'survey-send-section';
+
+        section.className = 'card';
+
+        const title =
+            document.createElement('div');
+
+        title.className =
+            'card-title';
+
+        title.textContent =
+            'アンケート送信';
+
+        section.appendChild(title);
+
+        const description =
+            document.createElement('p');
+
+        description.textContent =
+            state.currentSurvey?.title ||
+            '';
+
+        section.appendChild(
+            description
+        );
+
+        const info =
+            document.createElement('div');
+
+        info.className = 'notice';
+
+        info.textContent =
+            '送信対象の顧客を選択してください。';
+
+        section.appendChild(info);
+
+        const search =
+            document.createElement('input');
+
+        search.type = 'search';
+        search.placeholder =
+            '顧客名・メールアドレスで検索';
+
+        search.style.width = '100%';
+        search.style.marginBottom =
+            '12px';
+
+        section.appendChild(search);
+
+        const customerList =
+            document.createElement('div');
+
+        customerList.className =
+            'customer-list';
+
+        section.appendChild(
+            customerList
+        );
+
+        const actionRow =
+            document.createElement('div');
+
+        actionRow.className =
+            'action-row right';
+
+        actionRow.style.marginTop =
+            '14px';
+
+        const backButton =
+            document.createElement('button');
+
+        backButton.type = 'button';
+        backButton.className = 'btn';
+        backButton.textContent =
+            '戻る';
+
+        const sendButton =
+            document.createElement('button');
+
+        sendButton.type = 'button';
+        sendButton.className =
+            'btn btn-primary';
+
+        sendButton.innerHTML =
+            '<span class="loading-spinner"></span>送信する';
+
+        backButton.addEventListener(
+            'click',
+            () => {
+                section.remove();
+                loadSurveys();
+            }
+        );
+
+        sendButton.addEventListener(
+            'click',
+            async () => {
+                const selected =
+                    Array.from(
+                        customerList.querySelectorAll(
+                            'input[type="checkbox"]:checked'
+                        )
+                    ).map(
+                        (checkbox) =>
+                            checkbox.value
+                    );
+
+                if (selected.length === 0) {
+                    showToast(
+                        '送信対象を選択してください。',
+                        'error'
+                    );
+                    return;
+                }
+
+                const confirmed =
+                    await confirmDialog(
+                        selected.length +
+                        '件の顧客へアンケートを送信しますか？'
+                    );
+
+                if (!confirmed) {
+                    return;
+                }
+
+                try {
+                    await apiPost(
+                        'send_survey',
+                        {
+                            survey_id:
+                                state.currentSurvey?.id ||
+                                '',
+                            customer_ids:
+                                selected
+                        },
+                        sendButton
+                    );
+
+                    showToast(
+                        'アンケートを送信しました。'
+                    );
+
+                    section.remove();
+
+                    loadSurveys();
+
+                } catch (error) {
+                    showToast(
+                        error?.message ||
+                        'アンケート送信に失敗しました。',
+                        'error'
+                    );
+                }
+            }
+        );
+
+        actionRow.appendChild(
+            backButton
+        );
+
+        actionRow.appendChild(
+            sendButton
+        );
+
+        section.appendChild(
+            actionRow
+        );
+
+        const page =
+            get('page-surveys');
+
+        if (!page) {
+            return;
+        }
+
+        page.appendChild(section);
+
+        const renderSendCustomers =
+            (customers) => {
+                customerList.replaceChildren();
+
+                customers.forEach(
+                    (customer) => {
+                        const row =
+                            document.createElement(
+                                'div'
+                            );
+
+                        row.className =
+                            'customer-row';
+
+                        const checkbox =
+                            document.createElement(
+                                'input'
+                            );
+
+                        checkbox.type =
+                            'checkbox';
+
+                        checkbox.value =
+                            String(
+                                customer?.id ??
+                                customer?.customer_id ??
+                                ''
+                            );
+
+                        const info =
+                            document.createElement(
+                                'div'
+                            );
+
+                        info.className =
+                            'customer-info';
+
+                        const name =
+                            document.createElement(
+                                'div'
+                            );
+
+                        name.className =
+                            'customer-name';
+
+                        name.textContent =
+                            customer?.name ||
+                            customer?.customer_name ||
+                            '';
+
+                        const email =
+                            document.createElement(
+                                'div'
+                            );
+
+                        email.className =
+                            'customer-email';
+
+                        email.textContent =
+                            customer?.email ||
+                            customer?.customer_email ||
+                            '';
+
+                        info.appendChild(name);
+                        info.appendChild(email);
+
+                        row.appendChild(
+                            checkbox
+                        );
+
+                        row.appendChild(
+                            info
+                        );
+
+                        customerList.appendChild(
+                            row
+                        );
+                    }
+                );
+            };
+
+        renderSendCustomers(
+            state.customers
+        );
+
+        search.addEventListener(
+            'input',
+            () => {
+                const keyword =
+                    search.value
+                        .trim()
+                        .toLowerCase();
+
+                const filtered =
+                    state.customers.filter(
+                        (customer) => {
+                            const name =
+                                String(
+                                    customer?.name ??
+                                    customer?.customer_name ??
+                                    ''
+                                ).toLowerCase();
+
+                            const email =
+                                String(
+                                    customer?.email ??
+                                    customer?.customer_email ??
+                                    ''
+                                ).toLowerCase();
+
+                            return (
+                                name.includes(keyword) ||
+                                email.includes(keyword)
+                            );
+                        }
+                    );
+
+                renderSendCustomers(
+                    filtered
+                );
+            }
+        );
+    }
+
+    /* =========================================================
+     * 回答者画面
+     * ========================================================= */
+
+    async function loadPublicSurvey(surveyId) {
+        try {
+            const result =
+                await apiGet(
+                    'load_public_survey',
+                    {
+                        survey_id: surveyId
+                    }
+                );
+
+            const survey =
+                result?.data?.survey ?? null;
+
+            if (!survey) {
+                throw new Error(
+                    'アンケートを取得できませんでした。'
+                );
+            }
+
+            renderRespondentSurvey(
+                survey
+            );
+
+        } catch (error) {
+            renderRespondentError(
+                error?.message ||
+                'アンケートを表示できませんでした。'
+            );
+        }
+    }
+
+    function renderRespondentSurvey(survey) {
+        const app =
+            get('app');
+
+        const respondentPage =
+            get('respondent-page');
+
+        if (app) {
+            app.classList.add('hidden');
+        }
+
+        if (respondentPage) {
+            respondentPage.classList.remove(
+                'hidden'
+            );
+        }
+
+        const content =
+            get('respondent-content');
+
+        if (!content) {
+            return;
+        }
+
+        content.replaceChildren();
+
+        const form =
+            document.createElement('form');
+
+        form.id =
+            'respondent-form';
+
+        const header =
+            document.createElement('div');
+
+        header.className =
+            'respondent-header';
+
+        const title =
+            document.createElement('h1');
+
+        title.textContent =
+            survey?.title ||
+            'アンケート';
+
+        header.appendChild(title);
+
+        if (survey?.description) {
+            const description =
+                document.createElement('p');
+
+            description.textContent =
+                survey.description;
+
+            header.appendChild(
+                description
+            );
+        }
+
+        form.appendChild(header);
+
+        const questions = [];
+
+        if (Array.isArray(survey?.groups)) {
+            survey.groups.forEach(
+                (group) => {
+                    if (
+                        !Array.isArray(
+                            group?.questions
+                        )
+                    ) {
+                        return;
+                    }
+
+                    group.questions.forEach(
+                        (question) => {
+                            questions.push({
+                                group,
+                                question
+                            });
+                        }
+                    );
+                }
+            );
+        }
+
+        questions.forEach(
+            ({ question }, index) => {
+                const wrapper =
+                    document.createElement('section');
+
+                wrapper.className =
+                    'respondent-question';
+
+                const questionTitle =
+                    document.createElement('div');
+
+                questionTitle.className =
+                    'respondent-question-title';
+
+                questionTitle.textContent =
+                    (index + 1) +
+                    '. ' +
+                    (
+                        question?.title ||
+                        ''
+                    );
+
+                if (question?.required) {
+                    questionTitle.textContent +=
+                        '（必須）';
+                }
+
+                wrapper.appendChild(
+                    questionTitle
+                );
+
+                const questionId =
+                    String(
+                        question?.id ||
+                        'question_' + index
+                    );
+
+                if (
+                    question?.type === 'text' ||
+                    question?.type === 'textarea'
+                ) {
+                    const textarea =
+                        document.createElement(
+                            'textarea'
+                        );
+
+                    textarea.name =
+                        questionId;
+
+                    textarea.dataset.questionId =
+                        questionId;
+
+                    textarea.rows = 5;
+                    textarea.style.width =
+                        '100%';
+
+                    textarea.required =
+                        Boolean(
+                            question?.required
+                        );
+
+                    wrapper.appendChild(
+                        textarea
+                    );
+
+                } else if (
+                    Array.isArray(
+                        question?.options
+                    )
+                ) {
+                    question.options.forEach(
+                        (option, optionIndex) => {
+                            const row =
+                                document.createElement(
+                                    'div'
+                                );
+
+                            row.className =
+                                'respondent-option';
+
+                            const label =
+                                document.createElement(
+                                    'label'
+                                );
+
+                            const input =
+                                document.createElement(
+                                    'input'
+                                );
+
+                            input.type =
+                                question.type ===
+                                'multiple'
+                                    ? 'checkbox'
+                                    : 'radio';
+
+                            input.name =
+                                question.type ===
+                                'multiple'
+                                    ? questionId +
+                                      '[]'
+                                    : questionId;
+
+                            input.value =
+                                String(
+                                    option?.id ??
+                                    optionIndex
+                                );
+
+                            input.dataset.questionId =
+                                questionId;
+
+                            input.dataset.optionId =
+                                String(
+                                    option?.id ??
+                                    optionIndex
+                                );
+
+                            input.required =
+                                question.type !==
+                                'multiple' &&
+                                Boolean(
+                                    question?.required
+                                );
+
+                            const text =
+                                document.createElement(
+                                    'span'
+                                );
+
+                            text.textContent =
+                                option?.label ||
+                                '';
+
+                            label.appendChild(
+                                input
+                            );
+
+                            label.appendChild(
+                                text
+                            );
+
+                            row.appendChild(
+                                label
+                            );
+
+                            wrapper.appendChild(
+                                row
+                            );
+                        }
+                    );
+                }
+
+                form.appendChild(wrapper);
+            }
+        );
+
+        const action =
+            document.createElement('div');
+
+        action.className =
+            'action-row right';
+
+        const submit =
+            document.createElement('button');
+
+        submit.type = 'submit';
+        submit.className =
+            'btn btn-primary';
+
+        submit.innerHTML =
+            '<span class="loading-spinner"></span>回答を送信';
+
+        action.appendChild(submit);
+
+        form.appendChild(action);
+
+        form.addEventListener(
+            'submit',
+            async (event) => {
+                event.preventDefault();
+
+                setButtonLoadingImmediately(
+                    submit
+                );
+
+                const answers = {};
+
+                questions.forEach(
+                    ({ question }) => {
+                        const questionId =
+                            String(
+                                question?.id ||
+                                ''
+                            );
+
+                        if (!questionId) {
+                            return;
+                        }
+
+                        if (
+                            question?.type ===
+                                'text' ||
+                            question?.type ===
+                                'textarea'
+                        ) {
+                            const field =
+                                form.querySelector(
+                                    '[name="' +
+                                    CSS.escape(
+                                        questionId
+                                    ) +
+                                    '"]'
+                                );
+
+                            answers[questionId] =
+                                field?.value ||
+                                '';
+
+                            return;
+                        }
+
+                        const fields =
+                            form.querySelectorAll(
+                                '[data-question-id="' +
+                                CSS.escape(
+                                    questionId
+                                ) +
+                                '"]'
+                            );
+
+                        const selected =
+                            Array.from(fields)
+                                .filter(
+                                    (field) =>
+                                        field.checked
+                                )
+                                .map(
+                                    (field) =>
+                                        field.dataset
+                                            .optionId ||
+                                        field.value
+                                );
+
+                        answers[questionId] =
+                            question?.type ===
+                            'multiple'
+                                ? selected
+                                : (
+                                    selected[0] ||
+                                    ''
+                                );
+                    }
+                );
+
+                try {
+                    await apiPost(
+                        'save_response',
+                        {
+                            survey_id:
+                                survey?.id ||
+                                '',
+                            response_token:
+                                survey?.response_token ||
+                                '',
+                            answers
+                        },
+                        submit
+                    );
+
+                    content.replaceChildren();
+
+                    const complete =
+                        document.createElement(
+                            'div'
+                        );
+
+                    complete.className =
+                        'respondent-complete';
+
+                    const heading =
+                        document.createElement(
+                            'h1'
+                        );
+
+                    heading.textContent =
+                        '回答ありがとうございました。';
+
+                    const message =
+                        document.createElement(
+                            'p'
+                        );
+
+                    message.textContent =
+                        '回答を受け付けました。';
+
+                    complete.appendChild(
+                        heading
+                    );
+
+                    complete.appendChild(
+                        message
+                    );
+
+                    content.appendChild(
+                        complete
+                    );
+
+                } catch (error) {
+                    setButtonLoading(
+                        submit,
+                        false
+                    );
+
+                    showToast(
+                        error?.message ||
+                        '回答を送信できませんでした。',
+                        'error'
+                    );
+                }
+            }
+        );
+
+        content.appendChild(form);
+    }
+
+    function renderRespondentError(message) {
+        const app =
+            get('app');
+
+        const respondentPage =
+            get('respondent-page');
+
+        if (app) {
+            app.classList.add('hidden');
+        }
+
+        if (respondentPage) {
+            respondentPage.classList.remove(
+                'hidden'
+            );
+        }
+
+        const content =
+            get('respondent-content');
+
+        if (!content) {
+            return;
+        }
+
+        content.replaceChildren();
+
+        const box =
+            document.createElement('div');
+
+        box.className =
+            'respondent-complete';
+
+        const heading =
+            document.createElement('h1');
+
+        heading.textContent =
+            'アンケートを表示できません。';
+
+        const messageElement =
+            document.createElement('p');
+
+        messageElement.textContent =
+            String(message ?? '');
+
+        box.appendChild(heading);
+        box.appendChild(messageElement);
+
+        content.appendChild(box);
+    }
+
+    /* =========================================================
+     * 初期画面判定
+     * ========================================================= */
+
+    const urlParams =
+        new URLSearchParams(
+            window.location.search
+        );
+
+    const publicSurveyId =
+        urlParams.get(
+            'survey_id'
+        );
+
+    const publicMode =
+        urlParams.get(
+            'respond'
+        );
+
+    if (
+        publicMode === '1' &&
+        publicSurveyId
+    ) {
+        loadPublicSurvey(
+            publicSurveyId
+        );
+    } else {
+        showPage('dashboard');
+    }
+
+});
+</script>
+
+</body>
+</html>
