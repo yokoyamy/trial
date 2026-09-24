@@ -1,6297 +1,1935 @@
-<?php
-declare(strict_types=1);
-
-namespace yokoyamy\trial\newapp;
-
-use RuntimeException;
-use Throwable;
-
-session_start([
-    'cookie_httponly' => true,
-    'cookie_samesite' => 'Lax',
-]);
-
-header('X-Frame-Options: SAMEORIGIN');
-header('X-Content-Type-Options: nosniff');
-
-const APP_SESSION_KEY = 'yokoyamy_newapp';
-const DATA_DIR = __DIR__ . DIRECTORY_SEPARATOR . 'data';
-const SETTINGS_FILE = DATA_DIR . DIRECTORY_SEPARATOR . 'settings.json';
-const SURVEYS_FILE = DATA_DIR . DIRECTORY_SEPARATOR . 'surveys.json';
-const CUSTOMERS_FILE = DATA_DIR . DIRECTORY_SEPARATOR . 'customers.json';
-const RESPONSES_FILE = DATA_DIR . DIRECTORY_SEPARATOR . 'responses.json';
-
-const APP_VERSION = '2.0.0';
-
-/**
- * 安全な文字列エスケープ
- */
-function h(?string $str): string
-{
-    return htmlspecialchars(
-        $str ?? '',
-        ENT_QUOTES | ENT_SUBSTITUTE,
-        'UTF-8'
-    );
-}
-
-/**
- * アプリ固有セッション取得
- */
-function get_app_session(): array
-{
-    if (
-        !isset($_SESSION[APP_SESSION_KEY]) ||
-        !is_array($_SESSION[APP_SESSION_KEY])
-    ) {
-        $_SESSION[APP_SESSION_KEY] = [];
-    }
-
-    return $_SESSION[APP_SESSION_KEY];
-}
-
-/**
- * アプリ固有セッション保存
- */
-function set_app_session(string $key, mixed $value): void
-{
-    if (
-        !isset($_SESSION[APP_SESSION_KEY]) ||
-        !is_array($_SESSION[APP_SESSION_KEY])
-    ) {
-        $_SESSION[APP_SESSION_KEY] = [];
-    }
-
-    $_SESSION[APP_SESSION_KEY][$key] = $value;
-}
-
-/**
- * CSRFトークン取得
- */
-function get_csrf_token(): string
-{
-    $session = get_app_session();
-
-    if (
-        !isset($session['csrf_token']) ||
-        !is_string($session['csrf_token']) ||
-        strlen($session['csrf_token']) < 64
-    ) {
-        $token = bin2hex(random_bytes(32));
-        set_app_session('csrf_token', $token);
-
-        return $token;
-    }
-
-    return $session['csrf_token'];
-}
-
-/**
- * CSRF検証
- */
-function verify_csrf(): void
-{
-    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
-
-    if (!is_string($token) || $token === '') {
-        $body = file_get_contents('php://input');
-
-        if ($body !== false && $body !== '') {
-            $json = json_decode($body, true);
-
-            if (
-                is_array($json) &&
-                isset($json['csrf_token']) &&
-                is_string($json['csrf_token'])
-            ) {
-                $token = $json['csrf_token'];
-            }
-        }
-    }
-
-    $session = get_app_session();
-    $expected = $session['csrf_token'] ?? '';
-
-    if (
-        !is_string($expected) ||
-        $expected === '' ||
-        !is_string($token) ||
-        $token === '' ||
-        !hash_equals($expected, $token)
-    ) {
-        send_json(
-            [
-                'success' => false,
-                'message' => '画面の有効期限が切れています。画面を再読み込みして再度お試しください。'
-            ],
-            403
-        );
-    }
-}
-
-/**
- * JSONレスポンス
- */
-function send_json(array $response, int $status = 200): never
-{
-    while (ob_get_level() > 0) {
-        ob_end_clean();
-    }
-
-    http_response_code($status);
-
-    header('Content-Type: application/json; charset=utf-8');
-
-    $json = json_encode(
-        $response,
-        JSON_UNESCAPED_UNICODE |
-        JSON_UNESCAPED_SLASHES |
-        JSON_INVALID_UTF8_SUBSTITUTE
-    );
-
-    if ($json === false) {
-        $json = json_encode(
-            [
-                'success' => false,
-                'message' => 'JSONレスポンスを作成できませんでした。'
-            ],
-            JSON_UNESCAPED_UNICODE
-        );
-    }
-
-    echo $json;
-
-    exit;
-}
-
-/**
- * データディレクトリ作成
- */
-function ensure_data_directory(): void
-{
-    if (is_dir(DATA_DIR)) {
-        return;
-    }
-
-    if (!mkdir(DATA_DIR, 0755, true) && !is_dir(DATA_DIR)) {
-        throw new RuntimeException(
-            'データ保存先を作成できませんでした。'
-        );
-    }
-}
-
-/**
- * JSON読み込み
- */
-function read_json_file(string $file, array $default): array
-{
-    ensure_data_directory();
-
-    if (!is_file($file)) {
-        return $default;
-    }
-
-    $contents = file_get_contents($file);
-
-    if ($contents === false || trim($contents) === '') {
-        return $default;
-    }
-
-    $data = json_decode($contents, true);
-
-    if (!is_array($data)) {
-        return $default;
-    }
-
-    return $data;
-}
-
-/**
- * JSON保存
- *
- * 一時ファイルへ書き込み後に置換することで、
- * 保存途中で既存ファイルが壊れることを防ぐ。
- */
-function write_json_file(string $file, array $data): void
-{
-    ensure_data_directory();
-
-    $json = json_encode(
-        $data,
-        JSON_UNESCAPED_UNICODE |
-        JSON_UNESCAPED_SLASHES |
-        JSON_PRETTY_PRINT |
-        JSON_INVALID_UTF8_SUBSTITUTE
-    );
-
-    if ($json === false) {
-        throw new RuntimeException(
-            '保存するデータを作成できませんでした。'
-        );
-    }
-
-    $temporary = $file . '.tmp';
-
-    $written = file_put_contents(
-        $temporary,
-        $json,
-        LOCK_EX
-    );
-
-    if ($written === false) {
-        throw new RuntimeException(
-            'データを書き込めませんでした。'
-        );
-    }
-
-    $verify = file_get_contents($temporary);
-
-    if ($verify === false || $verify !== $json) {
-        @unlink($temporary);
-
-        throw new RuntimeException(
-            '保存したデータを確認できませんでした。'
-        );
-    }
-
-    if (!rename($temporary, $file)) {
-        @unlink($temporary);
-
-        throw new RuntimeException(
-            'データファイルを更新できませんでした。'
-        );
-    }
-}
-
-/**
- * 初期メール設定
- */
-function default_mail_settings(): array
-{
-    return [
-        'smtp' => '',
-        'port' => '',
-        'security' => 'なし',
-        'username' => '',
-        'password' => '',
-        'from' => '',
-        'fromName' => '',
-        'ready' => false
-    ];
-}
-
-/**
- * 初期kintone設定
- */
-function default_kintone_settings(): array
-{
-    return [
-        'domain' => '',
-        'appId' => '',
-        'loginName' => '',
-        'password' => '',
-        'proxyHost' => '',
-        'proxyPort' => '',
-        'ready' => false,
-        'connectionChecked' => false,
-        'connectionCheckedAt' => ''
-    ];
-}
-
-/**
- * 設定読み込み
- */
-function load_settings(): array
-{
-    $defaults = [
-        'mail' => default_mail_settings(),
-        'kintone' => default_kintone_settings()
-    ];
-
-    $settings = read_json_file(
-        SETTINGS_FILE,
-        $defaults
-    );
-
-    if (
-        !isset($settings['mail']) ||
-        !is_array($settings['mail'])
-    ) {
-        $settings['mail'] = default_mail_settings();
-    }
-
-    if (
-        !isset($settings['kintone']) ||
-        !is_array($settings['kintone'])
-    ) {
-        $settings['kintone'] = default_kintone_settings();
-    }
-
-    $settings['mail'] = array_merge(
-        default_mail_settings(),
-        $settings['mail']
-    );
-
-    $settings['kintone'] = array_merge(
-        default_kintone_settings(),
-        $settings['kintone']
-    );
-
-    return $settings;
-}
-
-/**
- * パスワードを除いたメール設定
- */
-function public_mail_settings(array $settings): array
-{
-    return [
-        'smtp' => (string)($settings['smtp'] ?? ''),
-        'port' => (string)($settings['port'] ?? ''),
-        'security' => (string)($settings['security'] ?? 'なし'),
-        'username' => (string)($settings['username'] ?? ''),
-        'from' => (string)($settings['from'] ?? ''),
-        'fromName' => (string)($settings['fromName'] ?? ''),
-        'ready' => (bool)($settings['ready'] ?? false),
-        'passwordConfigured' => (string)($settings['password'] ?? '') !== ''
-    ];
-}
-
-/**
- * パスワードを除いたkintone設定
- */
-function public_kintone_settings(array $settings): array
-{
-    return [
-        'domain' => (string)($settings['domain'] ?? ''),
-        'appId' => (string)($settings['appId'] ?? ''),
-        'loginName' => (string)($settings['loginName'] ?? ''),
-        'proxyHost' => (string)($settings['proxyHost'] ?? ''),
-        'proxyPort' => (string)($settings['proxyPort'] ?? ''),
-        'ready' => (bool)($settings['ready'] ?? false),
-        'connectionChecked' => (bool)($settings['connectionChecked'] ?? false),
-        'connectionCheckedAt' => (string)($settings['connectionCheckedAt'] ?? ''),
-        'passwordConfigured' => (string)($settings['password'] ?? '') !== ''
-    ];
-}
-
-/**
- * メール設定保存
- */
-function save_mail_settings(array $input): array
-{
-    $smtp = trim((string)($input['smtp'] ?? ''));
-    $port = trim((string)($input['port'] ?? ''));
-    $security = trim((string)($input['security'] ?? 'なし'));
-    $username = trim((string)($input['username'] ?? ''));
-    $password = (string)($input['password'] ?? '');
-    $from = trim((string)($input['from'] ?? ''));
-    $fromName = trim((string)($input['fromName'] ?? ''));
-
-    $errors = [];
-
-    if ($smtp === '') {
-        $errors['smtp'] = 'SMTPサーバを入力してください。';
-    }
-
-    if (
-        $port === '' ||
-        !ctype_digit($port) ||
-        (int)$port < 1 ||
-        (int)$port > 65535
-    ) {
-        $errors['port'] = 'ポート番号は1～65535で入力してください。';
-    }
-
-    if (!in_array(
-        $security,
-        ['なし', 'STARTTLS', 'SSL/TLS'],
-        true
-    )) {
-        $errors['security'] = '接続方式が正しくありません。';
-    }
-
-    if (
-        $from === '' ||
-        filter_var($from, FILTER_VALIDATE_EMAIL) === false
-    ) {
-        $errors['from'] = '送信元メールアドレスを正しく入力してください。';
-    }
-
-    $settings = load_settings();
-
-    $existingPassword =
-        (string)($settings['mail']['password'] ?? '');
-
-    if ($password === '') {
-        $password = $existingPassword;
-    }
-
-    /*
-     * SMTP認証を利用する場合はユーザー名・パスワードを確認。
-     *
-     * 「なし」の場合は認証情報を必須としない。
-     */
-    if ($username !== '' && $password === '') {
-        $errors['password'] =
-            '認証ユーザー名を入力する場合は、認証パスワードも入力してください。';
-    }
-
-    if ($errors !== []) {
-        return [
-            'success' => false,
-            'message' => 'メール設定を確認してください。',
-            'errors' => $errors
-        ];
-    }
-
-    $newSettings = [
-        'smtp' => $smtp,
-        'port' => (string)((int)$port),
-        'security' => $security,
-        'username' => $username,
-        'password' => $password,
-        'from' => $from,
-        'fromName' => $fromName,
-        'ready' => true
-    ];
-
-    $settings['mail'] = $newSettings;
-
-    write_json_file(
-        SETTINGS_FILE,
-        $settings
-    );
-
-    $saved = load_settings();
-
-    if (
-        $saved['mail']['smtp'] !== $smtp ||
-        $saved['mail']['port'] !== (string)((int)$port) ||
-        $saved['mail']['from'] !== $from
-    ) {
-        throw new RuntimeException(
-            'メール設定の保存結果を確認できませんでした。'
-        );
-    }
+# アンケート業務運営アプリ 実装要件
+## 全差し替え版
 
-    return [
-        'success' => true,
-        'message' => 'メール送信設定を保存しました。',
-        'mail' => public_mail_settings($saved['mail'])
-    ];
-}
-
-/**
- * kintone利用先URLを統一生成
- */
-function kintone_build_url(
-    string $domain,
-    string $endpoint
-): string {
-    $domain = trim($domain);
-
-    $domain = preg_replace(
-        '/^https?:\/\//i',
-        '',
-        $domain
-    );
-
-    if ($domain === null) {
-        throw new RuntimeException(
-            'kintone利用先の形式が正しくありません。'
-        );
-    }
-
-    $domain = preg_replace(
-        '/\.cybozu\.com.*$/i',
-        '',
-        $domain
-    );
-
-    if ($domain === null) {
-        throw new RuntimeException(
-            'kintone利用先の形式が正しくありません。'
-        );
-    }
-
-    $domain = rtrim($domain, '/');
-
-    if ($domain === '') {
-        throw new RuntimeException(
-            'kintone利用先を入力してください。'
-        );
-    }
-
-    $endpoint = '/' . ltrim($endpoint, '/');
-
-    return 'https://' . $domain . '.cybozu.com' . $endpoint;
-}
-
-/**
- * kintoneレスポンスヘッダー取得
- */
-function get_safe_response_headers(): array
-{
-    if (function_exists('http_get_last_response_headers')) {
-        $headers = http_get_last_response_headers();
-
-        if (is_array($headers)) {
-            return $headers;
-        }
-    }
-
-    /*
-     * PHP環境によっては関数が提供されないため、
-     * その場合はグローバル領域に残るレスポンス情報を
-     * 直接参照せず、安全に取得できる範囲だけを返す。
-     *
-     * PHP 8.4/8.5で非推奨となる直接参照は行わない。
-     */
-    return [];
-}
-
-/**
- * HTTPステータス取得
- */
-function get_response_status(array $headers): int
-{
-    foreach ($headers as $header) {
-        if (!is_string($header)) {
-            continue;
-        }
-
-        if (preg_match(
-            '/^HTTP\/\d(?:\.\d)?\s+(\d{3})/i',
-            $header,
-            $matches
-        )) {
-            return (int)$matches[1];
-        }
-    }
-
-    return 0;
-}
-
-/**
- * kintone認証ヘッダー
- */
-function make_cybozu_auth_header(
-    string $loginName,
-    string $password
-): string {
-    $loginName = trim($loginName);
-    $password = trim($password);
-
-    return 'X-Cybozu-Authorization: ' .
-        base64_encode(
-            $loginName . ':' . $password
-        );
-}
-
-/**
- * プロキシ設定を取得
- *
- * host:port の形式を想定。
- */
-function make_proxy_config(
-    string $proxyHost,
-    string $proxyPort
-): string {
-    $proxyHost = trim($proxyHost);
-    $proxyPort = trim($proxyPort);
-
-    if ($proxyHost === '' && $proxyPort === '') {
-        return '';
-    }
-
-    if ($proxyHost === '' || $proxyPort === '') {
-        throw new RuntimeException(
-            'プロキシ設定はhost:port形式で入力してください。'
-        );
-    }
-
-    if (
-        !ctype_digit($proxyPort) ||
-        (int)$proxyPort < 1 ||
-        (int)$proxyPort > 65535
-    ) {
-        throw new RuntimeException(
-            'プロキシのポート番号が正しくありません。'
-        );
-    }
-
-    /*
-     * host側にプロトコルを入力されても通信設定が
-     * 壊れないように除去。
-     */
-    $proxyHost = preg_replace(
-        '/^https?:\/\//i',
-        '',
-        $proxyHost
-    );
-
-    if ($proxyHost === null || $proxyHost === '') {
-        throw new RuntimeException(
-            'プロキシのホスト名が正しくありません。'
-        );
-    }
-
-    return 'tcp://' . $proxyHost . ':' . $proxyPort;
-}
-
-/**
- * kintone共通通信
- *
- * cURLは使用しない。
- */
-function kintone_api_request(
-    string $method,
-    string $url,
-    array $headers,
-    mixed $payload,
-    array $config
-): array {
-    $method = strtoupper(trim($method));
-
-    if (!in_array(
-        $method,
-        ['GET', 'POST', 'PUT'],
-        true
-    )) {
-        throw new RuntimeException(
-            '対応していない通信方式です。'
-        );
-    }
+---
 
-    $httpOptions = [
-        'method' => $method,
-        'header' => implode("\r\n", $headers),
-        'ignore_errors' => true,
-        'timeout' => 20,
-        'protocol_version' => 1.1
-    ];
-
-    /*
-     * GETにはcontentを設定しない。
-     */
-    if (
-        $method !== 'GET' &&
-        $payload !== null
-    ) {
-        $body = is_array($payload)
-            ? json_encode(
-                $payload,
-                JSON_UNESCAPED_UNICODE |
-                JSON_UNESCAPED_SLASHES
-            )
-            : (string)$payload;
-
-        if ($body === false) {
-            throw new RuntimeException(
-                'kintone送信データを作成できませんでした。'
-            );
-        }
-
-        $httpOptions['content'] = $body;
-    }
+## 1. 基本方針
 
-    $contextOptions = [
-        'http' => $httpOptions,
-        'ssl' => [
-            'verify_peer' => false,
-            'verify_peer_name' => false,
-            'allow_self_signed' => true
-        ]
-    ];
-
-    /*
-     * プロキシ設定はkintone通信すべてで受け取れる。
-     */
-    $proxyHost = trim(
-        (string)($config['proxyHost'] ?? '')
-    );
-
-    $proxyPort = trim(
-        (string)($config['proxyPort'] ?? '')
-    );
-
-    $proxy = make_proxy_config(
-        $proxyHost,
-        $proxyPort
-    );
-
-    if ($proxy !== '') {
-        $contextOptions['http']['proxy'] = $proxy;
-        $contextOptions['http']['request_fulluri'] = true;
-    }
+本アプリは、アンケート運営に必要な以下の業務を一つのWebアプリで管理する。
 
-    $context = stream_context_create(
-        $contextOptions
-    );
-
-    $responseBody = @file_get_contents(
-        $url,
-        false,
-        $context
-    );
-
-    $responseHeaders =
-        get_safe_response_headers();
-
-    $status = get_response_status(
-        $responseHeaders
-    );
-
-    $decoded = null;
-
-    if (
-        $responseBody !== false &&
-        $responseBody !== ''
-    ) {
-        $decoded = json_decode(
-            $responseBody,
-            true
-        );
-    }
+- アンケートの作成
+- アンケートの編集
+- アンケートの削除
+- アンケートの公開
+- アンケートの終了
+- 顧客一覧の取得
+- 送信対象者の選択
+- アンケートメールの送信
+- 送信結果の確認
+- 回答受付
+- 回答状況の確認
+- 回答結果の集計
+- メール送信設定
+- kintone接続設定
 
-    if (
-        $status >= 200 &&
-        $status < 300 &&
-        $responseBody !== false
-    ) {
-        return [
-            'success' => true,
-            'status' => $status,
-            'data' => is_array($decoded)
-                ? $decoded
-                : []
-        ];
-    }
+本番版では、モック上だけで完結している処理を正式なサーバー処理へ置き換える。
 
-    $message =
-        'kintoneとの通信に失敗しました。';
-
-    $code = '';
-    $errors = [];
-
-    if (is_array($decoded)) {
-        if (
-            isset($decoded['message']) &&
-            is_string($decoded['message'])
-        ) {
-            $message = $decoded['message'];
-        }
-
-        if (
-            isset($decoded['code']) &&
-            is_string($decoded['code'])
-        ) {
-            $code = $decoded['code'];
-        }
-
-        if (
-            isset($decoded['errors']) &&
-            is_array($decoded['errors'])
-        ) {
-            foreach ($decoded['errors'] as $key => $value) {
-                if (!is_array($value)) {
-                    continue;
-                }
-
-                $messages = $value['messages'] ?? [];
-
-                if (!is_array($messages)) {
-                    continue;
-                }
-
-                foreach ($messages as $item) {
-                    if (is_string($item)) {
-                        $errors[] =
-                            (string)$key . ': ' . $item;
-                    }
-                }
-            }
-        }
-    }
+画面上の値を変更しただけでは、保存・公開・終了・送信・回答完了などの処理が成立したものとは扱わない。
 
-    if ($status === 0) {
-        $message =
-            'kintoneへ接続できませんでした。利用先、プロキシ、ネットワーク設定を確認してください。';
-    }
+すべての状態変更はサーバー側で最終判断する。
 
-    return [
-        'success' => false,
-        'status' => $status,
-        'code' => $code,
-        'message' => $message,
-        'errors' => $errors
-    ];
-}
-
-/**
- * kintone設定保存
- */
-function save_kintone_settings(array $input): array
-{
-    $domain = trim(
-        (string)($input['domain'] ?? '')
-    );
-
-    $appId = trim(
-        (string)($input['appId'] ?? '')
-    );
-
-    $loginName = trim(
-        (string)($input['loginName'] ?? '')
-    );
-
-    $password = (string)(
-        $input['password'] ?? ''
-    );
-
-    /*
-     * プロキシは任意。
-     * ただし入力する場合はhost/port両方を要求。
-     */
-    $proxyHost = trim(
-        (string)($input['proxyHost'] ?? '')
-    );
-
-    $proxyPort = trim(
-        (string)($input['proxyPort'] ?? '')
-    );
-
-    $errors = [];
-
-    if ($domain === '') {
-        $errors['domain'] =
-            'kintoneの利用先を入力してください。';
-    }
+---
 
-    if (
-        $appId === '' ||
-        !ctype_digit($appId) ||
-        (int)$appId < 1
-    ) {
-        $errors['appId'] =
-            '顧客管理アプリIDを正しく入力してください。';
-    }
+## 2. 動作環境
 
-    if ($loginName === '') {
-        $errors['loginName'] =
-            'ログイン名を入力してください。';
-    }
+以下を動作環境とする。
 
-    if ($proxyHost !== '' && $proxyPort === '') {
-        $errors['proxyPort'] =
-            'プロキシのホストを入力した場合は、ポート番号も入力してください。';
-    }
+- Apache 2.4
+- PHP 8.4 / 8.5
+- Windows / Unix
+- データベースなし
+- HTML / CSS / JavaScript / PHPを1つのindex.phpへ格納
+- UTF-8
+- 永続データはアプリルート配下のJSONファイルへ保存
+- PHPによる外部HTTP通信ではcURLを使用しない
 
-    if ($proxyPort !== '') {
-        if (
-            !ctype_digit($proxyPort) ||
-            (int)$proxyPort < 1 ||
-            (int)$proxyPort > 65535
-        ) {
-            $errors['proxyPort'] =
-                'プロキシのポート番号は1～65535で入力してください。';
-        }
-    }
+本アプリはApacheからHTTPまたはHTTPSによってWebページとして提供される。
 
-    if ($errors !== []) {
-        return [
-            'success' => false,
-            'message' => 'kintone設定を確認してください。',
-            'errors' => $errors
-        ];
-    }
+---
 
-    $settings = load_settings();
+## 3. index.phpの実行方法
 
-    $existingPassword =
-        (string)($settings['kintone']['password'] ?? '');
+index.phpは通常のWebページとしてHTTPまたはHTTPSで提供する。
 
-    if ($password === '') {
-        $password = $existingPassword;
-    }
+以下を動作対象外とする。
 
-    if ($password === '') {
-        return [
-            'success' => false,
-            'message' => 'パスワードを入力してください。',
-            'errors' => [
-                'password' => 'パスワードを入力してください。'
-            ]
-        ];
-    }
+- file://による直接表示
+- data: URLからの表示
+- sandbox属性によって同一オリジンが無効化されたiframe内での表示
+- Originがnullとなるその他の実行環境
 
-    /*
-     * 設定変更後は接続確認済み状態を解除。
-     */
-    $settings['kintone'] = [
-        'domain' => $domain,
-        'appId' => (string)((int)$appId),
-        'loginName' => $loginName,
-        'password' => $password,
-        'proxyHost' => $proxyHost,
-        'proxyPort' => $proxyPort,
-        'ready' => true,
-        'connectionChecked' => false,
-        'connectionCheckedAt' => ''
-    ];
-
-    write_json_file(
-        SETTINGS_FILE,
-        $settings
-    );
-
-    $saved = load_settings();
-
-    if (
-        $saved['kintone']['domain'] !== $domain ||
-        $saved['kintone']['appId'] !== (string)((int)$appId) ||
-        $saved['kintone']['loginName'] !== $loginName
-    ) {
-        throw new RuntimeException(
-            'kintone設定の保存結果を確認できませんでした。'
-        );
-    }
+index.phpをブラウザから直接開いた場合、現在表示しているindex.php自身をアプリ内APIの基準とする。
 
-    return [
-        'success' => true,
-        'message' => 'kintone設定を保存しました。',
-        'kintone' =>
-            public_kintone_settings(
-                $saved['kintone']
-            )
-    ];
-}
-
-/**
- * kintone接続確認
- */
-function test_kintone_connection(): array
-{
-    $settings = load_settings();
-    $kintone = $settings['kintone'];
-
-    $domain = trim(
-        (string)($kintone['domain'] ?? '')
-    );
-
-    $appId = trim(
-        (string)($kintone['appId'] ?? '')
-    );
-
-    $loginName = trim(
-        (string)($kintone['loginName'] ?? '')
-    );
-
-    $password = (string)(
-        $kintone['password'] ?? ''
-    );
-
-    if (
-        $domain === '' ||
-        $appId === '' ||
-        $loginName === '' ||
-        $password === ''
-    ) {
-        return [
-            'success' => false,
-            'message' =>
-                'kintone設定を保存してから接続確認を行ってください。'
-        ];
-    }
+実行環境の違いによって変化する以下の情報をコードへ固定してはならない。
 
-    $url = kintone_build_url(
-        $domain,
-        '/k/v1/app.json?' .
-        http_build_query(
-            ['id' => (int)$appId],
-            '',
-            '&',
-            PHP_QUERY_RFC3986
-        )
-    );
-
-    $headers = [
-        make_cybozu_auth_header(
-            $loginName,
-            $password
-        ),
-        'Accept: application/json'
-    ];
-
-    $result = kintone_api_request(
-        'GET',
-        $url,
-        $headers,
-        null,
-        [
-            'proxyHost' =>
-                (string)($kintone['proxyHost'] ?? ''),
-            'proxyPort' =>
-                (string)($kintone['proxyPort'] ?? '')
-        ]
-    );
-
-    if (!$result['success']) {
-        $detail = [];
-
-        if (
-            isset($result['status']) &&
-            (int)$result['status'] > 0
-        ) {
-            $detail[] =
-                'HTTP ' . (int)$result['status'];
-        }
-
-        if (
-            isset($result['code']) &&
-            is_string($result['code']) &&
-            $result['code'] !== ''
-        ) {
-            $detail[] =
-                'エラーコード: ' . $result['code'];
-        }
-
-        if (
-            isset($result['message']) &&
-            is_string($result['message']) &&
-            $result['message'] !== ''
-        ) {
-            $detail[] =
-                $result['message'];
-        }
-
-        if (
-            isset($result['errors']) &&
-            is_array($result['errors']) &&
-            $result['errors'] !== []
-        ) {
-            $detail[] =
-                implode(
-                    ' / ',
-                    array_map(
-                        'strval',
-                        $result['errors']
-                    )
-                );
-        }
-
-        return [
-            'success' => false,
-            'message' =>
-                implode(
-                    ' ',
-                    $detail
-                )
-        ];
-    }
+- ホスト名
+- IPアドレス
+- ポート番号
+- HTTP / HTTPS
+- アプリ配置ディレクトリ
+- 本番環境固有のURL
 
-    $settings['kintone']['connectionChecked'] = true;
-    $settings['kintone']['connectionCheckedAt'] =
-        date('c');
-
-    write_json_file(
-        SETTINGS_FILE,
-        $settings
-    );
-
-    return [
-        'success' => true,
-        'message' =>
-            'kintoneへの接続を確認しました。',
-        'kintone' =>
-            public_kintone_settings(
-                $settings['kintone']
-            )
-    ];
-}
-
-/**
- * 顧客一覧をkintoneから取得
- */
-function fetch_kintone_customers(): array
-{
-    $settings = load_settings();
-    $kintone = $settings['kintone'];
-
-    $domain = trim(
-        (string)($kintone['domain'] ?? '')
-    );
-
-    $appId = trim(
-        (string)($kintone['appId'] ?? '')
-    );
-
-    $loginName = trim(
-        (string)($kintone['loginName'] ?? '')
-    );
-
-    $password = (string)(
-        $kintone['password'] ?? ''
-    );
-
-    if (
-        $domain === '' ||
-        $appId === '' ||
-        $loginName === '' ||
-        $password === ''
-    ) {
-        return [
-            'success' => false,
-            'message' =>
-                'kintone設定が未完了です。設定画面を確認してください。'
-        ];
-    }
+特定の実行環境を示すURLをサンプルとして記載する必要がある場合でも、実装コードへ埋め込んではならない。
 
-    $allCustomers = [];
-    $offset = 0;
-    $limit = 100;
-
-    /*
-     * 顧客管理アプリの標準的なフィールド名を優先。
-     * その他の情報も保持する。
-     */
-    while (true) {
-        $query =
-            'order by $id asc limit ' .
-            $limit .
-            ' offset ' .
-            $offset;
-
-        $params = [
-            'app' => (int)$appId,
-            'query' => $query
-        ];
-
-        $queryString = http_build_query(
-            $params,
-            '',
-            '&',
-            PHP_QUERY_RFC3986
-        );
-
-        $url = kintone_build_url(
-            $domain,
-            '/k/v1/records.json?' . $queryString
-        );
-
-        $headers = [
-            make_cybozu_auth_header(
-                $loginName,
-                $password
-            ),
-            'Accept: application/json'
-        ];
-
-        $result = kintone_api_request(
-            'GET',
-            $url,
-            $headers,
-            null,
-            [
-                'proxyHost' =>
-                    (string)($kintone['proxyHost'] ?? ''),
-                'proxyPort' =>
-                    (string)($kintone['proxyPort'] ?? '')
-            ]
-        );
-
-        if (!$result['success']) {
-            return [
-                'success' => false,
-                'message' =>
-                    '顧客一覧を取得できませんでした。',
-                'detail' =>
-                    (string)($result['message'] ?? '')
-            ];
-        }
-
-        $records =
-            $result['data']['records'] ?? [];
-
-        if (!is_array($records)) {
-            $records = [];
-        }
-
-        foreach ($records as $record) {
-            if (!is_array($record)) {
-                continue;
-            }
-
-            $name = extract_kintone_field_value(
-                $record,
-                [
-                    'name',
-                    'customer_name',
-                    '顧客名',
-                    '氏名'
-                ]
-            );
-
-            $email = extract_kintone_field_value(
-                $record,
-                [
-                    'email',
-                    'mail',
-                    'メールアドレス'
-                ]
-            );
-
-            $company = extract_kintone_field_value(
-                $record,
-                [
-                    'company',
-                    'company_name',
-                    '会社名'
-                ]
-            );
-
-            $code = extract_kintone_field_value(
-                $record,
-                [
-                    'code',
-                    'customer_code',
-                    '顧客番号'
-                ]
-            );
-
-            $allCustomers[] = [
-                'id' =>
-                    extract_kintone_field_value(
-                        $record,
-                        ['$id', 'id']
-                    ),
-                'name' => $name,
-                'email' => $email,
-                'company' => $company,
-                'code' => $code,
-                'fields' => $record
-            ];
-        }
-
-        if (count($records) < $limit) {
-            break;
-        }
-
-        $offset += $limit;
-    }
+---
 
-    $savedData = [
-        'updated_at' => date('c'),
-        'customers' => $allCustomers
-    ];
-
-    write_json_file(
-        CUSTOMERS_FILE,
-        $savedData
-    );
-
-    return [
-        'success' => true,
-        'message' =>
-            '顧客一覧を取得しました。',
-        'customers' => $allCustomers,
-        'updated_at' => $savedData['updated_at']
-    ];
-}
-
-/**
- * kintoneフィールド値抽出
- */
-function extract_kintone_field_value(
-    array $record,
-    array $fieldNames
-): string {
-    foreach ($fieldNames as $fieldName) {
-        if (!isset($record[$fieldName])) {
-            continue;
-        }
-
-        $field = $record[$fieldName];
-
-        if (!is_array($field)) {
-            continue;
-        }
-
-        if (
-            !isset($field['value'])
-        ) {
-            continue;
-        }
-
-        $value = $field['value'];
-
-        if (is_string($value)) {
-            return $value;
-        }
-
-        if (is_numeric($value)) {
-            return (string)$value;
-        }
-
-        if (is_array($value)) {
-            $values = [];
-
-            foreach ($value as $item) {
-                if (
-                    is_array($item) &&
-                    isset($item['name']) &&
-                    is_string($item['name'])
-                ) {
-                    $values[] = $item['name'];
-                }
-            }
-
-            if ($values !== []) {
-                return implode(
-                    ', ',
-                    $values
-                );
-            }
-        }
-    }
+## 4. アプリ自身へのAPI通信
 
-    return '';
-}
-
-/**
- * 顧客キャッシュ読み込み
- */
-function load_customer_cache(): array
-{
-    $data = read_json_file(
-        CUSTOMERS_FILE,
-        []
-    );
-
-    if (
-        isset($data['customers']) &&
-        is_array($data['customers'])
-    ) {
-        return $data;
-    }
+JavaScriptからアプリ自身のAPIを呼び出す場合は、現在表示されているindex.phpを基準としてAPI URLを生成する。
 
-    /*
-     * 旧形式との互換を許容せず、
-     * 不正な構造の場合は空として扱う。
-     */
-    return [
-        'updated_at' => '',
-        'customers' => []
-    ];
-}
-
-/**
- * アンケートID発行
- */
-function generate_survey_id(
-    array $surveys
-): int {
-    $max = 0;
-
-    foreach ($surveys as $survey) {
-        if (!is_array($survey)) {
-            continue;
-        }
-
-        $id = $survey['id'] ?? 0;
-
-        if (
-            is_numeric($id) &&
-            (int)$id > $max
-        ) {
-            $max = (int)$id;
-        }
-    }
+API通信先として、実行環境固有の絶対URLを使用してはならない。
 
-    return $max + 1;
-}
+例えば以下のような固定指定は禁止する。
 
-/**
- * グループID発行
- */
-function generate_group_id(
-    array $survey
-): int {
-    $max = 0;
+- 特定のホスト名を含むURL
+- 特定のIPアドレスを含むURL
+- 特定のポート番号を含むURL
+- 開発環境専用URL
+- 本番環境専用URL
 
-    $groups = $survey['groups'] ?? [];
+実行環境が変更されても、同じindex.phpをそのまま使用できることを必須とする。
 
-    if (!is_array($groups)) {
-        return 1;
-    }
+---
 
-    foreach ($groups as $group) {
-        if (!is_array($group)) {
-            continue;
-        }
-
-        $id = $group['id'] ?? 0;
-
-        if (
-            is_numeric($id) &&
-            (int)$id > $max
-        ) {
-            $max = (int)$id;
-        }
-    }
+## 5. 同一オリジン通信
 
-    return $max + 1;
-}
+アプリ内部APIへの通信は、現在表示しているindex.phpと同じオリジンで行う。
 
-/**
- * 質問ID発行
- */
-function generate_question_id(
-    array $survey
-): int {
-    $max = 0;
+状態変更を伴う通信では、
 
-    $groups = $survey['groups'] ?? [];
+- セッションCookie
+- CSRFトークン
 
-    if (!is_array($groups)) {
-        return 1;
-    }
+を利用する。
 
-    foreach ($groups as $group) {
-        if (!is_array($group)) {
-            continue;
-        }
-
-        $questions =
-            $group['questions'] ?? [];
-
-        if (!is_array($questions)) {
-            continue;
-        }
-
-        foreach ($questions as $question) {
-            if (!is_array($question)) {
-                continue;
-            }
-
-            $id = $question['id'] ?? 0;
-
-            if (
-                is_numeric($id) &&
-                (int)$id > $max
-            ) {
-                $max = (int)$id;
-            }
-        }
-    }
+本アプリ自身のAPI利用を目的とした外部CORS設定は行わない。
 
-    return $max + 1;
-}
+以下は禁止する。
 
-/**
- * アンケートの全質問を取得
- */
-function get_all_questions(
-    array $survey
-): array {
-    $questions = [];
+    Access-Control-Allow-Origin: *
 
-    $groups = $survey['groups'] ?? [];
+    Access-Control-Allow-Origin: null
 
-    if (!is_array($groups)) {
-        return [];
-    }
+また、任意の外部Originからセッション付きAPIを利用可能にする設定は禁止する。
 
-    foreach ($groups as $groupIndex => $group) {
-        if (!is_array($group)) {
-            continue;
-        }
+---
 
-        $groupQuestions =
-            $group['questions'] ?? [];
+## 6. Originがnullの場合
 
-        if (!is_array($groupQuestions)) {
-            continue;
-        }
+ブラウザからのリクエストでOriginがnullとなった場合は、通常の本番利用環境ではないものとして扱う。
 
-        foreach (
-            $groupQuestions as $questionIndex => $question
-        ) {
-            if (!is_array($question)) {
-                continue;
-            }
+以下を確認する。
 
-            $question['_groupIndex'] =
-                $groupIndex;
+- file://で開いていないか
+- sandbox iframeではないか
+- data: URLではないか
+- その他のopaque originではないか
 
-            $question['_questionIndex'] =
-                $questionIndex;
+Origin:nullを許可するためにCORS設定を緩和してはならない。
 
-            $questions[] = $question;
-        }
-    }
+---
 
-    return $questions;
-}
-
-/**
- * アンケートサーバー側検証
- */
-function validate_survey(
-    array $survey,
-    bool $forPublish = false
-): array {
-    $errors = [];
-
-    $name = trim(
-        (string)($survey['name'] ?? '')
-    );
-
-    if ($name === '') {
-        $errors['name'] =
-            'アンケート名を入力してください。';
-    }
+## 7. API URLに関する禁止事項
 
-    $status =
-        (string)($survey['status'] ?? 'draft');
-
-    if (!in_array(
-        $status,
-        ['draft', 'open', 'closed'],
-        true
-    )) {
-        $errors['status'] =
-            'アンケートの状態が正しくありません。';
-    }
+JavaScriptへ以下を固定記述してはならない。
 
-    $numbering =
-        (string)($survey['numbering'] ?? 'global');
-
-    if (!in_array(
-        $numbering,
-        ['global', 'group'],
-        true
-    )) {
-        $errors['numbering'] =
-            '質問番号形式が正しくありません。';
-    }
+- 実行環境固有のホスト名
+- 実行環境固有のIPアドレス
+- 実行環境固有のポート
+- 実行環境固有のスキーム
+- 実行環境固有のディレクトリを含む絶対URL
 
-    $groups = $survey['groups'] ?? [];
+API URLは現在表示されているindex.phpを基準として生成する。
 
-    if (!is_array($groups)) {
-        $errors['groups'] =
-            'グループ情報が正しくありません。';
+これにより、開発環境、本番環境、移設後の環境で同じコードを使用できることを必須とする。
 
-        return $errors;
-    }
+---
 
-    if ($groups === []) {
-        $errors['groups'] =
-            'グループを1つ以上登録してください。';
-    }
+## 8. 管理者画面と回答者画面
 
-    $questionIds = [];
-    $questions = [];
-
-    foreach ($groups as $groupIndex => $group) {
-        if (!is_array($group)) {
-            $errors['groups'] =
-                'グループ情報が正しくありません。';
-
-            continue;
-        }
-
-        $groupName = trim(
-            (string)($group['name'] ?? '')
-        );
-
-        if ($groupName === '') {
-            $errors[
-                'group_' . $groupIndex
-            ] =
-                'グループ名を入力してください。';
-        }
-
-        $groupQuestions =
-            $group['questions'] ?? [];
-
-        if (!is_array($groupQuestions)) {
-            $errors[
-                'group_' . $groupIndex
-            ] =
-                '質問情報が正しくありません。';
-
-            continue;
-        }
-
-        foreach (
-            $groupQuestions as $questionIndex => $question
-        ) {
-            if (!is_array($question)) {
-                $errors[
-                    'question_' .
-                    $groupIndex .
-                    '_' .
-                    $questionIndex
-                ] =
-                    '質問情報が正しくありません。';
-
-                continue;
-            }
-
-            $questionId = $question['id'] ?? null;
-
-            if (
-                !is_int($questionId) &&
-                !ctype_digit((string)$questionId)
-            ) {
-                $errors[
-                    'question_' .
-                    $groupIndex .
-                    '_' .
-                    $questionIndex
-                ] =
-                    '質問IDが正しくありません.';
-
-                continue;
-            }
-
-            $questionId = (int)$questionId;
-
-            if (isset($questionIds[$questionId])) {
-                $errors[
-                    'question_' .
-                    $groupIndex .
-                    '_' .
-                    $questionIndex
-                ] =
-                    '質問IDが重複しています。';
-
-                continue;
-            }
-
-            $questionIds[$questionId] = true;
-
-            $text = trim(
-                (string)($question['text'] ?? '')
-            );
-
-            if ($text === '') {
-                $errors[
-                    'question_' .
-                    $questionId .
-                    '_text'
-                ] =
-                    '質問文を入力してください。';
-            }
-
-            $type =
-                (string)($question['type'] ?? '');
-
-            if (!in_array(
-                $type,
-                ['single', 'multiple', 'free'],
-                true
-            )) {
-                $errors[
-                    'question_' .
-                    $questionId .
-                    '_type'
-                ] =
-                    '回答形式が正しくありません。';
-            }
-
-            $required =
-                $question['required'] ?? false;
-
-            if (!is_bool($required)) {
-                $errors[
-                    'question_' .
-                    $questionId .
-                    '_required'
-                ] =
-                    '必須設定が正しくありません。';
-            }
-
-            $options =
-                $question['options'] ?? [];
-
-            if (!is_array($options)) {
-                $errors[
-                    'question_' .
-                    $questionId .
-                    '_options'
-                ] =
-                    '選択肢情報が正しくありません。';
-
-                $options = [];
-            }
-
-            if (
-                in_array(
-                    $type,
-                    ['single', 'multiple'],
-                    true
-                ) &&
-                count($options) === 0
-            ) {
-                $errors[
-                    'question_' .
-                    $questionId .
-                    '_options'
-                ] =
-                    '選択式の質問には選択肢を1つ以上登録してください。';
-            }
-
-            foreach ($options as $optionIndex => $option) {
-                if (!is_array($option)) {
-                    $errors[
-                        'option_' .
-                        $questionId .
-                        '_' .
-                        $optionIndex
-                    ] =
-                        '選択肢情報が正しくありません。';
-
-                    continue;
-                }
-
-                $optionText = trim(
-                    (string)($option['text'] ?? '')
-                );
-
-                if (
-                    in_array(
-                        $type,
-                        ['single', 'multiple'],
-                        true
-                    ) &&
-                    $optionText === ''
-                ) {
-                    $errors[
-                        'option_' .
-                        $questionId .
-                        '_' .
-                        $optionIndex
-                    ] =
-                        '選択肢を入力してください。';
-                }
-            }
-
-            $questions[] = [
-                'id' => $questionId,
-                'type' => $type,
-                'options' => $options
-            ];
-        }
-    }
+本アプリには、
 
-    /*
-     * 分岐先の存在確認。
-     */
-    foreach ($questions as $question) {
-        if ($question['type'] !== 'single') {
-            continue;
-        }
-
-        foreach (
-            $question['options'] as $optionIndex => $option
-        ) {
-            if (!is_array($option)) {
-                continue;
-            }
-
-            $branch =
-                trim((string)($option['branch'] ?? ''));
-
-            if (
-                $branch === '' ||
-                strtoupper($branch) === 'NEXT' ||
-                strtoupper($branch) === 'END'
-            ) {
-                continue;
-            }
-
-            if (
-                !ctype_digit($branch) ||
-                !isset($questionIds[(int)$branch])
-            ) {
-                $errors[
-                    'branch_' .
-                    $question['id'] .
-                    '_' .
-                    $optionIndex
-                ] =
-                    '分岐先の質問が存在しません。';
-            }
-        }
-    }
+- アンケート運営者向け画面
+- アンケート回答者向け画面
 
-    if ($forPublish && $errors === []) {
-        $cycleError =
-            detect_branch_cycle($survey);
-
-        if ($cycleError !== '') {
-            $errors['branch'] =
-                $cycleError;
-        }
-    }
+の2種類が存在する。
 
-    return $errors;
-}
-
-/**
- * 分岐循環検出
- */
-function detect_branch_cycle(
-    array $survey
-): string {
-    $questions = get_all_questions(
-        $survey
-    );
-
-    $questionMap = [];
-
-    foreach ($questions as $question) {
-        $id = (int)($question['id'] ?? 0);
-
-        if ($id > 0) {
-            $questionMap[$id] = $question;
-        }
-    }
+回答者画面には運営者向け機能を表示しない。
 
-    $visiting = [];
-    $visited = [];
-
-    foreach ($questionMap as $id => $question) {
-        if (isset($visited[$id])) {
-            continue;
-        }
-
-        $result = walk_branch_graph(
-            $id,
-            $questionMap,
-            $visiting,
-            $visited
-        );
-
-        if ($result !== '') {
-            return $result;
-        }
-    }
+回答者画面には以下を表示しない。
 
-    return '';
-}
-
-/**
- * 分岐グラフ探索
- */
-function walk_branch_graph(
-    int $questionId,
-    array $questionMap,
-    array &$visiting,
-    array &$visited
-): string {
-    if (isset($visiting[$questionId])) {
-        return '分岐設定に循環があるため公開できません。';
-    }
+- 運営者向けメニュー
+- 設定画面へのリンク
+- アンケート管理画面への戻る操作
+- 顧客一覧
+- メール設定
+- kintone設定
+- アンケート管理操作
 
-    if (isset($visited[$questionId])) {
-        return '';
-    }
+回答者画面から運営者画面へ移動する導線を設けない。
 
-    if (!isset($questionMap[$questionId])) {
-        return '';
-    }
+---
 
-    $visiting[$questionId] = true;
-
-    $question = $questionMap[$questionId];
-
-    $type =
-        (string)($question['type'] ?? '');
-
-    if ($type === 'single') {
-        $options =
-            $question['options'] ?? [];
-
-        if (is_array($options)) {
-            foreach ($options as $option) {
-                if (!is_array($option)) {
-                    continue;
-                }
-
-                $branch =
-                    trim(
-                        (string)($option['branch'] ?? '')
-                    );
-
-                if (
-                    $branch === '' ||
-                    strtoupper($branch) === 'NEXT' ||
-                    strtoupper($branch) === 'END'
-                ) {
-                    continue;
-                }
-
-                if (ctype_digit($branch)) {
-                    $result = walk_branch_graph(
-                        (int)$branch,
-                        $questionMap,
-                        $visiting,
-                        $visited
-                    );
-
-                    if ($result !== '') {
-                        return $result;
-                    }
-                }
-            }
-        }
-    }
+## 9. 運営者の認証
 
-    unset($visiting[$questionId]);
-
-    $visited[$questionId] = true;
-
-    return '';
-}
-
-/**
- * 初期アンケート
- */
-function default_surveys(): array
-{
-    return [
-        [
-            'id' => 1,
-            'name' => '新商品アンケート',
-            'description' =>
-                '新商品の利用状況とご意見をお聞きするアンケートです。',
-            'status' => 'open',
-            'created' => date('Y-m-d'),
-            'start' => date('Y-m-d'),
-            'end' => date(
-                'Y-m-d',
-                strtotime('+30 days')
-            ),
-            'answers' => 0,
-            'target' => 0,
-            'sent' => 0,
-            'updated' => date('Y-m-d'),
-            'numbering' => 'global',
-            'groups' => [
-                [
-                    'id' => 101,
-                    'name' => 'ご利用状況',
-                    'questions' => [
-                        [
-                            'id' => 1001,
-                            'text' =>
-                                '当社の商品を利用したことがありますか？',
-                            'type' => 'single',
-                            'required' => true,
-                            'options' => [
-                                [
-                                    'text' => 'はい',
-                                    'branch' => 'NEXT'
-                                ],
-                                [
-                                    'text' => 'いいえ',
-                                    'branch' => 'NEXT'
-                                ]
-                            ]
-                        ]
-                    ]
-                ]
-            ]
-        ]
-    ];
-}
-
-/**
- * アンケート保存
- */
-function save_survey(
-    array $input
-): array {
-    $survey =
-        $input['survey'] ?? null;
-
-    if (!is_array($survey)) {
-        return [
-            'success' => false,
-            'message' =>
-                'アンケートデータを確認できませんでした。'
-        ];
-    }
+運営者向け機能については、運営者以外が以下を実行できない構成とする。
 
-    $surveys = read_json_file(
-        SURVEYS_FILE,
-        default_surveys()
-    );
-
-    $errors = validate_survey(
-        $survey,
-        false
-    );
-
-    if ($errors !== []) {
-        return [
-            'success' => false,
-            'message' =>
-                'アンケート内容を確認してください。',
-            'errors' => $errors
-        ];
-    }
+- 設定変更
+- アンケート変更
+- アンケート削除
+- アンケート公開
+- アンケート終了
+- 顧客更新
+- メール送信
+- その他の管理操作
 
-    $id = $survey['id'] ?? 0;
-
-    if (
-        !is_int($id) &&
-        !ctype_digit((string)$id)
-    ) {
-        return [
-            'success' => false,
-            'message' =>
-                'アンケートIDが正しくありません。'
-        ];
-    }
+独自のログイン画面を追加するかどうかは、別途決定した認証方式に従う。
 
-    $id = (int)$id;
+認証方式が決定していない場合は、本番実装開始前に確定する。
 
-    if ($id <= 0) {
-        $id = generate_survey_id(
-            $surveys
-        );
-    }
+認証方式を実装者が独自判断して変更してはならない。
 
-    $found = false;
+---
 
-    foreach ($surveys as $index => $existing) {
-        if (!is_array($existing)) {
-            continue;
-        }
+## 10. データ保存方式
 
-        if ((int)($existing['id'] ?? 0) === $id) {
-            $survey['id'] = $id;
-            $survey['updated'] =
-                date('Y-m-d');
+データベースは使用しない。
 
-            $surveys[$index] = $survey;
-            $found = true;
+アプリルート配下のJSONファイルを正式なデータ保存先とする。
 
-            break;
-        }
-    }
+基本構成：
 
-    if (!$found) {
-        $survey['id'] = $id;
-        $survey['created'] =
-            (string)($survey['created'] ?? date('Y-m-d'));
-        $survey['updated'] =
-            date('Y-m-d');
-        $survey['status'] = 'draft';
-
-        if (!isset($survey['answers'])) {
-            $survey['answers'] = 0;
-        }
-
-        if (!isset($survey['target'])) {
-            $survey['target'] = 0;
-        }
-
-        if (!isset($survey['sent'])) {
-            $survey['sent'] = 0;
-        }
-
-        $surveys[] = $survey;
-    }
+    data/
+    ├─ settings.json
+    ├─ customers.json
+    ├─ surveys.json
+    ├─ responses.json
+    └─ mail_logs.json
 
-    write_json_file(
-        SURVEYS_FILE,
-        $surveys
-    );
-
-    return [
-        'success' => true,
-        'message' =>
-            'アンケートを保存しました。',
-        'survey' => $survey
-    ];
-}
-
-/**
- * アンケート削除
- */
-function delete_survey(
-    array $input
-): array {
-    $id = $input['id'] ?? null;
-
-    if (
-        !is_int($id) &&
-        !ctype_digit((string)$id)
-    ) {
-        return [
-            'success' => false,
-            'message' =>
-                'アンケートIDが正しくありません。'
-        ];
-    }
+必要に応じて一時ファイルを使用できる。
 
-    $id = (int)$id;
-
-    $surveys = read_json_file(
-        SURVEYS_FILE,
-        default_surveys()
-    );
-
-    $newSurveys = [];
-    $found = false;
-
-    foreach ($surveys as $survey) {
-        if (!is_array($survey)) {
-            continue;
-        }
-
-        if ((int)($survey['id'] ?? 0) === $id) {
-            $found = true;
-
-            if (
-                (string)($survey['status'] ?? '') !==
-                'draft'
-            ) {
-                return [
-                    'success' => false,
-                    'message' =>
-                        '下書きのアンケートだけ削除できます。'
-                ];
-            }
-
-            continue;
-        }
-
-        $newSurveys[] = $survey;
-    }
+JSONファイルはUTF-8で保存する。
 
-    if (!$found) {
-        return [
-            'success' => false,
-            'message' =>
-                '対象のアンケートが見つかりません。'
-        ];
-    }
+---
 
-    write_json_file(
-        SURVEYS_FILE,
-        $newSurveys
-    );
-
-    return [
-        'success' => true,
-        'message' =>
-            'アンケートを削除しました。'
-    ];
-}
-
-/**
- * アンケート公開
- */
-function publish_survey(
-    array $input
-): array {
-    $id = $input['id'] ?? null;
-
-    if (
-        !is_int($id) &&
-        !ctype_digit((string)$id)
-    ) {
-        return [
-            'success' => false,
-            'message' =>
-                'アンケートIDが正しくありません。'
-        ];
-    }
+## 11. JSONファイルへの直接アクセス禁止
 
-    $id = (int)$id;
-
-    $surveys = read_json_file(
-        SURVEYS_FILE,
-        default_surveys()
-    );
-
-    foreach ($surveys as $index => $survey) {
-        if (!is_array($survey)) {
-            continue;
-        }
-
-        if ((int)($survey['id'] ?? 0) !== $id) {
-            continue;
-        }
-
-        $errors = validate_survey(
-            $survey,
-            true
-        );
-
-        if ($errors !== []) {
-            return [
-                'success' => false,
-                'message' =>
-                    '公開前の確認で問題が見つかりました。',
-                'errors' => $errors
-            ];
-        }
-
-        $today = date('Y-m-d');
-
-        $survey['status'] = 'open';
-
-        if (
-            trim(
-                (string)($survey['start'] ?? '')
-            ) === ''
-        ) {
-            $survey['start'] = $today;
-        }
-
-        $survey['updated'] = $today;
-
-        $surveys[$index] = $survey;
-
-        write_json_file(
-            SURVEYS_FILE,
-            $surveys
-        );
-
-        return [
-            'success' => true,
-            'message' =>
-                'アンケートを公開しました。',
-            'survey' => $survey
-        ];
-    }
+data配下のJSONファイルをブラウザから直接取得できない状態とする。
 
-    return [
-        'success' => false,
-        'message' =>
-            '対象のアンケートが見つかりません。'
-    ];
-}
-
-/**
- * アンケート終了
- */
-function close_survey(
-    array $input
-): array {
-    $id = $input['id'] ?? null;
-
-    if (
-        !is_int($id) &&
-        !ctype_digit((string)$id)
-    ) {
-        return [
-            'success' => false,
-            'message' =>
-                'アンケートIDが正しくありません。'
-        ];
-    }
+特にsettings.jsonには認証情報が含まれるため、外部から直接取得できてはならない。
 
-    $id = (int)$id;
-
-    $surveys = read_json_file(
-        SURVEYS_FILE,
-        default_surveys()
-    );
-
-    foreach ($surveys as $index => $survey) {
-        if (!is_array($survey)) {
-            continue;
-        }
-
-        if ((int)($survey['id'] ?? 0) !== $id) {
-            continue;
-        }
-
-        if (
-            (string)($survey['status'] ?? '') !==
-            'open'
-        ) {
-            return [
-                'success' => false,
-                'message' =>
-                    '公開中のアンケートだけ終了できます。'
-            ];
-        }
-
-        $survey['status'] = 'closed';
-        $survey['updated'] =
-            date('Y-m-d');
-
-        $surveys[$index] = $survey;
-
-        write_json_file(
-            SURVEYS_FILE,
-            $surveys
-        );
-
-        return [
-            'success' => true,
-            'message' =>
-                'アンケートを終了しました。',
-            'survey' => $survey
-        ];
-    }
+以下のような直接取得を禁止する。
 
-    return [
-        'success' => false,
-        'message' =>
-            '対象のアンケートが見つかりません。'
-    ];
-}
-
-/**
- * 回答データ読み込み
- */
-function load_responses(): array
-{
-    $data = read_json_file(
-        RESPONSES_FILE,
-        []
-    );
-
-    /*
-     * 正式形式は配列。
-     */
-    if (!array_is_list($data)) {
-        return [];
-    }
+    /data/settings.json
+    /data/customers.json
+    /data/surveys.json
+    /data/responses.json
+    /data/mail_logs.json
 
-    return $data;
-}
-
-/**
- * 回答保存
- */
-function save_response(
-    array $input
-): array {
-    $surveyId = $input['survey_id'] ?? null;
-    $respondent = $input['respondent'] ?? '';
-    $answers = $input['answers'] ?? null;
-
-    if (
-        !is_int($surveyId) &&
-        !ctype_digit((string)$surveyId)
-    ) {
-        return [
-            'success' => false,
-            'message' =>
-                'アンケートを確認できません。'
-        ];
-    }
+---
 
-    $surveyId = (int)$surveyId;
-
-    if (
-        !is_string($respondent) ||
-        strlen($respondent) > 500
-    ) {
-        return [
-            'success' => false,
-            'message' =>
-                '回答者情報が正しくありません。'
-        ];
-    }
+## 12. JSON保存の共通ルール
 
-    if (!is_array($answers)) {
-        return [
-            'success' => false,
-            'message' =>
-                '回答内容を確認できません。'
-        ];
-    }
+JSON保存では以下を必須とする。
 
-    $surveys = read_json_file(
-        SURVEYS_FILE,
-        default_surveys()
-    );
-
-    $survey = null;
-
-    foreach ($surveys as $item) {
-        if (
-            is_array($item) &&
-            (int)($item['id'] ?? 0) === $surveyId
-        ) {
-            $survey = $item;
-            break;
-        }
-    }
+- 排他制御
+- 正しいJSON形式
+- UTF-8保存
+- 保存途中で既存データを破壊しない
+- 保存失敗時に既存データを維持する
+- 保存後に再読み込みして確認する
+- 同時更新によるJSON破損を防止する
 
-    if ($survey === null) {
-        return [
-            'success' => false,
-            'message' =>
-                '対象アンケートが見つかりません。'
-        ];
-    }
+保存は一時ファイルへの書き込みなど、途中状態が正式ファイルとして扱われない方法を使用する。
 
-    if (
-        (string)($survey['status'] ?? '') !==
-        'open'
-    ) {
-        return [
-            'success' => false,
-            'message' =>
-                'このアンケートは現在回答できません。'
-        ];
-    }
+---
 
-    $questions =
-        get_all_questions($survey);
+## 13. JSON破損時
 
-    $questionMap = [];
+JSON読み込み時に以下を検出した場合はデータ破損として扱う。
 
-    foreach ($questions as $question) {
-        $questionMap[
-            (int)$question['id']
-        ] = $question;
-    }
+- JSONとして解析できない
+- 必須項目がない
+- 型が不正
+- 配列であるべき値が配列ではない
+- オブジェクトであるべき値がオブジェクトではない
+- 状態値が許可された値ではない
 
-    foreach ($questionMap as $questionId => $question) {
-        $answerExists =
-            array_key_exists(
-                (string)$questionId,
-                $answers
-            ) ||
-            array_key_exists(
-                $questionId,
-                $answers
-            );
-
-        $answer = $answers[$questionId]
-            ?? $answers[(string)$questionId]
-            ?? null;
-
-        $required =
-            (bool)($question['required'] ?? false);
-
-        if (
-            $required &&
-            (
-                $answer === null ||
-                $answer === '' ||
-                $answer === []
-            )
-        ) {
-            return [
-                'success' => false,
-                'message' =>
-                    '必須質問に回答してください。',
-                'errors' => [
-                    'question_' . $questionId =>
-                        '回答が必要です。'
-                ]
-            ];
-        }
-
-        if (!$answerExists) {
-            continue;
-        }
-
-        $type =
-            (string)($question['type'] ?? '');
-
-        $options =
-            $question['options'] ?? [];
-
-        $allowed = [];
-
-        if (is_array($options)) {
-            foreach ($options as $option) {
-                if (!is_array($option)) {
-                    continue;
-                }
-
-                $allowed[] =
-                    (string)($option['text'] ?? '');
-            }
-        }
-
-        if ($type === 'single') {
-            if (!is_string($answer)) {
-                return [
-                    'success' => false,
-                    'message' =>
-                        '回答形式が正しくありません。'
-                ];
-            }
-
-            if (
-                !in_array(
-                    $answer,
-                    $allowed,
-                    true
-                )
-            ) {
-                return [
-                    'success' => false,
-                    'message' =>
-                        '存在しない選択肢が送信されました。'
-                ];
-            }
-        }
-
-        if ($type === 'multiple') {
-            if (!is_array($answer)) {
-                return [
-                    'success' => false,
-                    'message' =>
-                        '複数選択の回答形式が正しくありません。'
-                ];
-            }
-
-            foreach ($answer as $selected) {
-                if (
-                    !is_string($selected) ||
-                    !in_array(
-                        $selected,
-                        $allowed,
-                        true
-                    )
-                ) {
-                    return [
-                        'success' => false,
-                        'message' =>
-                            '存在しない選択肢が送信されました。'
-                    ];
-                }
-            }
-        }
-
-        if ($type === 'free') {
-            if (!is_string($answer)) {
-                return [
-                    'success' => false,
-                    'message' =>
-                        '自由記述の回答形式が正しくありません。'
-                ];
-            }
-
-            if (mb_strlen($answer) > 5000) {
-                return [
-                    'success' => false,
-                    'message' =>
-                        '自由記述は5000文字以内で入力してください。'
-                ];
-            }
-        }
-    }
+破損したJSONを正常なデータとして上書きしてはならない。
 
-    $responses = load_responses();
-
-    /*
-     * 一意な回答ID。
-     */
-    $responseId = bin2hex(
-        random_bytes(16)
-    );
-
-    /*
-     * 二重送信識別情報。
-     */
-    $submissionKey = trim(
-        (string)($input['submission_key'] ?? '')
-    );
-
-    if ($submissionKey === '') {
-        $submissionKey = $responseId;
-    }
+利用者には安全なエラーメッセージを表示する。
 
-    foreach ($responses as $existing) {
-        if (!is_array($existing)) {
-            continue;
-        }
-
-        if (
-            (string)($existing['submission_key'] ?? '') ===
-            $submissionKey
-        ) {
-            return [
-                'success' => true,
-                'message' =>
-                    'この回答はすでに送信されています。',
-                'duplicate' => true
-            ];
-        }
-    }
+例：
 
-    $responses[] = [
-        'response_id' => $responseId,
-        'submission_key' => $submissionKey,
-        'survey_id' => $surveyId,
-        'answered_at' => date('c'),
-        'respondent' => $respondent,
-        'answers' => $answers,
-        'completed' => true
-    ];
-
-    write_json_file(
-        RESPONSES_FILE,
-        $responses
-    );
-
-    /*
-     * アンケートの回答数も更新。
-     */
-    foreach ($surveys as $index => $item) {
-        if (
-            is_array($item) &&
-            (int)($item['id'] ?? 0) === $surveyId
-        ) {
-            $surveys[$index]['answers'] =
-                (int)($item['answers'] ?? 0) + 1;
-
-            $surveys[$index]['updated'] =
-                date('Y-m-d');
-
-            break;
-        }
-    }
+    データを読み込めませんでした。
+    管理者へ確認してください。
 
-    write_json_file(
-        SURVEYS_FILE,
-        $surveys
-    );
-
-    return [
-        'success' => true,
-        'message' =>
-            '回答を送信しました。',
-        'response_id' => $responseId
-    ];
-}
-
-/**
- * 回答結果集計
- */
-function aggregate_responses(
-    int $surveyId
-): array {
-    $surveys = read_json_file(
-        SURVEYS_FILE,
-        default_surveys()
-    );
-
-    $survey = null;
-
-    foreach ($surveys as $item) {
-        if (
-            is_array($item) &&
-            (int)($item['id'] ?? 0) === $surveyId
-        ) {
-            $survey = $item;
-            break;
-        }
-    }
+JSONの内部内容、パスワード、認証情報などを画面へ表示してはならない。
 
-    if ($survey === null) {
-        return [
-            'success' => false,
-            'message' =>
-                '対象アンケートが見つかりません。'
-        ];
-    }
+---
 
-    $responses = load_responses();
-
-    $surveyResponses = [];
-
-    foreach ($responses as $response) {
-        if (
-            is_array($response) &&
-            (int)($response['survey_id'] ?? 0) ===
-            $surveyId &&
-            ($response['completed'] ?? false) === true
-        ) {
-            $surveyResponses[] = $response;
-        }
-    }
+## 14. データ更新競合
 
-    $questions =
-        get_all_questions($survey);
-
-    $results = [];
-
-    foreach ($questions as $question) {
-        $questionId =
-            (int)($question['id'] ?? 0);
-
-        $type =
-            (string)($question['type'] ?? '');
-
-        $result = [
-            'question_id' => $questionId,
-            'text' =>
-                (string)($question['text'] ?? ''),
-            'type' => $type,
-            'total' =>
-                count($surveyResponses)
-        ];
-
-        if (
-            $type === 'single' ||
-            $type === 'multiple'
-        ) {
-            $counts = [];
-
-            $options =
-                $question['options'] ?? [];
-
-            if (is_array($options)) {
-                foreach ($options as $option) {
-                    if (!is_array($option)) {
-                        continue;
-                    }
-
-                    $label =
-                        (string)($option['text'] ?? '');
-
-                    $counts[$label] = 0;
-                }
-            }
-
-            foreach ($surveyResponses as $response) {
-                $answers =
-                    $response['answers'] ?? [];
-
-                if (!is_array($answers)) {
-                    continue;
-                }
-
-                $answer =
-                    $answers[$questionId]
-                    ?? $answers[(string)$questionId]
-                    ?? null;
-
-                if ($type === 'single') {
-                    if (
-                        is_string($answer) &&
-                        isset($counts[$answer])
-                    ) {
-                        $counts[$answer]++;
-                    }
-                }
-
-                if ($type === 'multiple') {
-                    if (!is_array($answer)) {
-                        continue;
-                    }
-
-                    foreach ($answer as $selected) {
-                        if (
-                            is_string($selected) &&
-                            isset($counts[$selected])
-                        ) {
-                            $counts[$selected]++;
-                        }
-                    }
-                }
-            }
-
-            $result['counts'] = $counts;
-
-            $percentages = [];
-
-            foreach ($counts as $label => $count) {
-                $base =
-                    $type === 'multiple'
-                        ? count($surveyResponses)
-                        : count($surveyResponses);
-
-                $percentages[$label] =
-                    $base > 0
-                        ? round(
-                            ($count / $base) * 100,
-                            1
-                        )
-                        : 0;
-            }
-
-            $result['percentages'] =
-                $percentages;
-        }
-
-        if ($type === 'free') {
-            $texts = [];
-
-            foreach ($surveyResponses as $response) {
-                $answers =
-                    $response['answers'] ?? [];
-
-                if (!is_array($answers)) {
-                    continue;
-                }
-
-                $answer =
-                    $answers[$questionId]
-                    ?? $answers[(string)$questionId]
-                    ?? null;
-
-                if (
-                    is_string($answer) &&
-                    $answer !== ''
-                ) {
-                    $texts[] = $answer;
-                }
-            }
-
-            $result['answers'] = $texts;
-        }
-
-        $results[] = $result;
-    }
+複数の画面または複数の利用者が同じデータを更新した場合、古い画面による無条件の上書きを防止する。
 
-    return [
-        'success' => true,
-        'survey_id' => $surveyId,
-        'response_count' =>
-            count($surveyResponses),
-        'results' => $results
-    ];
-}
-
-/**
- * API処理
- */
-function handle_api(): never
-{
-    $action =
-        $_GET['action'] ?? '';
-
-    if (!is_string($action)) {
-        send_json(
-            [
-                'success' => false,
-                'message' =>
-                    '不正な要求です。'
-            ],
-            400
-        );
-    }
+以下について競合を検出する。
 
-    $postActions = [
-        'save_mail_settings',
-        'save_kintone_settings',
-        'test_kintone_connection',
-        'refresh_customers',
-        'save_survey',
-        'delete_survey',
-        'publish_survey',
-        'close_survey',
-        'save_response'
-    ];
-
-    if (in_array(
-        $action,
-        $postActions,
-        true
-    )) {
-        verify_csrf();
-    }
+- アンケート編集
+- アンケート公開
+- アンケート終了
+- メール設定
+- kintone設定
+- 顧客一覧更新
 
-    $input = [];
-
-    if (
-        in_array(
-            $action,
-            $postActions,
-            true
-        )
-    ) {
-        $body = file_get_contents(
-            'php://input'
-        );
-
-        $decoded =
-            json_decode(
-                $body ?: '',
-                true
-            );
-
-        if (!is_array($decoded)) {
-            send_json(
-                [
-                    'success' => false,
-                    'message' =>
-                        '送信内容を確認できませんでした。'
-                ],
-                400
-            );
-        }
-
-        $input = $decoded;
-    }
+更新時には、読み込み時点のデータ版または更新日時を利用して競合を検出する。
 
-    try {
-        switch ($action) {
-            case 'load_settings':
-                $settings = load_settings();
-
-                send_json([
-                    'success' => true,
-                    'mail' =>
-                        public_mail_settings(
-                            $settings['mail']
-                        ),
-                    'kintone' =>
-                        public_kintone_settings(
-                            $settings['kintone']
-                        )
-                ]);
-
-            case 'save_mail_settings':
-                send_json(
-                    save_mail_settings($input)
-                );
-
-            case 'save_kintone_settings':
-                send_json(
-                    save_kintone_settings($input)
-                );
-
-            case 'test_kintone_connection':
-                send_json(
-                    test_kintone_connection()
-                );
-
-            case 'refresh_customers':
-                send_json(
-                    fetch_kintone_customers()
-                );
-
-            case 'load_customers':
-                $customers =
-                    load_customer_cache();
-
-                send_json([
-                    'success' => true,
-                    'customers' =>
-                        $customers['customers'],
-                    'updated_at' =>
-                        $customers['updated_at']
-                ]);
-
-            case 'load_surveys':
-                $surveys =
-                    read_json_file(
-                        SURVEYS_FILE,
-                        default_surveys()
-                    );
-
-                send_json([
-                    'success' => true,
-                    'surveys' => $surveys
-                ]);
-
-            case 'save_survey':
-                send_json(
-                    save_survey($input)
-                );
-
-            case 'delete_survey':
-                send_json(
-                    delete_survey($input)
-                );
-
-            case 'publish_survey':
-                send_json(
-                    publish_survey($input)
-                );
-
-            case 'close_survey':
-                send_json(
-                    close_survey($input)
-                );
-
-            case 'aggregate_responses':
-                $id = $_GET['id'] ?? '';
-
-                if (
-                    !is_string($id) ||
-                    !ctype_digit($id) ||
-                    (int)$id < 1
-                ) {
-                    send_json(
-                        [
-                            'success' => false,
-                            'message' =>
-                                'アンケートIDが正しくありません。'
-                        ],
-                        400
-                    );
-                }
-
-                send_json(
-                    aggregate_responses(
-                        (int)$id
-                    )
-                );
-
-            case 'save_response':
-                send_json(
-                    save_response($input)
-                );
-
-            default:
-                send_json(
-                    [
-                        'success' => false,
-                        'message' =>
-                            '指定された処理はありません。'
-                    ],
-                    404
-                );
-        }
-    } catch (Throwable $e) {
-        /*
-         * 認証情報、パスワード、CSRF、通信ヘッダー等は
-         * ログへ出さない。
-         */
-        error_log(
-            'yokoyamy_newapp error: ' .
-            get_class($e) .
-            ': ' .
-            $e->getMessage()
-        );
-
-        send_json(
-            [
-                'success' => false,
-                'message' =>
-                    'サーバー側で処理に失敗しました。設定または保存先を確認してください。'
-            ],
-            500
-        );
-    }
-}
-
-/**
- * API要求の場合はここで終了。
- */
-if (isset($_GET['action'])) {
-    handle_api();
-}
-
-/**
- * 初回起動時のデータ準備
- */
-ensure_data_directory();
-
-$surveys =
-    read_json_file(
-        SURVEYS_FILE,
-        []
-    );
-
-if ($surveys === []) {
-    $surveys = default_surveys();
-
-    try {
-        write_json_file(
-            SURVEYS_FILE,
-            $surveys
-        );
-    } catch (Throwable $e) {
-        error_log(
-            'yokoyamy_newapp survey initialization: ' .
-            get_class($e)
-        );
-    }
-}
-
-$settings = load_settings();
-
-$customers =
-    load_customer_cache();
-
-$csrfToken =
-    get_csrf_token();
-
-$mailForJs =
-    public_mail_settings(
-        $settings['mail']
-    );
-
-$kintoneForJs =
-    public_kintone_settings(
-        $settings['kintone']
-    );
-
-?>
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="application-version" content="<?= h(APP_VERSION) ?>">
-<title>アンケート業務運営</title>
-
-<style>
-* {
-    box-sizing: border-box;
-}
-
-html,
-body {
-    margin: 0;
-    padding: 0;
-}
-
-body {
-    font-family:
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        "Yu Gothic",
-        "Hiragino Kaku Gothic ProN",
-        Meiryo,
-        sans-serif;
-    color: #263238;
-    background: #f4f6f8;
-    line-height: 1.6;
-}
-
-button,
-input,
-textarea,
-select {
-    font: inherit;
-}
-
-button {
-    cursor: pointer;
-}
-
-button:disabled {
-    cursor: not-allowed;
-    opacity: .55;
-}
-
-.hidden {
-    display: none !important;
-}
-
-.topbar {
-    min-height: 60px;
-    background: #1f3a5f;
-    color: #fff;
-    display: flex;
-    align-items: center;
-    padding: 0 24px;
-    gap: 30px;
-}
-
-.logo {
-    font-size: 18px;
-    font-weight: 700;
-    white-space: nowrap;
-}
-
-.main-nav {
-    display: flex;
-    align-items: stretch;
-    min-height: 60px;
-    gap: 2px;
-}
-
-.main-nav button {
-    border: 0;
-    background: transparent;
-    color: #dce7f3;
-    padding: 0 17px;
-    min-height: 60px;
-}
-
-.main-nav button:hover,
-.main-nav button.active {
-    background: #31557f;
-    color: #fff;
-}
-
-.app {
-    max-width: 1440px;
-    margin: 0 auto;
-    padding: 24px;
-}
-
-.page-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 20px;
-    margin-bottom: 20px;
-}
-
-.page-header h1 {
-    margin: 0;
-    font-size: 25px;
-    line-height: 1.3;
-}
-
-.subtext {
-    color: #718096;
-    font-size: 13px;
-    margin-top: 5px;
-}
-
-.card {
-    background: #fff;
-    border: 1px solid #dfe5eb;
-    border-radius: 7px;
-    padding: 20px;
-    margin-bottom: 18px;
-}
-
-.card-title {
-    font-size: 17px;
-    font-weight: 700;
-    margin-bottom: 15px;
-}
-
-.card-subtitle {
-    font-size: 14px;
-    font-weight: 700;
-    margin: 15px 0 10px;
-}
-
-.btn {
-    border: 1px solid #cbd5e0;
-    background: #fff;
-    color: #34495e;
-    border-radius: 5px;
-    padding: 8px 15px;
-    transition:
-        background .15s ease,
-        border-color .15s ease;
-}
-
-.btn:hover {
-    background: #f7fafc;
-}
-
-.btn-primary {
-    background: #2878c8;
-    border-color: #2878c8;
-    color: #fff;
-}
-
-.btn-primary:hover {
-    background: #2068ad;
-}
-
-.btn-danger {
-    background: #fff;
-    color: #b43b3b;
-    border-color: #e2b5b5;
-}
-
-.btn-danger:hover {
-    background: #fff4f4;
-}
-
-.btn-small {
-    padding: 5px 10px;
-    font-size: 12px;
-}
-
-.btn.loading {
-    position: relative;
-}
-
-.spinner {
-    width: 15px;
-    height: 15px;
-    border: 2px solid rgba(255,255,255,.4);
-    border-top-color: #fff;
-    border-radius: 50%;
-    display: inline-block;
-    vertical-align: -3px;
-    margin-right: 7px;
-    animation: spin .8s linear infinite;
-}
-
-.btn:not(.btn-primary) .spinner {
-    border-color: rgba(40,120,200,.25);
-    border-top-color: #2878c8;
-}
-
-@keyframes spin {
-    to {
-        transform: rotate(360deg);
-    }
-}
-
-.actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-}
-
-.table-wrap {
-    width: 100%;
-    overflow-x: auto;
-}
-
-.table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-.table th,
-.table td {
-    padding: 11px 10px;
-    border-bottom: 1px solid #e6ebef;
-    text-align: left;
-    vertical-align: middle;
-    font-size: 13px;
-}
-
-.table th {
-    background: #f8fafc;
-    color: #52606d;
-    white-space: nowrap;
-}
-
-.table tbody tr:hover {
-    background: #fbfcfd;
-}
-
-.empty {
-    text-align: center !important;
-    color: #8a98a5;
-    padding: 40px !important;
-}
-
-.badge {
-    display: inline-block;
-    padding: 4px 9px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 700;
-    white-space: nowrap;
-}
-
-.badge-open {
-    background: #e6f6ed;
-    color: #237a49;
-}
-
-.badge-draft {
-    background: #edf2f7;
-    color: #66788a;
-}
-
-.badge-end {
-    background: #fdecec;
-    color: #b43b3b;
-}
-
-.form-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-}
-
-.field {
-    margin-bottom: 15px;
-}
-
-.field label {
-    display: block;
-    font-size: 13px;
-    font-weight: 700;
-    margin-bottom: 6px;
-    color: #455563;
-}
-
-.field input,
-.field textarea,
-.field select {
-    width: 100%;
-    border: 1px solid #cbd5e0;
-    border-radius: 5px;
-    padding: 9px 10px;
-    background: #fff;
-    color: #263238;
-}
-
-.field input:focus,
-.field textarea:focus,
-.field select:focus {
-    outline: none;
-    border-color: #2878c8;
-    box-shadow: 0 0 0 2px rgba(40,120,200,.12);
-}
-
-.field textarea {
-    min-height: 90px;
-    resize: vertical;
-}
-
-.field-help {
-    color: #718096;
-    font-size: 12px;
-    margin-top: 4px;
-}
-
-.notice {
-    padding: 11px 13px;
-    border-radius: 5px;
-    background: #edf6ff;
-    border: 1px solid #c9e2fa;
-    color: #2b5f8a;
-    font-size: 13px;
-    margin-bottom: 15px;
-}
-
-.notice.success {
-    background: #edf9f1;
-    border-color: #c9ead5;
-    color: #267348;
-}
-
-.notice.warning {
-    background: #fff8e6;
-    border-color: #f0dfae;
-    color: #8a6408;
-}
-
-.notice.error {
-    background: #fff0f0;
-    border-color: #f0c5c5;
-    color: #a63232;
-}
-
-.status-line {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 12px;
-    background: #f7f9fb;
-    border-radius: 5px;
-    margin-bottom: 15px;
-}
-
-.status-dot {
-    width: 9px;
-    height: 9px;
-    flex: 0 0 9px;
-    border-radius: 50%;
-    background: #9aa7b3;
-}
-
-.status-dot.ok {
-    background: #2f9e61;
-}
-
-.status-dot.warn {
-    background: #d39b25;
-}
-
-.status-dot.error {
-    background: #c83c3c;
-}
-
-.settings-tabs {
-    display: flex;
-    gap: 5px;
-    margin-bottom: 18px;
-}
-
-.settings-tabs button {
-    border: 1px solid #d6dee6;
-    background: #fff;
-    padding: 9px 16px;
-    border-radius: 5px;
-}
-
-.settings-tabs button.active {
-    background: #2878c8;
-    color: #fff;
-    border-color: #2878c8;
-}
-
-.editor-group {
-    border: 1px solid #dce3e9;
-    border-radius: 7px;
-    margin-bottom: 15px;
-    background: #fff;
-}
-
-.editor-group-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-    padding: 12px 15px;
-    background: #f7f9fb;
-    border-bottom: 1px solid #dce3e9;
-}
-
-.editor-group-title {
-    font-weight: 700;
-}
-
-.editor-group-body {
-    padding: 15px;
-}
-
-.question-card {
-    border: 1px solid #e0e6eb;
-    border-radius: 6px;
-    padding: 14px;
-    margin-bottom: 12px;
-    background: #fff;
-}
-
-.question-card:last-child {
-    margin-bottom: 0;
-}
-
-.question-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 10px;
-}
-
-.question-number {
-    font-weight: 700;
-    color: #2878c8;
-}
-
-.option-list {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-    margin-top: 8px;
-}
-
-.option-row {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 7px;
-    align-items: center;
-}
-
-.option-row input {
-    width: 100%;
-}
-
-.drag-handle {
-    cursor: grab;
-    color: #8795a3;
-    user-select: none;
-}
-
-.dragging {
-    opacity: .45;
-}
-
-.drop-target {
-    outline: 2px dashed #2878c8;
-    outline-offset: 2px;
-}
-
-.dashboard-grid {
-    display: grid;
-    grid-template-columns:
-        repeat(4, minmax(0, 1fr));
-    gap: 14px;
-}
-
-.stat-card {
-    background: #fff;
-    border: 1px solid #dfe5eb;
-    border-radius: 7px;
-    padding: 17px;
-}
-
-.stat-label {
-    color: #718096;
-    font-size: 12px;
-}
-
-.stat-value {
-    font-size: 28px;
-    font-weight: 700;
-    margin-top: 4px;
-    color: #263238;
-}
-
-.result-row {
-    margin-bottom: 18px;
-}
-
-.result-label {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    font-size: 13px;
-    margin-bottom: 4px;
-}
-
-.progress {
-    height: 10px;
-    background: #edf1f4;
-    border-radius: 10px;
-    overflow: hidden;
-}
-
-.progress-bar {
-    height: 100%;
-    background: #2878c8;
-    border-radius: 10px;
-}
-
-.customer-select {
-    width: 18px;
-    height: 18px;
-}
-
-.mail-preview {
-    background: #f7f9fb;
-    border: 1px solid #dfe5eb;
-    border-radius: 6px;
-    padding: 15px;
-    white-space: pre-wrap;
-}
-
-.recipient-list {
-    max-height: 280px;
-    overflow-y: auto;
-    border: 1px solid #dfe5eb;
-    border-radius: 5px;
-}
-
-.recipient-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    border-bottom: 1px solid #edf0f2;
-}
-
-.recipient-item:last-child {
-    border-bottom: 0;
-}
-
-.toast {
-    position: fixed;
-    right: 25px;
-    bottom: 25px;
-    background: #263238;
-    color: #fff;
-    padding: 12px 18px;
-    border-radius: 5px;
-    box-shadow: 0 5px 20px rgba(0,0,0,.2);
-    opacity: 0;
-    transform: translateY(10px);
-    transition: .2s;
-    pointer-events: none;
-    z-index: 2000;
-}
-
-.toast.show {
-    opacity: 1;
-    transform: translateY(0);
-}
-
-.modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(20,35,50,.45);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-}
-
-.modal {
-    width: min(820px, calc(100% - 30px));
-    max-height: 90vh;
-    overflow: auto;
-    background: #fff;
-    border-radius: 8px;
-    box-shadow: 0 15px 50px rgba(0,0,0,.25);
-}
-
-.modal-header {
-    padding: 16px 20px;
-    border-bottom: 1px solid #e3e8ed;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-}
-
-.modal-body {
-    padding: 20px;
-}
-
-.modal-footer {
-    padding: 13px 20px;
-    border-top: 1px solid #e3e8ed;
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-}
-
-.confirm-list {
-    margin: 0;
-    padding-left: 20px;
-}
-
-.answer-option {
-    margin-bottom: 7px;
-}
-
-.answer-option label {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-}
-
-.public-answer {
-    max-width: 900px;
-    margin: 30px auto;
-    padding: 0 20px;
-}
-
-.public-answer .card {
-    margin-bottom: 18px;
-}
-
-@media (max-width: 1000px) {
-    .dashboard-grid {
-        grid-template-columns:
-            repeat(2, minmax(0, 1fr));
-    }
-}
-
-@media (max-width: 800px) {
-    .topbar {
-        padding: 0 10px;
-        gap: 8px;
-        overflow-x: auto;
-    }
+古いデータからの更新である場合は保存しない。
 
-    .logo {
-        font-size: 15px;
-    }
+競合時はHTTP 409を返す。
 
-    .main-nav button {
-        padding: 0 8px;
-        font-size: 12px;
-    }
+利用者には、
 
-    .app {
-        padding: 14px;
-    }
+    他の画面でデータが更新されています。
+    画面を再読み込みしてからもう一度お試しください。
 
-    .form-grid {
-        grid-template-columns: 1fr;
-    }
+などのメッセージを表示する。
 
-    .dashboard-grid {
-        grid-template-columns: 1fr 1fr;
-    }
+---
 
-    .page-header {
-        align-items: flex-start;
-        flex-direction: column;
-    }
-}
-
-@media (max-width: 520px) {
-    .dashboard-grid {
-        grid-template-columns: 1fr;
-    }
+## 15. settings.json
 
-    .option-row {
-        grid-template-columns: 1fr;
-    }
+settings.jsonには以下を保存する。
 
-    .modal {
-        width: calc(100% - 16px);
+    {
+      "version": 1,
+      "mail": {
+        "smtp_server": "",
+        "smtp_port": 587,
+        "security": "STARTTLS",
+        "authentication": false,
+        "username": "",
+        "password": "",
+        "from_address": "",
+        "from_name": "",
+        "configured": false,
+        "verified": false,
+        "updated_at": ""
+      },
+      "kintone": {
+        "domain": "",
+        "app_id": "",
+        "login_name": "",
+        "password": "",
+        "proxy_host_port": "",
+        "proxy_enabled": false,
+        "ssl_verify": false,
+        "customer_id_field": "",
+        "customer_name_field": "",
+        "customer_email_field": "",
+        "configured": false,
+        "verified": false,
+        "updated_at": ""
+      }
     }
-}
-</style>
-</head>
-
-<body>
-<header class="topbar">
-    <div class="logo">アンケート業務運営</div>
-
-    <nav class="main-nav">
-        <button id="nav-list" type="button">アンケート一覧</button>
-        <button id="nav-create" type="button">アンケート作成</button>
-        <button id="nav-customers" type="button">顧客一覧</button>
-        <button id="nav-settings" type="button">設定</button>
-    </nav>
-</header>
-
-<main class="app">
-
-<section id="page-list">
-    <div class="page-header">
-        <div>
-            <h1>アンケート一覧</h1>
-            <div class="subtext">作成済みのアンケートを管理します</div>
-        </div>
-
-        <button id="btn-create" class="btn btn-primary" type="button">
-            ＋ アンケート作成
-        </button>
-    </div>
-
-    <div class="card">
-        <table class="table">
-            <thead>
-                <tr>
-                    <th>アンケート名</th>
-                    <th>状態</th>
-                    <th>作成日</th>
-                    <th>公開期間</th>
-                    <th>回答数</th>
-                    <th>最終更新日</th>
-                </tr>
-            </thead>
-            <tbody id="survey-list-body"></tbody>
-        </table>
-    </div>
-</section>
-
-
-<section id="page-editor" class="hidden">
-    <div class="page-header">
-        <div>
-            <h1>アンケート作成</h1>
-            <div class="subtext">アンケートの基本情報を設定します</div>
-        </div>
-    </div>
-
-    <div class="card">
-
-        <div class="form-grid">
-
-            <div class="field">
-                <label for="survey-name">アンケート名 *</label>
-                <input id="survey-name" type="text">
-            </div>
-
-            <div class="field">
-                <label for="survey-status">公開状態</label>
-                <select id="survey-status">
-                    <option value="draft">下書き</option>
-                    <option value="open">公開中</option>
-                    <option value="end">終了</option>
-                </select>
-            </div>
-
-        </div>
-
-        <div class="field">
-            <label for="survey-description">説明</label>
-            <textarea id="survey-description"></textarea>
-        </div>
-
-        <div class="form-grid">
-
-            <div class="field">
-                <label for="survey-start">公開開始日</label>
-                <input id="survey-start" type="date">
-            </div>
-
-            <div class="field">
-                <label for="survey-end">公開終了日</label>
-                <input id="survey-end" type="date">
-            </div>
-
-        </div>
-
-    </div>
-
-
-    <div class="card">
-        <div class="card-title">質問</div>
-
-        <div class="field">
-            <label for="question-text">質問内容</label>
-            <input id="question-text" type="text">
-        </div>
-
-        <div class="field">
-            <label for="question-type">回答形式</label>
-            <select id="question-type">
-                <option value="single">単一選択</option>
-                <option value="multiple">複数選択</option>
-                <option value="free">自由記述</option>
-            </select>
-        </div>
-    </div>
 
+画面表示用データにはパスワードを含めない。
 
-    <div class="actions">
+APIレスポンスにもパスワードを含めない。
 
-        <button id="btn-editor-back" class="btn" type="button">
-            一覧へ戻る
-        </button>
+---
 
-        <button id="btn-save-survey" class="btn btn-primary" type="button">
-            保存
-        </button>
+## 16. パスワード保持
 
-    </div>
-</section>
+設定変更時にパスワード欄が空欄の場合は既存パスワードを保持する。
 
+空欄を理由として既存パスワードを削除してはならない。
 
-<section id="page-customers" class="hidden">
+パスワードを変更する場合だけ新しい値へ変更する。
 
-    <div class="page-header">
-        <div>
-            <h1>顧客一覧</h1>
-            <div class="subtext">顧客管理情報を確認します</div>
-        </div>
-    </div>
+画面再表示時には実際のパスワードを表示しない。
 
-    <div id="customer-status"></div>
+JavaScriptのlocalStorageへパスワードを保存してはならない。
 
-    <div class="card">
-        <table class="table">
+---
 
-            <thead>
-                <tr>
-                    <th>顧客名</th>
-                    <th>メールアドレス</th>
-                    <th>会社名</th>
-                    <th>顧客番号</th>
-                </tr>
-            </thead>
+## 17. メール設定
 
-            <tbody id="customer-body"></tbody>
+設定できる項目：
 
-        </table>
-    </div>
+- SMTPサーバ
+- ポート番号
+- 接続方式
+- SMTP認証の使用有無
+- 認証ユーザー名
+- 認証パスワード
+- 送信元メールアドレス
+- 送信元名
 
-</section>
+接続方式は以下だけを許可する。
 
+- なし
+- STARTTLS
+- SSL/TLS
 
-<section id="page-settings" class="hidden">
+必須項目：
 
-    <div class="page-header">
-        <div>
-            <h1>設定</h1>
-            <div class="subtext">
-                メール送信と顧客一覧取得に必要な設定を管理します
-            </div>
-        </div>
-    </div>
+- SMTPサーバ
+- ポート番号
+- 送信元メールアドレス
 
+SMTP認証を使用する場合：
 
-    <div class="settings-tabs">
+- 認証ユーザー名
+- 認証パスワード
 
-        <button
-            id="settings-tab-mail"
-            type="button"
-            class="active">
-            メール送信設定
-        </button>
+を必須とする。
 
-        <button
-            id="settings-tab-kintone"
-            type="button">
-            キントーン設定
-        </button>
+---
 
-    </div>
+## 18. メール設定バリデーション
 
+サーバー側で以下を検証する。
 
-    <div id="settings-message"></div>
+- SMTPサーバが入力されている
+- SMTPサーバに改行がない
+- ポート番号が数値である
+- ポート番号が1～65535の範囲である
+- 接続方式が許可された値である
+- 送信元メールアドレスが正しい形式である
+- 送信元名に改行がない
+- ユーザー名に不正な改行がない
+- 各項目の最大文字数を超えていない
 
-    <div id="settings-content"></div>
+メールヘッダーインジェクションにつながる入力を許可しない。
 
-</section>
+画面側のバリデーションだけを信用してはならない。
 
-</main>
+---
 
+## 19. メール設定状態
 
-<div id="modal" class="modal-backdrop hidden">
+メール設定は以下を区別する。
 
-    <div class="modal">
+- 未設定
+- 設定済み
+- 接続確認済み
+- 接続エラー
 
-        <div class="modal-header">
+設定保存だけでは接続確認済みとしない。
 
-            <strong id="modal-title"></strong>
+設定内容が変更された場合は、
 
-            <button
-                id="modal-close"
-                class="btn btn-small"
-                type="button">
-                閉じる
-            </button>
+    verified = false
 
-        </div>
+とする。
 
+実際のSMTP接続確認が成功した場合だけ、
 
-        <div
-            class="modal-body"
-            id="modal-body">
-        </div>
+    verified = true
 
+とする。
 
-        <div
-            class="modal-footer"
-            id="modal-footer">
-        </div>
+---
 
-    </div>
+## 20. SMTP接続確認
 
-</div>
+「送信設定を確認」は実際のSMTP接続確認を行う。
 
+入力値だけの検査を接続確認成功として扱わない。
 
-<div id="toast" class="toast"></div>
+以下を確認する。
 
+- SMTPサーバへ接続できる
+- 指定ポートへ接続できる
+- 指定した接続方式を利用できる
+- SMTP認証を使用する場合は認証できる
+- タイムアウトを適切に処理する
 
-<script>
-document.addEventListener('DOMContentLoaded', function () {
+失敗時にはパスワードその他の認証情報を表示しない。
 
-    'use strict';
+---
 
+## 21. SMTPメール送信方式
 
-    const csrfToken =
-        <?php echo json_encode(
-            $csrfToken,
-            JSON_UNESCAPED_UNICODE
-        ); ?>;
+メール送信は保存されたSMTP設定を使用する。
 
+送信処理では、
 
-    let mailSettings =
-        <?php echo json_encode(
-            $mailForJs,
-            JSON_UNESCAPED_UNICODE |
-            JSON_UNESCAPED_SLASHES
-        ); ?>;
+- 送信元
+- 宛先
+- 件名
+- 本文
+- 回答者用URL
 
+を正しく設定する。
 
-    let kintoneSettings =
-        <?php echo json_encode(
-            $kintoneForJs,
-            JSON_UNESCAPED_UNICODE |
-            JSON_UNESCAPED_SLASHES
-        ); ?>;
+メールアドレスおよびメールヘッダーに改行を含む値を使用してはならない。
 
+送信処理の失敗は対象者ごとに記録する。
 
-    let surveys =
-        <?php echo json_encode(
-            $surveys,
-            JSON_UNESCAPED_UNICODE |
-            JSON_UNESCAPED_SLASHES
-        ); ?>;
+---
 
+## 22. kintone設定
 
-    let customers =
-        <?php echo json_encode(
-            $customers,
-            JSON_UNESCAPED_UNICODE |
-            JSON_UNESCAPED_SLASHES
-        ); ?>;
+設定できる項目：
 
+- kintone利用先
+- 顧客管理アプリID
+- ログイン名
+- パスワード
+- プロキシ
 
-    let currentSettingsTab = 'mail';
-    let currentPage = 'list';
+APIトークンは使用しない。
 
+認証にはkintoneログイン名とパスワードを使用する。
 
-    function $(id) {
-        return document.getElementById(id);
-    }
-
-
-    function escapeHtml(value) {
-
-        const div = document.createElement('div');
-
-        div.textContent = String(value ?? '');
-
-        return div.innerHTML;
-    }
-
-
-    function showPage(page) {
+---
 
-        const pages = [
-            'page-list',
-            'page-editor',
-            'page-customers',
-            'page-settings'
-        ];
+## 23. kintone利用先
 
+入力として以下を受け付ける。
 
-        pages.forEach(function (id) {
+    example
 
-            const el = $(id);
+    example.cybozu.com
 
-            if (el) {
-                el.classList.toggle(
-                    'hidden',
-                    id !== 'page-' + page
-                );
-            }
+    https://example.cybozu.com
 
-        });
+入力値を正規化し、1つの正規化済みURLとして扱う。
 
+https://や.cybozu.comを二重付与してはならない。
 
-        currentPage = page;
+URL生成処理はアプリ内で統一する。
 
+---
 
-        const navMap = {
-            list: 'nav-list',
-            editor: 'nav-create',
-            customers: 'nav-customers',
-            settings: 'nav-settings'
-        };
+## 24. kintoneプロキシ
 
+プロキシは任意設定とする。
 
-        Object.keys(navMap).forEach(function (key) {
+入力形式：
 
-            const nav = $(navMap[key]);
+    host:port
 
-            if (nav) {
-                nav.classList.toggle(
-                    'active',
-                    key === page
-                );
-            }
+プロキシが設定されている場合、kintoneへのすべての通信で同じプロキシ設定を使用する。
 
-        });
+プロキシ通信では、
 
-    }
-
+- proxy
+- request_fulluri = true
 
-    function showToast(message) {
+を適用する。
 
-        const toast = $('toast');
+プロキシが空の場合は通常通信とする。
 
-        if (!toast) {
-            return;
-        }
+プロキシ認証は使用しない。
 
+プロキシのユーザー名・パスワード入力欄は設けない。
 
-        toast.textContent = message;
+---
 
-        toast.classList.add('show');
+## 25. kintone通信
 
+kintoneへの通信ではcURLを使用しない。
 
-        window.setTimeout(function () {
+以下を使用する。
 
-            toast.classList.remove('show');
+- stream_context_create
+- file_get_contents
 
-        }, 2500);
+SSL証明書検証は無効固定とする。
 
-    }
+画面からSSL検証を変更する項目は設けない。
 
+---
 
-    function setLoading(button, loading, text) {
+## 26. kintone認証
 
-        if (!button) {
-            return;
-        }
+認証ヘッダーには、
 
+    X-Cybozu-Authorization
 
-        if (loading) {
+を使用する。
 
-            button.disabled = true;
+Base64化する文字列は、
 
-            button.classList.add('loading');
+    trim(ログイン名) . ":" . trim(パスワード)
 
+とする。
 
-            button.dataset.originalText =
-                button.textContent;
+以下をログ・画面・APIレスポンスへ出力してはならない。
 
+- パスワード
+- Authorizationヘッダー
+- Base64化された認証情報
+- セッション情報
 
-            button.textContent = '';
+---
 
+## 27. kintone接続確認
 
-            const spinner =
-                document.createElement('span');
+「接続設定を確認」では実際にkintone APIへアクセスする。
 
-            spinner.className = 'spinner';
+顧客管理アプリIDが設定されている場合は、そのアプリを対象として確認する。
 
+使用するAPIは、
 
-            button.appendChild(spinner);
+    /k/v1/app.json?id={app_id}
 
-            button.appendChild(
-                document.createTextNode(
-                    text || '処理中...'
-                )
-            );
+または、
 
+    /k/v1/apps.json?limit=1
 
-        } else {
+とする。
 
-            button.disabled = false;
+入力値だけを検査して接続確認成功としてはならない。
 
-            button.classList.remove('loading');
+---
 
+## 28. kintone API GET
 
-            if (button.dataset.originalText) {
+GETではリクエスト本文を送信しない。
 
-                button.textContent =
-                    button.dataset.originalText;
+パラメータはURLへ付与する。
 
-            }
+クエリ文字列は、
 
-        }
+    http_build_query($params, '', '&', PHP_QUERY_RFC3986)
 
-    }
+で生成する。
 
+GET通信でcontentを設定してはならない。
 
-    async function api(action, payload) {
+---
 
-        const url =
-            new URL(window.location.href);
+## 29. kintone API POST / PUT
 
+POST / PUTではJSON形式で送信する。
 
-        url.searchParams.set(
-            'action',
-            action
-        );
+JSONは、
 
+    json_encode($data, JSON_UNESCAPED_UNICODE)
 
-        const options = {
+で生成する。
 
-            method: payload
-                ? 'POST'
-                : 'GET',
+Content-Typeは、
 
-            credentials: 'same-origin',
+    application/json
 
-            headers: {
-                'Accept': 'application/json'
-            }
+とする。
 
-        };
+---
 
+## 30. kintoneエラー
 
-        if (payload) {
+kintoneからエラーが返った場合は可能な範囲で、
 
-            options.headers['Content-Type'] =
-                'application/json';
+- HTTPステータス
+- code
+- message
+- errors
 
+を取得する。
 
-            options.headers['X-CSRF-Token'] =
-                csrfToken;
+利用者には原因を判断できる安全な範囲だけを表示する。
 
+以下は表示しない。
 
-            options.body =
-                JSON.stringify(
-                    Object.assign(
-                        {},
-                        payload,
-                        {
-                            csrf_token: csrfToken
-                        }
-                    )
-                );
+- パスワード
+- Authorization
+- Base64認証情報
+- セッション情報
+- プロキシ認証情報
 
-        }
+---
 
+## 31. 顧客情報
 
-        let response;
+顧客情報はkintoneの顧客管理アプリから取得する。
 
+最低限以下を取得する。
 
-        try {
+- 顧客ID
+- 顧客名
+- メールアドレス
 
-            response =
-                await fetch(
-                    url.toString(),
-                    options
-                );
+kintoneのどの項目を使用するかを設定できるようにする。
 
-        } catch (error) {
+最低限、
 
-            throw new Error(
-                'サーバーとの通信に失敗しました。画面を再読み込みして再度お試しください。'
-            );
+- 顧客ID項目
+- 顧客名項目
+- メールアドレス項目
 
-        }
+を設定できる。
 
+項目対応が未設定の場合は顧客取得成功として扱わない。
 
-        let data;
+---
 
+## 32. 顧客情報のバリデーション
 
-        try {
+kintoneから取得した顧客情報についてサーバー側で以下を確認する。
 
-            data =
-                await response.json();
+- 顧客IDが存在する
+- 顧客名が文字列である
+- メールアドレスが文字列である
+- メールアドレスが妥当な形式である
+- 必要な項目が欠落していない
 
-        } catch (error) {
+不正な顧客データは送信対象として使用しない。
 
-            throw new Error(
-                'サーバーから正しい応答を受け取れませんでした。'
-            );
+---
 
-        }
+## 33. 顧客一覧の全件取得
 
+kintoneの取得上限をもって全顧客取得完了と判断してはならない。
 
-        if (
-            !response.ok ||
-            !data.success
-        ) {
+複数回取得が必要な場合は、すべての対象データを取得する。
 
-            throw new Error(
-                data.message ||
-                '処理に失敗しました。'
-            );
+取得途中で失敗した場合はcustomers.jsonを新しいデータで更新しない。
 
-        }
+---
 
+## 34. customers.json
 
-        return data;
+顧客一覧を保存する場合は以下を記録する。
 
+    {
+      "version": 1,
+      "updated_at": "",
+      "source": "kintone",
+      "count": 0,
+      "customers": []
     }
-
-
-    function renderList() {
-
-        const body =
-            $('survey-list-body');
-
-
-        if (!body) {
-            return;
-        }
-
-
-        body.textContent = '';
-
-
-        if (
-            !Array.isArray(surveys) ||
-            surveys.length === 0
-        ) {
-
-            const tr =
-                document.createElement('tr');
-
-
-            const td =
-                document.createElement('td');
-
-
-            td.colSpan = 6;
-
-            td.className = 'empty';
-
-            td.textContent =
-                'アンケートがありません。';
-
-
-            tr.appendChild(td);
-
-            body.appendChild(tr);
-
-            return;
-
-        }
-
-
-        surveys.forEach(function (survey) {
-
-            const tr =
-                document.createElement('tr');
-
-
-            const name =
-                document.createElement('td');
-
-            name.textContent =
-                survey.name || '';
-
-
-            const status =
-                document.createElement('td');
-
-
-            const badge =
-                document.createElement('span');
-
-            badge.className =
-                'badge';
-
-
-            if (survey.status === 'open') {
-
-                badge.classList.add(
-                    'badge-open'
-                );
-
-                badge.textContent =
-                    '公開中';
-
-
-            } else if (
-                survey.status === 'end'
-            ) {
-
-                badge.classList.add(
-                    'badge-end'
-                );
-
-                badge.textContent =
-                    '終了';
-
-
-            } else {
 
-                badge.classList.add(
-                    'badge-draft'
-                );
+customersには最低限、
 
-                badge.textContent =
-                    '下書き';
+- customer_id
+- name
+- email
 
-            }
+を保存する。
 
+パスワード、認証情報、CSRFトークンなどは保存しない。
 
-            status.appendChild(badge);
+顧客一覧更新失敗時は既存の正常な顧客一覧を破壊しない。
 
+---
 
-            const created =
-                document.createElement('td');
+## 35. アンケートデータ
 
-            created.textContent =
-                survey.created || '';
+アンケートには最低限以下を保持する。
 
+- アンケートID
+- アンケート名
+- 説明
+- 状態
+- 作成日時
+- 更新日時
+- 公開開始日時
+- 公開終了日時
+- 質問番号形式
+- グループ
+- 質問
+- 選択肢
+- 必須／任意
+- 分岐設定
+- データ版
 
-            const period =
-                document.createElement('td');
+状態は以下だけを使用する。
 
-            period.textContent =
-                (survey.start || '未設定') +
-                ' ～ ' +
-                (survey.end || '未設定');
+    draft
+    open
+    closed
 
+---
 
-            const answers =
-                document.createElement('td');
+## 36. アンケートID
 
-            answers.textContent =
-                String(
-                    survey.answers || 0
-                );
+アンケートIDは一意とする。
 
+質問ID、選択肢ID、グループIDもそれぞれ一意とする。
 
-            const updated =
-                document.createElement('td');
+表示用の質問番号と質問IDを分離する。
 
-            updated.textContent =
-                survey.updated || '';
+質問の並べ替え・削除によって表示番号が変わっても質問IDは変更しない。
 
+---
 
-            tr.appendChild(name);
+## 37. アンケート作成・編集
 
-            tr.appendChild(status);
+以下を同一画面で編集できる。
 
-            tr.appendChild(created);
+- 基本情報
+- グループ
+- 質問
+- 選択肢
+- 必須／任意
+- 分岐
+- 並び順
 
-            tr.appendChild(period);
+質問ごとに別画面へ移動しない。
 
-            tr.appendChild(answers);
+モックと同じ業務上の流れを維持する。
 
-            tr.appendChild(updated);
+---
 
+## 38. 回答形式
 
-            body.appendChild(tr);
+回答形式は以下だけを許可する。
 
-        });
+- free
+- single
+- multiple
 
-    }
-
-
-    function openCreate() {
-
-        const name =
-            $('survey-name');
-
-        const description =
-            $('survey-description');
-
-        const start =
-            $('survey-start');
-
-        const end =
-            $('survey-end');
-
-        const question =
-            $('question-text');
-
-
-        if (name) {
-            name.value = '';
-        }
-
-
-        if (description) {
-            description.value = '';
-        }
-
+自由記述には選択肢を保存しない。
 
-        if (start) {
-            start.value = '';
-        }
+single / multipleには1個以上の選択肢を必要とする。
 
+---
 
-        if (end) {
-            end.value = '';
-        }
+## 39. 質問バリデーション
 
+保存時および公開時にサーバー側で以下を確認する。
 
-        if (question) {
-            question.value = '';
-        }
+- 質問IDが一意
+- 質問文が空でない
+- 質問文が上限文字数以内
+- 回答形式が許可された値
+- 必須設定がbooleanとして正しい
+- single / multipleの場合は選択肢が1個以上
+- 選択肢IDが一意
+- 選択肢文が空でない
+- 選択肢文が上限文字数以内
+- freeには選択肢がない
+- 不正な項目が存在しない
 
+---
 
-        showPage('editor');
+## 40. 分岐
 
-    }
-
-
-    function renderCustomers() {
+分岐はsingle質問だけで利用できる。
 
-        const body =
-            $('customer-body');
+選択肢ごとに、
 
+- 分岐なし
+- 次の質問
+- 指定した質問
+- アンケート終了
 
-        if (!body) {
-            return;
-        }
+を指定できる。
 
+存在しない質問IDを分岐先として保存しない。
 
-        body.textContent = '';
+削除・並べ替え後も分岐先の整合性を確認する。
 
+公開前に分岐を検証する。
 
-        if (
-            !Array.isArray(customers) ||
-            customers.length === 0
-        ) {
+---
 
-            const tr =
-                document.createElement('tr');
+## 41. 分岐の循環
 
+分岐によって質問を循環する構造を作ってはならない。
 
-            const td =
-                document.createElement('td');
+公開前にサーバー側で循環を検出する。
 
+循環が存在する場合は公開しない。
 
-            td.colSpan = 4;
+---
 
-            td.className = 'empty';
+## 42. 公開期間
 
-            td.textContent =
-                '顧客情報がありません。';
+公開開始日時・公開終了日時を保存する。
 
+公開期間が設定されている場合は、その期間外では回答できない。
 
-            tr.appendChild(td);
+open状態でも、
 
-            body.appendChild(tr);
+- 公開開始前
+- 公開終了後
 
-            return;
+は回答受付を行わない。
 
-        }
+終了操作を行った場合は、公開終了日時に関係なく回答受付を終了する。
 
+---
 
-        customers.forEach(function (customer) {
+## 43. 公開処理
 
-            const tr =
-                document.createElement('tr');
+公開前にサーバー側で再検証する。
 
+最低限以下を確認する。
 
-            const name =
-                document.createElement('td');
+- アンケート名
+- グループ
+- 質問
+- 質問文
+- 回答形式
+- 選択肢
+- 必須設定
+- 分岐
+- 公開期間
 
-            name.textContent =
-                customer.name || '';
+不備がある場合は公開しない。
 
+公開操作はPOSTで実行する。
 
-            const email =
-                document.createElement('td');
+---
 
-            email.textContent =
-                customer.email || '';
+## 44. 公開後の編集
 
+公開中アンケートについて、回答データとの整合性を壊す変更を無条件に許可しない。
 
-            const company =
-                document.createElement('td');
+回答済みデータが存在するアンケートでは、以下を原則として禁止する。
 
-            company.textContent =
-                customer.company || '';
+- 回答済み質問の削除
+- 回答済み選択肢の削除
+- 回答形式の変更
+- 回答済み質問のID変更
+- 回答済み選択肢のID変更
+- 分岐構造を壊す変更
 
+公開後に変更可能な項目と変更不可の項目をサーバー側で判定する。
 
-            const number =
-                document.createElement('td');
+必要な変更は新しいアンケートとして作成する方式を基本とする。
 
-            number.textContent =
-                customer.number || '';
+---
 
+## 45. アンケート削除
 
-            tr.appendChild(name);
+原則としてdraft状態だけを削除対象とする。
 
-            tr.appendChild(email);
+回答データまたは送信履歴が存在するアンケートを物理削除しない。
 
-            tr.appendChild(company);
+削除操作ではサーバー側で状態を再確認する。
 
-            tr.appendChild(number);
+---
 
+## 46. surveys.json
 
-            body.appendChild(tr);
+基本構造：
 
-        });
-
+    {
+      "version": 1,
+      "updated_at": "",
+      "surveys": []
     }
-
-
-    function renderCustomerStatus() {
-
-        const container =
-            $('customer-status');
-
-
-        if (!container) {
-            return;
-        }
-
-
-        container.textContent = '';
-
-
-        const div =
-            document.createElement('div');
-
 
-        div.className =
-            'notice';
+各アンケートには、
 
+- id
+- name
+- description
+- status
+- created_at
+- updated_at
+- publish_start_at
+- publish_end_at
+- numbering
+- version
+- groups
 
-        if (
-            kintoneSettings &&
-            kintoneSettings.ready
-        ) {
+を保存する。
 
-            div.textContent =
-                '保存されているキントーン設定を使用して顧客情報を表示しています。';
+---
 
-        } else {
+## 47. 回答者用URL
 
-            div.className =
-                'notice warning';
+公開されたアンケートには回答者用URLを発行する。
 
+アンケートIDだけをURLへ含め、それだけで回答できる構成にしてはならない。
 
-            div.textContent =
-                'キントーン設定が未完了です。設定画面から接続先を設定してください。';
+回答者用URLには推測困難な識別情報を使用する。
 
-        }
+回答者用識別情報は十分な長さのランダム値とする。
 
+回答者用識別情報は重複してはならない。
 
-        container.appendChild(div);
+回答者用URLから以下のアンケートへ回答できない。
 
-    }
-
-
-    function renderSettings() {
+- draft
+- closed
+- 公開期間外
 
-        const mailTab =
-            $('settings-tab-mail');
+---
 
+## 48. 回答者識別
 
-        const kintoneTab =
-            $('settings-tab-kintone');
+メール送信対象者については、
 
+- アンケートID
+- 顧客ID
+- 回答者用識別情報
+- 送信履歴
 
-        if (mailTab) {
+を関連付ける。
 
-            mailTab.classList.toggle(
-                'active',
-                currentSettingsTab === 'mail'
-            );
+顧客一覧に存在しない回答者からの回答も許可する。
 
-        }
+顧客一覧に存在しないことを理由として回答を拒否しない。
 
+---
 
-        if (kintoneTab) {
+## 49. 回答データ
 
-            kintoneTab.classList.toggle(
-                'active',
-                currentSettingsTab === 'kintone'
-            );
+responses.jsonには最低限以下を保存する。
 
-        }
+- 回答ID
+- アンケートID
+- 回答者識別情報
+- 顧客ID
+- 回答日時
+- 回答完了状態
+- アンケート定義の版
+- 質問ID
+- 回答内容
 
+回答時点の質問・選択肢を識別できる情報を保持する。
 
-        if (
-            currentSettingsTab === 'mail'
-        ) {
+現在のアンケート定義だけに依存して過去回答を解釈してはならない。
 
-            renderMailSettings();
+---
 
-        } else {
-
-            renderKintoneSettings();
-
-        }
-
-    }
+## 50. 回答サーバー側検証
 
+回答者画面のチェックだけを信用しない。
 
-    function renderMessage(
-        message,
-        type
-    ) {
+回答保存時にサーバー側で以下を検証する。
 
-        const container =
-            $('settings-message');
+- アンケートが存在する
+- open状態である
+- 公開期間内である
+- 回答者用識別情報が有効
+- 質問IDが存在する
+- 不正な質問IDが含まれていない
+- 必須質問が回答されている
+- 回答形式が一致している
+- singleが1件だけである
+- multipleが許可された選択肢だけである
+- 選択肢IDが存在する
+- freeの文字数が上限以内
+- 不正な回答項目が含まれていない
 
+---
 
-        if (!container) {
-            return;
-        }
+## 51. 回答の二重送信
 
+同じ回答を二重登録しない。
 
-        container.textContent = '';
+回答送信時には一意な送信識別情報を使用する。
 
+同一の送信識別情報が再送された場合は、既存回答を重複登録しない。
 
-        if (!message) {
-            return;
-        }
+ネットワーク障害による再送でも二重登録されないようにする。
 
+---
 
-        const div =
-            document.createElement('div');
+## 52. 回答完了
 
+回答保存成功後だけ回答完了とする。
 
-        div.className =
-            'notice ' +
-            (type || 'success');
+保存成功前に完了画面を表示してはならない。
 
+保存成功後は同じ回答者用識別情報による再送信を受け付けない。
 
-        div.textContent =
-            message;
+---
 
+## 53. responses.json
 
-        container.appendChild(div);
+基本構造：
 
+    {
+      "version": 1,
+      "updated_at": "",
+      "responses": []
     }
-
-
-    function renderMailSettings() {
-
-        const content =
-            $('settings-content');
-
-
-        if (!content) {
-            return;
-        }
-
-
-        content.textContent = '';
-
-
-        const card =
-            document.createElement('div');
-
-        card.className =
-            'card';
-
-
-        const title =
-            document.createElement('div');
-
-        title.className =
-            'card-title';
-
-        title.textContent =
-            'メール送信設定';
-
-
-        card.appendChild(title);
-
-
-        const status =
-            document.createElement('div');
-
-        status.className =
-            'status-line';
-
-
-        const dot =
-            document.createElement('span');
-
-        dot.className =
-            'status-dot ' +
-            (
-                mailSettings.ready
-                    ? 'ok'
-                    : 'warn'
-            );
-
-
-        const statusText =
-            document.createElement('span');
-
-
-        statusText.textContent =
-            mailSettings.ready
-                ? 'メール送信可能な設定が保存されています。'
-                : 'メール送信設定が未完了です。';
-
-
-        status.appendChild(dot);
-
-        status.appendChild(statusText);
-
-
-        card.appendChild(status);
-
-
-        const notice =
-            document.createElement('div');
-
-        notice.className =
-            'notice';
-
-        notice.textContent =
-            'メール送信に使用するSMTPサーバと送信元情報を設定してください。';
-
-
-        card.appendChild(notice);
-
-
-        const grid1 =
-            document.createElement('div');
-
-        grid1.className =
-            'form-grid';
-
-
-        grid1.appendChild(
-            createField(
-                'SMTPサーバ *',
-                'smtp-server',
-                'text',
-                mailSettings.smtp,
-                'smtp.example.com'
-            )
-        );
-
-
-        grid1.appendChild(
-            createField(
-                'ポート番号 *',
-                'smtp-port',
-                'number',
-                mailSettings.port,
-                '587'
-            )
-        );
-
-
-        card.appendChild(grid1);
-
-
-        const securityField =
-            document.createElement('div');
-
-        securityField.className =
-            'field';
-
-
-        const securityLabel =
-            document.createElement('label');
-
-        securityLabel.htmlFor =
-            'smtp-security';
-
-        securityLabel.textContent =
-            '接続方式';
-
-
-        const security =
-            document.createElement('select');
-
-        security.id =
-            'smtp-security';
-
-
-        [
-            'なし',
-            'STARTTLS',
-            'SSL/TLS'
-        ].forEach(function (value) {
-
-            const option =
-                document.createElement('option');
-
-
-            option.value =
-                value;
-
-            option.textContent =
-                value;
-
-
-            if (
-                mailSettings.security === value
-            ) {
-
-                option.selected = true;
-
-            }
-
-
-            security.appendChild(option);
-
-        });
-
-
-        securityField.appendChild(
-            securityLabel
-        );
-
-        securityField.appendChild(
-            security
-        );
-
-
-        card.appendChild(
-            securityField
-        );
-
-
-        const grid2 =
-            document.createElement('div');
 
-        grid2.className =
-            'form-grid';
+回答データはアンケート単位で検索可能な構造とする。
 
+回答者識別情報と送信履歴を関連付けられる構造とする。
 
-        grid2.appendChild(
-            createField(
-                '認証ユーザー名',
-                'smtp-user',
-                'text',
-                mailSettings.username,
-                ''
-            )
-        );
+---
 
+## 54. 回答率
 
-        const passwordField =
-            document.createElement('div');
+回答率は、
 
-        passwordField.className =
-            'field';
+    回答完了者数 ÷ 実際のメール送信対象者数 × 100
 
+を基本とする。
 
-        const passwordLabel =
-            document.createElement('label');
+メール送信対象外の顧客を母数へ含めない。
 
-        passwordLabel.htmlFor =
-            'smtp-password';
+顧客一覧に存在しない回答者からの自発的な回答は回答数に含める。
 
-        passwordLabel.textContent =
-            '認証パスワード';
+ただしメール送信対象者数は増加させない。
 
+送信対象者数が0の場合、回答率を0%として扱うか「算出対象なし」と表示するかを統一する。
 
-        const password =
-            document.createElement('input');
+---
 
-        password.id =
-            'smtp-password';
+## 55. 回答結果集計
 
-        password.type =
-            'password';
+回答結果はresponses.jsonを正式なデータとして集計する。
 
-        password.autocomplete =
-            'new-password';
+顧客一覧に登録されていない回答者も集計対象とする。
 
-        password.placeholder =
-            '変更する場合のみ入力';
+質問ごとに、
 
+- 回答数
+- 未回答数
+- 割合
 
-        passwordField.appendChild(
-            passwordLabel
-        );
+を表示できるようにする。
 
-        passwordField.appendChild(
-            password
-        );
+---
 
+## 56. 単一選択集計
 
-        grid2.appendChild(
-            passwordField
-        );
+single質問では選択肢ごとに、
 
+- 回答数
+- 割合
 
-        card.appendChild(grid2);
+を表示する。
 
+割合の母数は、その質問への有効回答数とする。
 
-        const grid3 =
-            document.createElement('div');
+---
 
-        grid3.className =
-            'form-grid';
+## 57. 複数選択集計
 
+multiple質問では選択肢ごとの選択回数を集計する。
 
-        grid3.appendChild(
-            createField(
-                '送信元メールアドレス *',
-                'smtp-from',
-                'email',
-                mailSettings.from,
-                'survey@example.com'
-            )
-        );
+一人が複数選択した場合は、それぞれを1回として集計する。
 
+割合は、
 
-        grid3.appendChild(
-            createField(
-                '送信元名',
-                'smtp-from-name',
-                'text',
-                mailSettings.fromName,
-                ''
-            )
-        );
+    選択肢の選択回数
+    ÷
+    複数選択質問への回答者数
+    × 100
 
+とする。
 
-        card.appendChild(grid3);
+---
 
+## 58. 自由記述集計
 
-        const actions =
-            document.createElement('div');
+free質問では回答内容を一覧表示する。
 
-        actions.className =
-            'actions';
+回答内容はHTMLとして解釈しない。
 
+HTML、JavaScript、その他の文字列が含まれていても実行されない。
 
-        const saveButton =
-            document.createElement('button');
+---
 
-        saveButton.id =
-            'btn-save-mail';
+## 59. メール送信
 
-        saveButton.type =
-            'button';
+メール送信前にサーバー側で以下を確認する。
 
-        saveButton.className =
-            'btn btn-primary';
+- アンケートが存在する
+- アンケートがopen状態
+- 公開期間内
+- メール設定が存在する
+- SMTP設定が有効
+- SMTP接続確認済み
+- 送信対象者が1名以上
+- 送信先メールアドレスが妥当
+- 件名が入力されている
+- 本文が入力されている
+- 回答者用URLを生成できる
+- 対象者が有効である
 
-        saveButton.textContent =
-            '設定を保存';
+いずれかに問題がある場合は送信処理を開始しない。
 
+---
 
-        const testButton =
-            document.createElement('button');
+## 60. 送信対象者
 
-        testButton.id =
-            'btn-test-mail';
+送信対象者は顧客一覧から選択する。
 
-        testButton.type =
-            'button';
+以下を行える。
 
-        testButton.className =
-            'btn';
+- 顧客検索
+- 複数選択
+- 選択解除
+- 選択者確認
 
-        testButton.textContent =
-            '送信設定を確認';
+送信実行前に、
 
+- 対象者数
+- 対象者一覧
 
-        actions.appendChild(
-            saveButton
-        );
+を確認できる。
 
-        actions.appendChild(
-            testButton
-        );
+---
 
+## 61. メール内容
 
-        card.appendChild(actions);
+送信前に、
 
+- 件名
+- 本文
+- 回答用案内
 
-        content.appendChild(card);
+を確認・編集できる。
 
+回答用案内には回答者用URLを含める。
 
-        if (saveButton) {
+回答者用URLは対象者ごとに正しく生成する。
 
-            saveButton.addEventListener(
-                'click',
-                async function () {
+---
 
-                    saveButton.disabled = true;
+## 62. メール送信確認
 
-                    saveButton.classList.add(
-                        'loading'
-                    );
+送信前に確認画面を表示する。
 
+確認画面では、
 
-                    const originalText =
-                        saveButton.textContent;
+- アンケート名
+- 送信対象者数
+- 送信対象者
+- 件名
+- 本文
+- 回答用案内
 
+を確認できる。
 
-                    saveButton.textContent = '';
+確認後に送信を実行する。
 
+---
 
-                    const spinner =
-                        document.createElement(
-                            'span'
-                        );
+## 63. メール送信の二重実行
 
-                    spinner.className =
-                        'spinner';
+送信処理中は送信ボタンを無効化する。
 
+サーバー側でも同一送信処理の重複実行を防止する。
 
-                    saveButton.appendChild(
-                        spinner
-                    );
+同一の送信処理識別情報による再実行では、同じ対象者へ二重送信しない。
 
+---
 
-                    saveButton.appendChild(
-                        document.createTextNode(
-                            '保存中...'
-                        )
-                    );
+## 64. メール送信履歴
 
+mail_logs.jsonへ送信結果を保存する。
 
-                    renderMessage(
-                        '',
-                        ''
-                    );
+最低限以下を保存する。
 
+- 送信履歴ID
+- 送信処理識別情報
+- アンケートID
+- 送信日時
+- 送信対象者数
+- 成功数
+- 失敗数
+- 対象者ごとの結果
+- 失敗理由
 
-                    try {
+パスワード、認証情報、CSRFトークンなどは保存しない。
 
-                        const payload = {
+---
 
-                            smtp:
-                                $('smtp-server')?.value.trim() ||
-                                '',
+## 65. 部分送信失敗
 
-                            port:
-                                $('smtp-port')?.value.trim() ||
-                                '',
+一部の対象者への送信に失敗した場合でも、成功した対象者を失敗扱いにしない。
 
-                            security:
-                                $('smtp-security')?.value ||
-                                'なし',
+対象者ごとに、
 
-                            username:
-                                $('smtp-user')?.value.trim() ||
-                                '',
+- 成功
+- 失敗
 
-                            password:
-                                $('smtp-password')?.value ||
-                                '',
+を記録する。
 
-                            from:
-                                $('smtp-from')?.value.trim() ||
-                                '',
+失敗理由は利用者が再送判断できる範囲だけを表示する。
 
-                            fromName:
-                                $('smtp-from-name')?.value.trim() ||
-                                ''
+---
 
-                        };
+## 66. 再送
 
+送信失敗者を確認できるようにする。
 
-                        const result =
-                            await api(
-                                'save_mail_settings',
-                                payload
-                            );
+再送する場合は、過去の送信履歴を上書きしない。
 
+再送は新しい送信履歴として記録する。
 
-                        if (
-                            result.mail
-                        ) {
+成功済みの対象者を誤って再送しないよう、再送対象者を明示的に選択する。
 
-                            mailSettings =
-                                result.mail;
+---
 
-                        }
+## 67. mail_logs.json
 
+基本構造：
 
-                        renderMessage(
-                            result.message ||
-                            'メール送信設定を保存しました。',
-                            'success'
-                        );
-
-
-                        showToast(
-                            'メール送信設定を保存しました。'
-                        );
-
-
-                        renderMailSettings();
-
-
-                    } catch (error) {
-
-                        renderMessage(
-                            error instanceof Error
-                                ? error.message
-                                : 'メール送信設定の保存に失敗しました。',
-                            'error'
-                        );
-
-
-                    } finally {
-
-                        saveButton.disabled =
-                            false;
-
-                        saveButton.classList.remove(
-                            'loading'
-                        );
-
-                        saveButton.textContent =
-                            originalText;
-
-                    }
-
-                }
-            );
+    {
+      "version": 1,
+      "updated_at": "",
+      "logs": []
+    }
 
-        }
+各送信履歴には対象者ごとの送信結果を保持する。
 
+送信済み・失敗・再送の関係を追跡できる構造とする。
 
-        if (testButton) {
+---
 
-            testButton.addEventListener(
-                'click',
-                async function () {
+## 68. CSRF
 
-                    testButton.disabled =
-                        true;
+状態変更を伴うすべての操作でCSRF検証を行う。
 
-                    testButton.classList.add(
-                        'loading'
-                    );
+対象には少なくとも以下を含む。
 
+- メール設定保存
+- SMTP接続確認
+- kintone設定保存
+- kintone接続確認
+- 顧客一覧更新
+- アンケート保存
+- アンケート削除
+- アンケート公開
+- アンケート終了
+- メール送信
+- 回答保存
 
-                    const originalText =
-                        testButton.textContent;
+CSRF検証失敗時は処理を実行せずHTTP 403を返す。
 
+---
 
-                    testButton.textContent =
-                        '';
+## 69. セッション
 
+セッションはアプリ固有の領域を使用する。
 
-                    const spinner =
-                        document.createElement(
-                            'span'
-                        );
+ルート直下の汎用セッションキーを使用しない。
 
-                    spinner.className =
-                        'spinner';
+セッションCookieには、
 
+- HttpOnly
+- SameSite=Lax
 
-                    testButton.appendChild(
-                        spinner
-                    );
+を適用する。
 
+---
 
-                    testButton.appendChild(
-                        document.createTextNode(
-                            '確認中...'
-                        )
-                    );
+## 70. CSRFトークン
 
+CSRFトークンは新規セッション時に生成する。
 
-                    renderMessage(
-                        '',
-                        ''
-                    );
+十分な長さの暗号学的に安全なランダム値を使用する。
 
+同一セッションで画面を再表示しただけではCSRFトークンを変更しない。
 
-                    try {
+セッションID再生成時には必要に応じてCSRFトークンも再発行する。
 
-                        if (
-                            !mailSettings.ready
-                        ) {
+CSRFトークンをログ、画面、JSONファイルへ保存してはならない。
 
-                            renderMessage(
-                                '先にメール送信設定を保存してください。',
-                                'warning'
-                            );
+---
 
-                            return;
+## 71. API仕様
 
-                        }
+状態変更処理はPOSTで受け付ける。
 
+操作はactionで識別する。
 
-                        openModal(
-                            'メール送信設定の確認',
-                            '保存されているメール送信設定を確認しました。',
-                            '設定は保存されています。実際の送信確認はメール送信時に行われます。'
-                        );
+最低限以下を使用する。
 
+    save_mail_settings
+    test_mail_settings
+    save_kintone_settings
+    test_kintone_connection
+    refresh_customers
+    save_survey
+    delete_survey
+    publish_survey
+    close_survey
+    send_survey
+    save_response
 
-                    } catch (error) {
+参照だけの処理はGETを使用できる。
 
-                        renderMessage(
-                            error instanceof Error
-                                ? error.message
-                                : 'メール送信設定の確認に失敗しました。',
-                            'error'
-                        );
+---
 
+## 72. API URL
 
-                    } finally {
+JavaScriptから本アプリAPIを呼び出す場合は、現在表示されているindex.phpを基準にURLを生成する。
 
-                        window.setTimeout(
-                            function () {
+実行環境固有のURLを固定記述してはならない。
 
-                                testButton.disabled =
-                                    false;
+API URLの生成によって、
 
-                                testButton.classList.remove(
-                                    'loading'
-                                );
+- ホスト
+- ポート
+- HTTP / HTTPS
+- 配置場所
 
-                                testButton.textContent =
-                                    originalText;
+が変更されても自身のAPIを呼び出せることを必須とする。
 
-                            },
-                            300
-                        );
+---
 
-                    }
+## 73. APIレスポンス
 
-                }
-            );
+APIはJSONを返す。
 
-        }
+成功例：
 
+    {
+      "success": true,
+      "message": "処理が完了しました。"
     }
-
-
-    function createField(
-        labelText,
-        id,
-        type,
-        value,
-        placeholder
-    ) {
-
-        const field =
-            document.createElement('div');
-
-        field.className =
-            'field';
-
-
-        const label =
-            document.createElement('label');
-
-        label.htmlFor =
-            id;
-
-        label.textContent =
-            labelText;
-
-
-        const input =
-            document.createElement('input');
-
-
-        input.id =
-            id;
 
-        input.type =
-            type;
+失敗例：
 
-        input.value =
-            value || '';
-
-
-        if (placeholder) {
-
-            input.placeholder =
-                placeholder;
-
-        }
-
-
-        field.appendChild(label);
-
-        field.appendChild(input);
-
-
-        return field;
-
+    {
+      "success": false,
+      "message": "入力内容を確認してください。",
+      "errors": {}
     }
-    function renderKintoneSettings() {
-
-        const content =
-            $('settings-content');
-
-        if (!content) {
-            return;
-        }
-
-        content.textContent = '';
-
-        const card =
-            document.createElement('div');
-
-        card.className = 'card';
-
-        const title =
-            document.createElement('div');
-
-        title.className = 'card-title';
-        title.textContent = 'キントーン設定';
-
-        card.appendChild(title);
-
-        const notice =
-            document.createElement('div');
-
-        notice.className = 'notice';
-
-        notice.textContent =
-            'サイボウズへのログイン情報とプロキシサーバを設定します。';
-
-        card.appendChild(notice);
-
-        const domainField =
-            createField(
-                'サブドメイン *',
-                'kintone-domain',
-                'text',
-                kintoneSettings.domain || '',
-                'example'
-            );
-
-        card.appendChild(domainField);
-
-        const appField =
-            createField(
-                'アプリID *',
-                'kintone-app-id',
-                'number',
-                kintoneSettings.appId || '',
-                '123'
-            );
-
-        card.appendChild(appField);
-
-        const grid =
-            document.createElement('div');
-
-        grid.className = 'form-grid';
 
-        grid.appendChild(
-            createField(
-                'ログイン名 *',
-                'kintone-login',
-                'text',
-                kintoneSettings.login || '',
-                ''
-            )
-        );
+JSON以外のHTMLをAPIレスポンスへ混在させない。
 
-        const passwordField =
-            document.createElement('div');
+JSON出力後は処理を終了する。
 
-        passwordField.className = 'field';
+---
 
-        const passwordLabel =
-            document.createElement('label');
+## 74. HTTPステータス
 
-        passwordLabel.htmlFor =
-            'kintone-password';
+基本的に以下を使用する。
 
-        passwordLabel.textContent =
-            'パスワード';
+- 200 正常終了
+- 400 入力不正
+- 401 認証失敗
+- 403 CSRF・権限等による拒否
+- 404 対象データなし
+- 409 データ競合・二重実行
+- 500 サーバー内部エラー
+- 502 外部サービス通信エラー
 
-        const password =
-            document.createElement('input');
+---
 
-        password.id =
-            'kintone-password';
+## 75. fetchエラー
 
-        password.type =
-            'password';
+通信失敗時に単に、
 
-        password.autocomplete =
-            'new-password';
+    サーバーとの通信に失敗しました。
 
-        password.placeholder =
-            '変更する場合のみ入力';
+だけを表示して終了しない。
 
-        passwordField.appendChild(
-            passwordLabel
-        );
+可能な範囲で以下を判定する。
 
-        passwordField.appendChild(
-            password
-        );
+- HTTPステータス
+- JSONレスポンスの有無
+- API message
+- validation error
+- CSRFエラー
+- 認証エラー
+- 権限エラー
+- 競合エラー
+- サーバーエラー
+- 外部サービス通信エラー
 
-        grid.appendChild(
-            passwordField
-        );
+JSONが返らない場合は、その事実を利用者へ分かる形で表示する。
 
-        card.appendChild(grid);
+---
 
-        card.appendChild(
-            createField(
-                'プロキシサーバ',
-                'kintone-proxy',
-                'text',
-                kintoneSettings.proxy || '',
-                'proxy.example.com:8080'
-            )
-        );
+## 76. 入力保持
 
-        const proxyNotice =
-            document.createElement('div');
+通信失敗時に入力内容を消去しない。
 
-        proxyNotice.className =
-            'form-help';
+保存失敗時にも入力内容を保持する。
 
-        proxyNotice.textContent =
-            '使用する場合は host名:ポート番号 の形式で入力してください。';
+ただし、パスワードはlocalStorage等へ保存しない。
 
-        card.appendChild(proxyNotice);
+---
 
-        const status =
-            document.createElement('div');
+## 77. JavaScript
 
-        status.className =
-            'status-line';
+すべてのJavaScript処理は、
 
-        const dot =
-            document.createElement('span');
+    document.addEventListener('DOMContentLoaded', ...)
 
-        dot.className =
-            'status-dot ' +
-            (
-                kintoneSettings.ready
-                    ? 'ok'
-                    : 'warn'
-            );
+の内部で実行する。
 
-        const statusText =
-            document.createElement('span');
+イベント登録前に対象要素の存在を確認する。
 
-        statusText.textContent =
-            kintoneSettings.ready
-                ? 'キントーン設定が保存されています。'
-                : 'キントーン設定が未完了です。';
+対象要素が存在しない場合は、その処理だけを行わず、他の処理を継続する。
 
-        status.appendChild(dot);
-        status.appendChild(statusText);
+---
 
-        card.appendChild(status);
+## 78. 非同期通信中のUI
 
-        const actions =
-            document.createElement('div');
+非同期通信を開始する前に、
 
-        actions.className =
-            'actions';
+1. 対象ボタンをdisabled=trueにする
+2. ローディング表示を付ける
+3. fetchを開始する
 
-        const saveButton =
-            document.createElement('button');
+の順番を必須とする。
 
-        saveButton.id =
-            'btn-save-kintone';
+通信完了後はfinallyで、
 
-        saveButton.type =
-            'button';
+1. disabled=false
+2. ローディング表示を解除する
 
-        saveButton.className =
-            'btn btn-primary';
+を行う。
 
-        saveButton.textContent =
-            '設定を保存';
+---
 
-        const testButton =
-            document.createElement('button');
+## 79. XSS対策
 
-        testButton.id =
-            'btn-test-kintone';
+PHPからHTMLへ動的な値を出力する場合は共通エスケープ処理を使用する。
 
-        testButton.type =
-            'button';
+安全な文字列エスケープ関数をアプリ固有の名前空間内に定義する。
 
-        testButton.className =
-            'btn';
+JavaScriptからDOMへ値を表示する場合は原則としてtextContentを使用する。
 
-        testButton.textContent =
-            '接続テスト';
+innerHTMLを使用する場合は、使用する値が安全であることを明確に確認する。
 
-        actions.appendChild(
-            saveButton
-        );
+回答内容など利用者が入力した文字列をHTMLとして解釈してはならない。
 
-        actions.appendChild(
-            testButton
-        );
+---
 
-        card.appendChild(actions);
+## 80. PHP名前空間
 
-        content.appendChild(card);
+PHPファイル先頭にはアプリ固有の階層型名前空間を使用する。
 
-        if (saveButton) {
+本アプリでは、
 
-            saveButton.addEventListener(
-                'click',
-                async function () {
+    namespace yokoyamy\trial\newapp;
 
-                    saveButton.disabled = true;
+を使用する。
 
-                    saveButton.classList.add(
-                        'loading'
-                    );
+汎用的な単一単語の名前空間は使用しない。
 
-                    const originalText =
-                        saveButton.textContent;
+---
 
-                    saveButton.textContent = '';
+## 81. PHP 8.4 / 8.5互換性
 
-                    const spinner =
-                        document.createElement(
-                            'span'
-                        );
+PHP 8.4 / 8.5で動作する構成とする。
 
-                    spinner.className =
-                        'spinner';
+以下を禁止する。
 
-                    saveButton.appendChild(
-                        spinner
-                    );
+- PHP 8.4 / 8.5で非推奨となる記述
+- 暗黙的なnullable指定
+- 型の不一致を前提とした処理
+- 未定義変数を前提とした処理
 
-                    saveButton.appendChild(
-                        document.createTextNode(
-                            '保存中...'
-                        )
-                    );
+---
 
-                    renderMessage('', '');
+## 82. HTTPレスポンスヘッダー
 
-                    try {
+以下を出力する。
 
-                        const payload = {
-                            domain:
-                                $('kintone-domain')?.value.trim() ||
-                                '',
+    X-Frame-Options: SAMEORIGIN
 
-                            appId:
-                                $('kintone-app-id')?.value.trim() ||
-                                '',
+    X-Content-Type-Options: nosniff
 
-                            login:
-                                $('kintone-login')?.value.trim() ||
-                                '',
+JSON APIでは、
 
-                            password:
-                                $('kintone-password')?.value ||
-                                '',
+    Content-Type: application/json; charset=utf-8
 
-                            proxy:
-                                $('kintone-proxy')?.value.trim() ||
-                                ''
-                        };
+を使用する。
 
-                        const result =
-                            await api(
-                                'save_kintone_settings',
-                                payload
-                            );
+---
 
-                        if (result.kintone) {
-                            kintoneSettings =
-                                result.kintone;
-                        }
+## 83. PHP外部通信
 
-                        renderMessage(
-                            result.message ||
-                            'キントーン設定を保存しました。',
-                            'success'
-                        );
+cURLは使用しない。
 
-                        showToast(
-                            'キントーン設定を保存しました。'
-                        );
+kintone通信では、
 
-                        renderKintoneSettings();
+- stream_context_create
+- file_get_contents
 
-                    } catch (error) {
+を使用する。
 
-                        renderMessage(
-                            error instanceof Error
-                                ? error.message
-                                : 'キントーン設定の保存に失敗しました。',
-                            'error'
-                        );
+PHP側の外部HTTP通信について、レスポンスヘッダー取得を共通化する。
 
-                    } finally {
+PHPの禁止された直接参照方法を使用しない。
 
-                        saveButton.disabled =
-                            false;
+---
 
-                        saveButton.classList.remove(
-                            'loading'
-                        );
+## 84. 機密情報
 
-                        saveButton.textContent =
-                            originalText;
-                    }
-                }
-            );
-        }
+以下をログ、画面、APIレスポンスへ出力しない。
 
-        if (testButton) {
+- SMTPパスワード
+- kintoneパスワード
+- CSRFトークン
+- セッションID
+- Authorizationヘッダー
+- Base64認証情報
+- プロキシ認証情報
+- その他の認証秘密情報
 
-            testButton.addEventListener(
-                'click',
-                async function () {
+エラー発生時も同様とする。
 
-                    testButton.disabled = true;
+---
 
-                    testButton.classList.add(
-                        'loading'
-                    );
+## 85. JSONバックアップ
 
-                    const originalText =
-                        testButton.textContent;
+JSON保存失敗時に既存データを破壊しない。
 
-                    testButton.textContent = '';
+必要に応じて保存前のデータを復元できる状態を維持する。
 
-                    const spinner =
-                        document.createElement(
-                            'span'
-                        );
+バックアップファイルを作成する場合も、ブラウザから直接取得できない場所へ保存する。
 
-                    spinner.className =
-                        'spinner';
+認証情報を含むバックアップファイルを公開領域へ配置してはならない。
 
-                    testButton.appendChild(
-                        spinner
-                    );
+---
 
-                    testButton.appendChild(
-                        document.createTextNode(
-                            '接続中...'
-                        )
-                    );
+## 86. データ保持
 
-                    renderMessage('', '');
+以下の保存期間について運用上の方針を定める。
 
-                    try {
+- アンケート
+- 回答
+- 顧客一覧
+- メール送信履歴
 
-                        const payload = {
-                            domain:
-                                $('kintone-domain')?.value.trim() ||
-                                kintoneSettings.domain ||
-                                '',
+自動削除を行う場合は、
 
-                            appId:
-                                $('kintone-app-id')?.value.trim() ||
-                                kintoneSettings.appId ||
-                                '',
+- 対象
+- 条件
+- 保存期間
+- 削除後の集計への影響
 
-                            login:
-                                $('kintone-login')?.value.trim() ||
-                                kintoneSettings.login ||
-                                '',
+を明確にする。
 
-                            password:
-                                $('kintone-password')?.value ||
-                                '',
+回答データを削除した場合に過去の集計結果が変化することを考慮する。
 
-                            proxy:
-                                $('kintone-proxy')?.value.trim() ||
-                                kintoneSettings.proxy ||
-                                ''
-                        };
+---
 
-                        const result =
-                            await api(
-                                'test_kintone',
-                                payload
-                            );
+## 87. 日時
 
-                        renderMessage(
-                            result.message ||
-                            'キントーンへの接続に成功しました。',
-                            'success'
-                        );
+日時はサーバー側で統一した形式で保存する。
 
-                        showToast(
-                            '接続テストに成功しました。'
-                        );
+保存する日時にはタイムゾーンを明示する。
 
-                    } catch (error) {
+以下で異なる日時基準を使用してはならない。
 
-                        renderMessage(
-                            error instanceof Error
-                                ? error.message
-                                : 'キントーンへの接続に失敗しました。',
-                            'error'
-                        );
+- 作成日時
+- 更新日時
+- 公開開始日時
+- 公開終了日時
+- 回答日時
+- メール送信日時
 
-                    } finally {
+---
 
-                        testButton.disabled =
-                            false;
+## 88. データ版管理
 
-                        testButton.classList.remove(
-                            'loading'
-                        );
+アンケート、設定など同時更新の影響を受けるデータには版情報を持たせる。
 
-                        testButton.textContent =
-                            originalText;
-                    }
-                }
-            );
-        }
-    }
-
-
-    function openModal(
-        title,
-        message,
-        detail
-    ) {
-
-        const modal =
-            $('modal');
-
-        const modalTitle =
-            $('modal-title');
-
-        const modalBody =
-            $('modal-body');
-
-        const modalFooter =
-            $('modal-footer');
-
-        if (!modal) {
-            return;
-        }
-
-        if (modalTitle) {
-            modalTitle.textContent =
-                title || '';
-        }
-
-        if (modalBody) {
-
-            modalBody.textContent = '';
-
-            const messageElement =
-                document.createElement('p');
-
-            messageElement.textContent =
-                message || '';
-
-            modalBody.appendChild(
-                messageElement
-            );
-
-            if (detail) {
-
-                const detailElement =
-                    document.createElement('p');
-
-                detailElement.className =
-                    'modal-detail';
-
-                detailElement.textContent =
-                    detail;
-
-                modalBody.appendChild(
-                    detailElement
-                );
-            }
-        }
-
-        if (modalFooter) {
-
-            modalFooter.textContent = '';
-
-            const closeButton =
-                document.createElement('button');
-
-            closeButton.type =
-                'button';
-
-            closeButton.className =
-                'btn btn-primary';
-
-            closeButton.textContent =
-                '閉じる';
-
-            closeButton.addEventListener(
-                'click',
-                function () {
-                    closeModal();
-                }
-            );
-
-            modalFooter.appendChild(
-                closeButton
-            );
-        }
+保存時に画面が取得した版と現在の版を比較する。
 
-        modal.classList.remove('hidden');
-    }
-
-
-    function closeModal() {
-
-        const modal =
-            $('modal');
-
-        if (modal) {
-            modal.classList.add('hidden');
-        }
-    }
-
-
-    const navList =
-        $('nav-list');
-
-    if (navList) {
-
-        navList.addEventListener(
-            'click',
-            function () {
-
-                showPage('list');
-
-                renderList();
-            }
-        );
-    }
-
+一致しない場合は保存せず、HTTP 409を返す。
 
-    const navCreate =
-        $('nav-create');
+---
 
-    if (navCreate) {
+## 89. モックとの対応
 
-        navCreate.addEventListener(
-            'click',
-            function () {
+本番版ではモックで確認できる以下の業務フローを維持する。
 
-                openCreate();
-            }
-        );
-    }
-
-
-    const navCustomers =
-        $('nav-customers');
+- アンケート一覧
+- アンケート作成
+- アンケート編集
+- アンケート内容確認
+- 顧客一覧
+- 設定
+- メール設定
+- kintone設定
+- 顧客選択
+- メール送信確認
+- メール送信
+- 送信結果
+- 回答状況
+- 回答結果
+- 公開
+- 終了
 
-    if (navCustomers) {
+モック上でJavaScript変数だけを変更している処理についても、本番版では必要なデータをサーバー側へ保存する。
 
-        navCustomers.addEventListener(
-            'click',
-            function () {
+---
 
-                showPage('customers');
+## 90. 業務画面の使い勝手
 
-                renderCustomers();
+以下を維持する。
 
-                renderCustomerStatus();
-            }
-        );
-    }
-
+- アンケート作成・編集は1画面で行う
+- グループ追加はグループ末尾
+- 質問追加はグループ内末尾
+- 質問を並べ替えられる
+- グループを並べ替えられる
+- 質問番号を自動更新する
+- 未保存状態を利用者へ知らせる
+- 操作結果を画面上で確認できる
+- 設定状態を分かりやすく表示する
 
-    const navSettings =
-        $('nav-settings');
+---
 
-    if (navSettings) {
+## 91. 未保存変更
 
-        navSettings.addEventListener(
-            'click',
-            function () {
+アンケート編集中に保存せず別画面へ移動する場合は、未保存変更があることを知らせる。
 
-                showPage('settings');
+利用者が意図せず編集内容を失わないようにする。
 
-                currentSettingsTab =
-                    'mail';
-
-                renderSettings();
-            }
-        );
-    }
+---
 
+## 92. エラー表示
 
-    const btnCreate =
-        $('btn-create');
+利用者向けエラーは、次に何を確認すべきか判断できる内容とする。
 
-    if (btnCreate) {
+例：
 
-        btnCreate.addEventListener(
-            'click',
-            function () {
+    メール設定を保存できませんでした。
+    入力内容または保存状態を確認してください。
 
-                openCreate();
-            }
-        );
-    }
+    セッションの有効期限が切れています。
+    画面を再読み込みしてもう一度お試しください。
 
+内部エラー情報、認証情報、ファイルパスなどをそのまま表示しない。
 
-    const btnEditorBack =
-        $('btn-editor-back');
+---
 
-    if (btnEditorBack) {
+## 93. 例外・想定外入力
 
-        btnEditorBack.addEventListener(
-            'click',
-            function () {
+以下の場合でもアプリ全体を停止させず、安全なエラーとして処理する。
 
-                showPage('list');
+- 不正なaction
+- 不正なJSON
+- 必須パラメータ欠落
+- 型不正
+- 存在しないID
+- 不正な状態遷移
+- 期限切れデータ
+- CSRF不正
+- セッション不正
+- JSONファイル破損
+- 外部通信失敗
+- SMTP通信失敗
+- kintone通信失敗
 
-                renderList();
-            }
-        );
-    }
+---
 
+## 94. 状態遷移
 
-    const btnSaveSurvey =
-        $('btn-save-survey');
+アンケート状態は以下の遷移だけを許可する。
 
-    if (btnSaveSurvey) {
+    draft → open
+    open → closed
 
-        btnSaveSurvey.addEventListener(
-            'click',
-            async function () {
+draftからclosedへ直接変更してはならない。
 
-                btnSaveSurvey.disabled = true;
+openからdraftへ戻してはならない。
 
-                btnSaveSurvey.classList.add(
-                    'loading'
-                );
+closedからopenへ戻してはならない。
 
-                const originalText =
-                    btnSaveSurvey.textContent;
+状態変更時はサーバー側で現在状態を確認する。
 
-                btnSaveSurvey.textContent = '';
+---
 
-                const spinner =
-                    document.createElement(
-                        'span'
-                    );
+## 95. 公開状態と回答受付
 
-                spinner.className =
-                    'spinner';
+アンケートがopenであるだけでは回答受付可能とは限らない。
 
-                btnSaveSurvey.appendChild(
-                    spinner
-                );
+回答可能条件は以下をすべて満たすこととする。
 
-                btnSaveSurvey.appendChild(
-                    document.createTextNode(
-                        '保存中...'
-                    )
-                );
+- アンケートが存在する
+- statusがopen
+- 公開開始日時を過ぎている
+- 公開終了日時が設定されている場合は終了日時前
+- 回答者用識別情報が有効
+- 回答済みではない
 
-                try {
+---
 
-                    const name =
-                        $('survey-name')?.value.trim() ||
-                        '';
+## 96. 回答者用画面のアクセス制御
 
-                    if (!name) {
+回答者用URLへアクセスした場合、サーバー側でアンケートの状態と公開期間を確認する。
 
-                        throw new Error(
-                            'アンケート名を入力してください。'
-                        );
-                    }
+draft、closed、公開期間外の場合は回答画面を表示しない。
 
-                    const payload = {
+回答者用URLから運営者用APIを呼び出せる構成にしてはならない。
 
-                        name: name,
+---
 
-                        description:
-                            $('survey-description')?.value.trim() ||
-                            '',
+## 97. 回答内容の保存単位
 
-                        status:
-                            $('survey-status')?.value ||
-                            'draft',
+回答は質問単位で保存できる構造とする。
 
-                        start:
-                            $('survey-start')?.value ||
-                            '',
+質問IDだけでなく、回答時点のアンケート版を保存する。
 
-                        end:
-                            $('survey-end')?.value ||
-                            '',
+選択肢についても回答時点の選択肢を特定できる情報を保持する。
 
-                        question:
-                            $('question-text')?.value.trim() ||
-                            '',
+これにより将来のアンケート変更によって過去回答の意味が変化しないようにする。
 
-                        questionType:
-                            $('question-type')?.value ||
-                            'single'
-                    };
+---
 
-                    const result =
-                        await api(
-                            'save_survey',
-                            payload
-                        );
+## 98. API入力値
 
-                    if (
-                        Array.isArray(
-                            result.surveys
-                        )
-                    ) {
+APIから受け取った値はすべてサーバー側で検証する。
 
-                        surveys =
-                            result.surveys;
+ブラウザ側で、
 
-                    }
+- disabled
+- required
+- maxlength
+- type
 
-                    showToast(
-                        result.message ||
-                        'アンケートを保存しました。'
-                    );
+などが設定されていても、それだけでは入力値が正しいとは判断しない。
 
-                    showPage('list');
+---
 
-                    renderList();
+## 99. API出力値
 
-                } catch (error) {
+APIレスポンスには、そのAPIを利用する画面に必要な情報だけを返す。
 
-                    openModal(
-                        '保存できませんでした',
-                        error instanceof Error
-                            ? error.message
-                            : 'アンケートの保存に失敗しました。',
-                        ''
-                    );
+不要な設定情報、認証情報、内部データ、ファイルパスなどを返さない。
 
-                } finally {
+---
 
-                    btnSaveSurvey.disabled =
-                        false;
+## 100. ログ
 
-                    btnSaveSurvey.classList.remove(
-                        'loading'
-                    );
+ログへ機密情報を出力しない。
 
-                    btnSaveSurvey.textContent =
-                        originalText;
-                }
-            }
-        );
-    }
+特に以下をログへ出力してはならない。
 
+- パスワード
+- Authorization
+- Base64認証情報
+- CSRFトークン
+- セッションID
+- メール本文中の秘密情報
+- 認証用URLの秘密部分
 
-    const mailTab =
-        $('settings-tab-mail');
+エラー調査に必要な場合は、機密情報を除いた識別情報を使用する。
 
-    if (mailTab) {
+---
 
-        mailTab.addEventListener(
-            'click',
-            function () {
+## 101. 完了条件
 
-                currentSettingsTab =
-                    'mail';
+### アプリ基本機能
 
-                renderSettings();
-            }
-        );
-    }
+- アンケートを作成できる
+- アンケートを編集できる
+- アンケートを保存できる
+- アンケートを公開できる
+- アンケートを終了できる
+- draftアンケートを削除できる
 
+### メール
 
-    const kintoneTab =
-        $('settings-tab-kintone');
+- メール設定を保存できる
+- ページ再読み込み後も設定が保持される
+- SMTP接続確認ができる
+- 顧客を選択できる
+- メール送信確認ができる
+- メール送信ができる
+- 送信結果を確認できる
+- 失敗者を確認できる
+- 再送対象を選択できる
+- 二重送信を防止できる
 
-    if (kintoneTab) {
+### kintone
 
-        kintoneTab.addEventListener(
-            'click',
-            function () {
+- kintone設定を保存できる
+- kintone接続確認ができる
+- プロキシを利用できる
+- 顧客一覧を取得できる
+- 顧客情報を保存できる
+- 顧客一覧を更新できる
+- 全件取得が必要な場合に全件取得できる
 
-                currentSettingsTab =
-                    'kintone';
+### 回答
 
-                renderSettings();
-            }
-        );
-    }
+- 公開中のアンケートへアクセスできる
+- 公開期間を正しく判定できる
+- 回答者画面に運営者メニューを表示しない
+- 必須回答を検証できる
+- 回答形式を検証できる
+- 分岐を正しく処理できる
+- 回答を保存できる
+- 二重送信を防止できる
+- 顧客一覧にない回答者からも回答できる
+- 回答完了を表示できる
 
+### 集計
 
-    const modalClose =
-        $('modal-close');
+- 総回答数を確認できる
+- 回答者数を確認できる
+- 回答率を確認できる
+- 未回答数を確認できる
+- 単一選択を集計できる
+- 複数選択を集計できる
+- 自由記述を一覧表示できる
+- 顧客一覧にない回答者も集計される
 
-    if (modalClose) {
+### JSONデータ
 
-        modalClose.addEventListener(
-            'click',
-            function () {
+- JSONをUTF-8で保存できる
+- JSON破損を検出できる
+- JSON保存競合を検出できる
+- 保存失敗時に既存データを維持できる
+- 保存後に再読み込み確認できる
+- JSONファイルをブラウザから直接取得できない
 
-                closeModal();
-            }
-        );
-    }
+### セキュリティ
 
+- CSRF対策がすべての状態変更処理に適用されている
+- XSS対策が適用されている
+- パスワードが画面へ返らない
+- パスワードがログへ出力されない
+- CSRFトークンが画面・ログへ漏れない
+- セッション情報が漏れない
+- 任意の外部OriginからAPIを利用できない
+- Origin:nullを許可するCORS設定を行っていない
+- JSONファイルへ直接アクセスできない
 
-    const modal =
-        $('modal');
+### 通信
 
-    if (modal) {
+- index.phpをHTTP/HTTPSで直接開ける
+- API URLが現在のindex.phpを基準として生成される
+- 実行環境固有のホスト名をJavaScriptへ固定記述しない
+- 実行環境固有のIPアドレスを固定記述しない
+- 実行環境固有のポートを固定記述しない
+- fetchの二重送信を防止できる
+- ボタンを通信開始前に無効化する
+- ローディング表示を行う
+- finallyでボタンを再有効化する
+- APIエラーを利用者へ適切に表示する
+- JSON以外の不正なAPIレスポンスを適切に扱える
 
-        modal.addEventListener(
-            'click',
-            function (event) {
+### 実行環境
 
-                if (
-                    event.target === modal
-                ) {
+- Apache 2.4で動作する
+- PHP 8.4で動作する
+- PHP 8.5で動作する
+- Windows環境で動作する
+- Unix環境で動作する
+- データベースを必要としない
+- index.php 1ファイルで構成される
+- cURLを使用しない
+- UTF-8で動作する
 
-                    closeModal();
-                }
-            }
-        );
-    }
+---
 
+## 102. 今回のCORS障害に関する完了条件
 
-    renderList();
+今回の障害については、CORSを緩和することで解決した状態を完了とはしない。
 
-});
-</script>
+以下をすべて満たすことを完了条件とする。
 
-</body>
-</html>
+- index.phpをApacheのHTTPまたはHTTPS URLから直接開ける
+- 実行環境固有のホスト名をコードへ固定していない
+- JavaScriptから現在のindex.php自身へAPI通信できる
+- アプリ内部APIが同一オリジンで動作する
+- Origin:nullを許可するCORS設定を行っていない
+- セッションCookieが維持される
+- CSRF検証が正常に機能する
+- save_mail_settingsが同一オリジンで正常に実行できる
+- メール設定保存後にJSONへ正しく保存される
+- ページ再読み込み後に保存値が正しく読み込まれる
+- 保存失敗時に入力内容が失われない
+- APIエラー時にHTMLとJSONが混在しない
+- API処理終了後に余分なHTMLを出力しない
 
