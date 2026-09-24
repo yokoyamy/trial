@@ -1,115 +1,1281 @@
 <?php
-namespace yokoyamy\trial\newapp;
+namespace yokoyamy\trial\NewApp;
 
-session_start([
-    'cookie_httponly' => true,
-    'cookie_samesite' => 'Lax'
-]);
+use RuntimeException;
+
+/**
+ * アンケート業務運営アプリ
+ * 単一 index.php
+ * PHP 8.4 / 8.5
+ */
+
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start([
+        'cookie_httponly' => true,
+        'cookie_samesite' => 'Lax'
+    ]);
+}
 
 header('X-Frame-Options: SAMEORIGIN');
 header('X-Content-Type-Options: nosniff');
 
-if (!isset($_SESSION['yokoyamy_trial_newapp']['csrf_token'])) {
-    $_SESSION['yokoyamy_trial_newapp']['csrf_token'] = bin2hex(random_bytes(32));
+const APP_SESSION_KEY = 'yokoyamy_trial_newapp';
+const DATA_DIR = __DIR__ . DIRECTORY_SEPARATOR . 'data';
+const SETTINGS_FILE = DATA_DIR . DIRECTORY_SEPARATOR . 'settings.json';
+const SURVEYS_FILE = DATA_DIR . DIRECTORY_SEPARATOR . 'surveys.json';
+
+if (!isset($_SESSION[APP_SESSION_KEY]) || !is_array($_SESSION[APP_SESSION_KEY])) {
+    $_SESSION[APP_SESSION_KEY] = [];
 }
 
-function h(?string $str): string {
+if (
+    !isset($_SESSION[APP_SESSION_KEY]['csrf_token']) ||
+    !is_string($_SESSION[APP_SESSION_KEY]['csrf_token']) ||
+    $_SESSION[APP_SESSION_KEY]['csrf_token'] === ''
+) {
+    $_SESSION[APP_SESSION_KEY]['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+/**
+ * 安全な文字列エスケープ
+ */
+function h(?string $str): string
+{
     return htmlspecialchars($str ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
+
+/**
+ * JSONファイルを安全に読み込む
+ */
+function read_json_file(string $file, array $default): array
+{
+    if (!is_file($file)) {
+        return $default;
+    }
+
+    $contents = @file_get_contents($file);
+    if ($contents === false || trim($contents) === '') {
+        return $default;
+    }
+
+    $data = json_decode($contents, true);
+
+    return is_array($data) ? $data : $default;
+}
+
+/**
+ * JSONファイルへ保存
+ */
+function write_json_file(string $file, array $data): void
+{
+    if (!is_dir(DATA_DIR)) {
+        if (!@mkdir(DATA_DIR, 0755, true) && !is_dir(DATA_DIR)) {
+            throw new RuntimeException('データ保存用フォルダを作成できません。');
+        }
+    }
+
+    $json = json_encode(
+        $data,
+        JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE
+    );
+
+    if ($json === false) {
+        throw new RuntimeException('データの保存形式を作成できません。');
+    }
+
+    $tmp = $file . '.tmp';
+
+    if (@file_put_contents($tmp, $json, LOCK_EX) === false) {
+        throw new RuntimeException('データを保存できません。');
+    }
+
+    if (!@rename($tmp, $file)) {
+        @unlink($tmp);
+        throw new RuntimeException('データを確定保存できません。');
+    }
+
+    @chmod($file, 0600);
+}
+
+/**
+ * JSONレスポンス
+ */
+function json_response(array $response): void
+{
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+
+    header('Content-Type: application/json; charset=utf-8');
+
+    echo json_encode(
+        $response,
+        JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
+    );
+
+    exit;
+}
+
+/**
+ * CSRF確認
+ */
+function verify_csrf(): void
+{
+    $token = '';
+
+    if (isset($_SERVER['HTTP_X_CSRF_TOKEN'])) {
+        $token = (string)$_SERVER['HTTP_X_CSRF_TOKEN'];
+    } elseif (isset($_POST['csrf_token'])) {
+        $token = (string)$_POST['csrf_token'];
+    }
+
+    $sessionToken = (string)($_SESSION[APP_SESSION_KEY]['csrf_token'] ?? '');
+
+    if (
+        $token === '' ||
+        $sessionToken === '' ||
+        !hash_equals($sessionToken, $token)
+    ) {
+        json_response([
+            'success' => false,
+            'message' => 'セッションの確認に失敗しました。画面を再読み込みしてから、もう一度お試しください。'
+        ]);
+    }
+}
+
+/**
+ * POST JSON取得
+ */
+function get_request_json(): array
+{
+    $raw = file_get_contents('php://input');
+
+    if ($raw === false || trim($raw) === '') {
+        return [];
+    }
+
+    $data = json_decode($raw, true);
+
+    return is_array($data) ? $data : [];
+}
+
+/**
+ * 安全なエラー文言
+ */
+function safe_error_message(string $message): string
+{
+    $message = trim($message);
+
+    $message = preg_replace(
+        '/(?:password|passwd|pwd|token|authorization|secret)\s*[:=]\s*[^\s,;]+/i',
+        '$1: [非表示]',
+        $message
+    );
+
+    return $message !== ''
+        ? $message
+        : '処理中にエラーが発生しました。';
+}
+
+/**
+ * HTTPレスポンスヘッダー取得
+ */
+function get_safe_response_headers(): array
+{
+    if (function_exists('http_get_last_response_headers')) {
+        $headers = http_get_last_response_headers();
+
+        if (is_array($headers)) {
+            return $headers;
+        }
+    }
+
+    return [];
+}
+
+/**
+ * HTTPステータス取得
+ */
+function get_response_status(array $headers): int
+{
+    foreach ($headers as $header) {
+        if (preg_match('/HTTP\/\d(?:\.\d)?\s+(\d{3})/i', $header, $matches)) {
+            return (int)$matches[1];
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * kintone URL整形
+ */
+function kintone_build_url(string $domain, string $endpoint): string
+{
+    $domain = trim($domain);
+
+    $domain = preg_replace('/^https?:\/\//i', '', $domain);
+    $domain = preg_replace('/\.cybozu\.com.*$/i', '', $domain);
+    $domain = trim((string)$domain, "/ \t\n\r\0\x0B");
+
+    if ($domain === '') {
+        throw new RuntimeException('kintoneの利用先を入力してください。');
+    }
+
+    if (!preg_match('/^[a-zA-Z0-9][a-zA-Z0-9.-]*$/', $domain)) {
+        throw new RuntimeException('kintoneの利用先が正しくありません。');
+    }
+
+    $endpoint = '/' . ltrim($endpoint, '/');
+
+    return 'https://' . $domain . '.cybozu.com' . $endpoint;
+}
+
+/**
+ * プロキシ値を host:port として検証
+ */
+function normalize_proxy(string $proxy): string
+{
+    $proxy = trim($proxy);
+
+    if ($proxy === '') {
+        return '';
+    }
+
+    if (!preg_match('/^([a-zA-Z0-9.-]+):([0-9]{1,5})$/', $proxy, $matches)) {
+        throw new RuntimeException(
+            'プロキシは「ホスト名:ポート番号」の形式で入力してください。'
+        );
+    }
+
+    $port = (int)$matches[2];
+
+    if ($port < 1 || $port > 65535) {
+        throw new RuntimeException('プロキシのポート番号が正しくありません。');
+    }
+
+    return $matches[1] . ':' . $port;
+}
+
+/**
+ * kintone認証ヘッダー
+ */
+function make_cybozu_auth_header(string $loginName, string $password): string
+{
+    $loginName = trim($loginName);
+    $password = trim($password);
+
+    $auth = base64_encode($loginName . ':' . $password);
+
+    return 'X-Cybozu-Authorization: ' . $auth;
+}
+
+/**
+ * kintone API通信
+ * cURLは使用しない。
+ */
+function kintone_api_request(
+    string $method,
+    string $url,
+    array $headers,
+    $payload,
+    string $proxy
+): array {
+    $method = strtoupper($method);
+
+    $http = [
+        'method' => $method,
+        'header' => implode("\r\n", $headers),
+        'ignore_errors' => true,
+        'timeout' => 30,
+        'protocol_version' => 1.1
+    ];
+
+    if ($method !== 'GET' && $payload !== null) {
+        $body = is_array($payload)
+            ? json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)
+            : (string)$payload;
+
+        if ($body === false) {
+            throw new RuntimeException('送信データを作成できません。');
+        }
+
+        $http['content'] = $body;
+    }
+
+    $contextOptions = [
+        'http' => $http,
+        'ssl' => [
+            'verify_peer' => false,
+            'verify_peer_name' => false,
+            'allow_self_signed' => true
+        ]
+    ];
+
+    $proxy = normalize_proxy($proxy);
+
+    /*
+     * プロキシが設定されている場合は必ず
+     * proxy + request_fulluri を適用する。
+     */
+    if ($proxy !== '') {
+        $contextOptions['http']['proxy'] = 'tcp://' . $proxy;
+        $contextOptions['http']['request_fulluri'] = true;
+    }
+
+    $context = stream_context_create($contextOptions);
+
+    $responseBody = @file_get_contents($url, false, $context);
+    $headersReceived = get_safe_response_headers();
+    $status = get_response_status($headersReceived);
+
+    $decoded = [];
+
+    if ($responseBody !== false && trim($responseBody) !== '') {
+        $json = json_decode($responseBody, true);
+
+        if (is_array($json)) {
+            $decoded = $json;
+        }
+    }
+
+    if ($status >= 200 && $status < 300) {
+        return [
+            'success' => true,
+            'status' => $status,
+            'data' => $decoded
+        ];
+    }
+
+    $message = 'kintone APIへの通信に失敗しました。';
+
+    if (isset($decoded['message']) && is_string($decoded['message'])) {
+        $message = $decoded['message'];
+    }
+
+    $details = [];
+
+    if (isset($decoded['code']) && is_string($decoded['code'])) {
+        $details[] = 'コード: ' . $decoded['code'];
+    }
+
+    if (
+        isset($decoded['errors']) &&
+        is_array($decoded['errors'])
+    ) {
+        foreach ($decoded['errors'] as $field => $error) {
+            if (!is_array($error)) {
+                continue;
+            }
+
+            if (
+                isset($error['messages']) &&
+                is_array($error['messages'])
+            ) {
+                foreach ($error['messages'] as $errorMessage) {
+                    if (is_string($errorMessage)) {
+                        $details[] = (string)$field . ': ' . $errorMessage;
+                    }
+                }
+            }
+        }
+    }
+
+    if (!empty($details)) {
+        $message .= ' ' . implode(' / ', $details);
+    }
+
+    if ($status > 0) {
+        $message .= '（HTTP ' . $status . '）';
+    }
+
+    return [
+        'success' => false,
+        'status' => $status,
+        'message' => safe_error_message($message),
+        'data' => $decoded
+    ];
+}
+
+/**
+ * SMTPレスポンス読み取り
+ */
+function smtp_read($socket): string
+{
+    $response = '';
+
+    while (!feof($socket)) {
+        $line = fgets($socket, 515);
+
+        if ($line === false) {
+            break;
+        }
+
+        $response .= $line;
+
+        if (isset($line[3]) && $line[3] === ' ') {
+            break;
+        }
+    }
+
+    return $response;
+}
+
+/**
+ * SMTPコマンド
+ */
+function smtp_command($socket, string $command, array $expectedCodes): string
+{
+    fwrite($socket, $command . "\r\n");
+
+    $response = smtp_read($socket);
+
+    $code = (int)substr(trim($response), 0, 3);
+
+    if (!in_array($code, $expectedCodes, true)) {
+        throw new RuntimeException(
+            'メールサーバーとの通信に失敗しました。'
+        );
+    }
+
+    return $response;
+}
+
+/**
+ * メールアドレス検証
+ */
+function validate_email_address(string $email): bool
+{
+    return filter_var($email, FILTER_VALIDATE_EMAIL) !== false;
+}
+
+/**
+ * SMTPでテストメールを送信
+ *
+ * STARTTLS:
+ *   通常接続 → EHLO → STARTTLS → TLS化 → EHLO
+ *
+ * SSL/TLS:
+ *   ssl:// で接続
+ */
+function smtp_send_test_mail(array $settings, string $to): void
+{
+    $server = trim((string)($settings['smtp'] ?? ''));
+    $port = (int)($settings['port'] ?? 0);
+    $security = (string)($settings['security'] ?? 'STARTTLS');
+    $username = trim((string)($settings['username'] ?? ''));
+    $password = (string)($settings['password'] ?? '');
+    $from = trim((string)($settings['from'] ?? ''));
+    $fromName = trim((string)($settings['fromName'] ?? ''));
+
+    if ($server === '' || $port < 1 || $port > 65535) {
+        throw new RuntimeException('SMTPサーバーとポート番号を確認してください。');
+    }
+
+    if (!validate_email_address($from)) {
+        throw new RuntimeException('送信元メールアドレスが正しくありません。');
+    }
+
+    if (!validate_email_address($to)) {
+        throw new RuntimeException('テスト送信先メールアドレスが正しくありません。');
+    }
+
+    if (!in_array($security, ['なし', 'STARTTLS', 'SSL/TLS'], true)) {
+        throw new RuntimeException('メール接続方式が正しくありません。');
+    }
+
+    $remote = $security === 'SSL/TLS'
+        ? 'ssl://' . $server . ':' . $port
+        : 'tcp://' . $server . ':' . $port;
+
+    $context = stream_context_create([
+        'ssl' => [
+            'verify_peer' => false,
+            'verify_peer_name' => false,
+            'allow_self_signed' => true
+        ]
+    ]);
+
+    $socket = @stream_socket_client(
+        $remote,
+        $errno,
+        $errstr,
+        20,
+        STREAM_CLIENT_CONNECT,
+        $context
+    );
+
+    if ($socket === false) {
+        throw new RuntimeException(
+            'SMTPサーバーへ接続できませんでした。サーバー名、ポート番号、ネットワーク環境を確認してください。'
+        );
+    }
+
+    stream_set_timeout($socket, 20);
+
+    try {
+        $greeting = smtp_read($socket);
+
+        if ((int)substr(trim($greeting), 0, 3) !== 220) {
+            throw new RuntimeException('SMTPサーバーから正常な応答がありません。');
+        }
+
+        smtp_command(
+            $socket,
+            'EHLO localhost',
+            [250]
+        );
+
+        if ($security === 'STARTTLS') {
+            smtp_command(
+                $socket,
+                'STARTTLS',
+                [220]
+            );
+
+            $crypto = @stream_socket_enable_crypto(
+                $socket,
+                true,
+                STREAM_CRYPTO_METHOD_TLS_CLIENT
+            );
+
+            if ($crypto !== true) {
+                throw new RuntimeException(
+                    'STARTTLSによる暗号化を開始できませんでした。'
+                );
+            }
+
+            smtp_command(
+                $socket,
+                'EHLO localhost',
+                [250]
+            );
+        }
+
+        if ($username !== '') {
+            smtp_command(
+                $socket,
+                'AUTH LOGIN',
+                [334]
+            );
+
+            smtp_command(
+                $socket,
+                base64_encode($username),
+                [334]
+            );
+
+            smtp_command(
+                $socket,
+                base64_encode($password),
+                [235]
+            );
+        }
+
+        smtp_command(
+            $socket,
+            'MAIL FROM:<' . $from . '>',
+            [250]
+        );
+
+        smtp_command(
+            $socket,
+            'RCPT TO:<' . $to . '>',
+            [250, 251]
+        );
+
+        smtp_command(
+            $socket,
+            'DATA',
+            [354]
+        );
+
+        $subject = 'アンケート業務運営：テストメール';
+
+        $encodedSubject = '=?UTF-8?B?' .
+            base64_encode($subject) .
+            '?=';
+
+        $displayFrom = $from;
+
+        if ($fromName !== '') {
+            $displayFrom =
+                '=?UTF-8?B?' .
+                base64_encode($fromName) .
+                '?= <' .
+                $from .
+                '>';
+        }
+
+        $body =
+            "アンケート業務運営アプリからのテストメールです。\r\n\r\n" .
+            "このメールを受信できれば、メール送信設定は利用可能です。\r\n";
+
+        $mailData =
+            'From: ' . $displayFrom . "\r\n" .
+            'To: ' . $to . "\r\n" .
+            'Subject: ' . $encodedSubject . "\r\n" .
+            'MIME-Version: 1.0' . "\r\n" .
+            'Content-Type: text/plain; charset=UTF-8' . "\r\n" .
+            'Content-Transfer-Encoding: 8bit' . "\r\n" .
+            "\r\n" .
+            $body .
+            "\r\n.";
+
+        fwrite($socket, $mailData . "\r\n");
+
+        $response = smtp_read($socket);
+
+        if ((int)substr(trim($response), 0, 3) !== 250) {
+            throw new RuntimeException(
+                'メール送信を完了できませんでした。'
+            );
+        }
+
+        smtp_command($socket, 'QUIT', [221]);
+    } finally {
+        fclose($socket);
+    }
+}
+
+/**
+ * 初期設定
+ */
+function default_settings(): array
+{
+    return [
+        'mail' => [
+            'smtp' => '',
+            'port' => '587',
+            'security' => 'STARTTLS',
+            'username' => '',
+            'password' => '',
+            'from' => '',
+            'fromName' => 'アンケート事務局',
+            'testTo' => ''
+        ],
+        'kintone' => [
+            'domain' => '',
+            'appId' => '',
+            'loginName' => '',
+            'password' => '',
+            'proxy' => '',
+            'nameField' => '',
+            'emailField' => '',
+            'companyField' => '',
+            'codeField' => ''
+        ]
+    ];
+}
+
+/**
+ * 初期アンケート
+ */
+function default_surveys(): array
+{
+    return [
+        [
+            'id' => 1,
+            'name' => '新商品アンケート',
+            'description' => '新商品の利用状況とご意見をお聞きするアンケートです。',
+            'status' => 'open',
+            'created' => '2026-09-01',
+            'start' => '2026-09-01',
+            'end' => '2026-09-30',
+            'answers' => 0,
+            'sent' => 0,
+            'updated' => '2026-09-24',
+            'numbering' => 'global',
+            'groups' => [
+                [
+                    'id' => 101,
+                    'name' => 'ご利用状況',
+                    'questions' => [
+                        [
+                            'id' => 1001,
+                            'text' => '当社の商品を利用したことがありますか？',
+                            'type' => 'single',
+                            'required' => true,
+                            'options' => [
+                                ['text' => 'はい', 'branch' => ''],
+                                ['text' => 'いいえ', 'branch' => '']
+                            ]
+                        ],
+                        [
+                            'id' => 1002,
+                            'text' => '商品についての満足度を教えてください。',
+                            'type' => 'single',
+                            'required' => true,
+                            'options' => [
+                                ['text' => '満足', 'branch' => ''],
+                                ['text' => '普通', 'branch' => ''],
+                                ['text' => '不満', 'branch' => '']
+                            ]
+                        ]
+                    ]
+                ],
+                [
+                    'id' => 102,
+                    'name' => 'ご意見',
+                    'questions' => [
+                        [
+                            'id' => 1003,
+                            'text' => '今後の商品についてご意見をお聞かせください。',
+                            'type' => 'free',
+                            'required' => false,
+                            'options' => []
+                        ]
+                    ]
+                ]
+            ]
+        ]
+    ];
+}
+
+$settings = read_json_file(SETTINGS_FILE, default_settings());
+$surveys = read_json_file(SURVEYS_FILE, default_surveys());
+
+/**
+ * アクション処理
+ */
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    verify_csrf();
+
+    $action = isset($_POST['action'])
+        ? (string)$_POST['action']
+        : '';
+
+    $request = get_request_json();
+
+    if (!empty($request['action'])) {
+        $action = (string)$request['action'];
+    }
+
+    try {
+        switch ($action) {
+            /**
+             * メール設定保存
+             */
+            case 'save_mail_settings':
+                $mail = isset($request['mail']) && is_array($request['mail'])
+                    ? $request['mail']
+                    : $_POST;
+
+                $smtp = trim((string)($mail['smtp'] ?? ''));
+                $port = trim((string)($mail['port'] ?? ''));
+                $security = (string)($mail['security'] ?? 'STARTTLS');
+                $username = trim((string)($mail['username'] ?? ''));
+                $password = (string)($mail['password'] ?? '');
+                $from = trim((string)($mail['from'] ?? ''));
+                $fromName = trim((string)($mail['fromName'] ?? ''));
+                $testTo = trim((string)($mail['testTo'] ?? ''));
+
+                if ($smtp === '' || $port === '' || $from === '') {
+                    throw new RuntimeException(
+                        'SMTPサーバー、ポート番号、送信元メールアドレスを入力してください。'
+                    );
+                }
+
+                if (!ctype_digit($port) || (int)$port < 1 || (int)$port > 65535) {
+                    throw new RuntimeException(
+                        'SMTPポート番号が正しくありません。'
+                    );
+                }
+
+                if (!in_array($security, ['なし', 'STARTTLS', 'SSL/TLS'], true)) {
+                    throw new RuntimeException(
+                        '接続方式が正しくありません。'
+                    );
+                }
+
+                if (!validate_email_address($from)) {
+                    throw new RuntimeException(
+                        '送信元メールアドレスが正しくありません。'
+                    );
+                }
+
+                if (!isset($settings['mail']) || !is_array($settings['mail'])) {
+                    $settings['mail'] = [];
+                }
+
+                $settings['mail']['smtp'] = $smtp;
+                $settings['mail']['port'] = $port;
+                $settings['mail']['security'] = $security;
+                $settings['mail']['username'] = $username;
+
+                if ($password !== '') {
+                    $settings['mail']['password'] = $password;
+                }
+
+                $settings['mail']['from'] = $from;
+                $settings['mail']['fromName'] = $fromName;
+                $settings['mail']['testTo'] = $testTo;
+
+                write_json_file(SETTINGS_FILE, $settings);
+
+                json_response([
+                    'success' => true,
+                    'message' => 'メール設定を保存しました。'
+                ]);
+
+            /**
+             * テストメール送信
+             */
+            case 'test_mail':
+                $mail = $settings['mail'] ?? [];
+
+                $to = trim((string)($request['to'] ?? ($mail['testTo'] ?? '')));
+
+                if (!validate_email_address($to)) {
+                    throw new RuntimeException(
+                        'テスト送信先メールアドレスを入力してください。'
+                    );
+                }
+
+                smtp_send_test_mail($mail, $to);
+
+                $settings['mail']['testTo'] = $to;
+                write_json_file(SETTINGS_FILE, $settings);
+
+                json_response([
+                    'success' => true,
+                    'message' => 'テストメールを送信しました。受信先をご確認ください。'
+                ]);
+
+            /**
+             * kintone設定保存
+             */
+            case 'save_kintone_settings':
+                $kt = isset($request['kintone']) && is_array($request['kintone'])
+                    ? $request['kintone']
+                    : [];
+
+                $domain = trim((string)($kt['domain'] ?? ''));
+                $appId = trim((string)($kt['appId'] ?? ''));
+                $loginName = trim((string)($kt['loginName'] ?? ''));
+                $password = (string)($kt['password'] ?? '');
+                $proxy = trim((string)($kt['proxy'] ?? ''));
+
+                if ($domain === '' || $appId === '' || $loginName === '') {
+                    throw new RuntimeException(
+                        'kintoneの利用先、アプリID、ログイン名を入力してください。'
+                    );
+                }
+
+                if (!ctype_digit($appId)) {
+                    throw new RuntimeException(
+                        'アプリIDは数字で入力してください。'
+                    );
+                }
+
+                kintone_build_url($domain, '/k/v1/apps.json');
+
+                $proxy = normalize_proxy($proxy);
+
+                if (!isset($settings['kintone']) || !is_array($settings['kintone'])) {
+                    $settings['kintone'] = [];
+                }
+
+                $settings['kintone']['domain'] = $domain;
+                $settings['kintone']['appId'] = $appId;
+                $settings['kintone']['loginName'] = $loginName;
+                $settings['kintone']['proxy'] = $proxy;
+
+                if ($password !== '') {
+                    $settings['kintone']['password'] = $password;
+                }
+
+                foreach ([
+                    'nameField',
+                    'emailField',
+                    'companyField',
+                    'codeField'
+                ] as $fieldName) {
+                    if (isset($kt[$fieldName])) {
+                        $settings['kintone'][$fieldName] =
+                            trim((string)$kt[$fieldName]);
+                    }
+                }
+
+                write_json_file(SETTINGS_FILE, $settings);
+
+                json_response([
+                    'success' => true,
+                    'message' => 'kintone設定を保存しました。'
+                ]);
+
+            /**
+             * kintone接続＋アプリ項目一覧取得
+             */
+            case 'test_kintone':
+                $kt = $settings['kintone'] ?? [];
+
+                $domain = trim((string)($kt['domain'] ?? ''));
+                $appId = trim((string)($kt['appId'] ?? ''));
+                $loginName = trim((string)($kt['loginName'] ?? ''));
+                $password = (string)($kt['password'] ?? '');
+                $proxy = trim((string)($kt['proxy'] ?? ''));
+
+                if ($domain === '' || $appId === '' || $loginName === '' || $password === '') {
+                    throw new RuntimeException(
+                        'kintoneの利用先、アプリID、ログイン名、パスワードを確認してください。'
+                    );
+                }
+
+                $proxy = normalize_proxy($proxy);
+
+                $headers = [
+                    make_cybozu_auth_header($loginName, $password),
+                    'Accept: application/json'
+                ];
+
+                $url = kintone_build_url(
+                    $domain,
+                    '/k/v1/app/form/fields.json'
+                );
+
+                $query = http_build_query(
+                    [
+                        'app' => $appId,
+                        'lang' => 'ja'
+                    ],
+                    '',
+                    '&',
+                    PHP_QUERY_RFC3986
+                );
+
+                $result = kintone_api_request(
+                    'GET',
+                    $url . '?' . $query,
+                    $headers,
+                    null,
+                    $proxy
+                );
+
+                if (!$result['success']) {
+                    throw new RuntimeException(
+                        safe_error_message((string)$result['message'])
+                    );
+                }
+
+                $properties = [];
+
+                if (
+                    isset($result['data']['properties']) &&
+                    is_array($result['data']['properties'])
+                ) {
+                    $properties = $result['data']['properties'];
+                }
+
+                $fields = [];
+
+                foreach ($properties as $code => $property) {
+                    if (!is_array($property)) {
+                        continue;
+                    }
+
+                    $fields[] = [
+                        'code' => (string)$code,
+                        'label' => (string)($property['label'] ?? $code),
+                        'type' => (string)($property['type'] ?? '')
+                    ];
+                }
+
+                usort(
+                    $fields,
+                    static function (array $a, array $b): int {
+                        return strcmp($a['code'], $b['code']);
+                    }
+                );
+
+                json_response([
+                    'success' => true,
+                    'message' => 'kintoneへの接続に成功しました。',
+                    'fields' => $fields,
+                    'fieldCount' => count($fields)
+                ]);
+
+            /**
+             * kintone顧客一覧取得
+             */
+            case 'get_customers':
+                $kt = $settings['kintone'] ?? [];
+
+                $domain = trim((string)($kt['domain'] ?? ''));
+                $appId = trim((string)($kt['appId'] ?? ''));
+                $loginName = trim((string)($kt['loginName'] ?? ''));
+                $password = (string)($kt['password'] ?? '');
+                $proxy = trim((string)($kt['proxy'] ?? ''));
+
+                $nameField = trim((string)($kt['nameField'] ?? ''));
+                $emailField = trim((string)($kt['emailField'] ?? ''));
+                $companyField = trim((string)($kt['companyField'] ?? ''));
+                $codeField = trim((string)($kt['codeField'] ?? ''));
+
+                if (
+                    $domain === '' ||
+                    $appId === '' ||
+                    $loginName === '' ||
+                    $password === ''
+                ) {
+                    throw new RuntimeException(
+                        'kintone設定を確認してください。'
+                    );
+                }
+
+                if ($nameField === '' || $emailField === '') {
+                    throw new RuntimeException(
+                        '顧客名項目とメールアドレス項目を設定してください。'
+                    );
+                }
+
+                $proxy = normalize_proxy($proxy);
+
+                $headers = [
+                    make_cybozu_auth_header($loginName, $password),
+                    'Accept: application/json'
+                ];
+
+                $queryString = 'order by $id asc limit 500';
+
+                $params = [
+                    'app' => $appId,
+                    'query' => $queryString
+                ];
+
+                $url = kintone_build_url(
+                    $domain,
+                    '/k/v1/records.json'
+                );
+
+                $query = http_build_query(
+                    $params,
+                    '',
+                    '&',
+                    PHP_QUERY_RFC3986
+                );
+
+                $result = kintone_api_request(
+                    'GET',
+                    $url . '?' . $query,
+                    $headers,
+                    null,
+                    $proxy
+                );
+
+                if (!$result['success']) {
+                    throw new RuntimeException(
+                        safe_error_message((string)$result['message'])
+                    );
+                }
+
+                $records = [];
+
+                if (
+                    isset($result['data']['records']) &&
+                    is_array($result['data']['records'])
+                ) {
+                    $records = $result['data']['records'];
+                }
+
+                $customers = [];
+
+                foreach ($records as $record) {
+                    if (!is_array($record)) {
+                        continue;
+                    }
+
+                    $getValue = static function (
+                        array $record,
+                        string $field
+                    ): string {
+                        if (
+                            !isset($record[$field]) ||
+                            !is_array($record[$field])
+                        ) {
+                            return '';
+                        }
+
+                        $value = $record[$field]['value'] ?? '';
+
+                        if (is_array($value)) {
+                            $values = [];
+
+                            foreach ($value as $item) {
+                                if (is_array($item) && isset($item['name'])) {
+                                    $values[] = (string)$item['name'];
+                                } elseif (is_scalar($item)) {
+                                    $values[] = (string)$item;
+                                }
+                            }
+
+                            return implode(', ', $values);
+                        }
+
+                        return is_scalar($value)
+                            ? (string)$value
+                            : '';
+                    };
+
+                    $customers[] = [
+                        'name' => $getValue($record, $nameField),
+                        'email' => $getValue($record, $emailField),
+                        'company' => $companyField !== ''
+                            ? $getValue($record, $companyField)
+                            : '',
+                        'code' => $codeField !== ''
+                            ? $getValue($record, $codeField)
+                            : ''
+                    ];
+                }
+
+                json_response([
+                    'success' => true,
+                    'message' => 'kintoneから顧客一覧を取得しました。',
+                    'customers' => $customers,
+                    'count' => count($customers)
+                ]);
+
+            /**
+             * アンケート保存
+             */
+            case 'save_surveys':
+                $incoming = $request['surveys'] ?? null;
+
+                if (!is_array($incoming)) {
+                    throw new RuntimeException(
+                        'アンケートデータが正しくありません。'
+                    );
+                }
+
+                write_json_file(SURVEYS_FILE, $incoming);
+                $surveys = $incoming;
+
+                json_response([
+                    'success' => true,
+                    'message' => 'アンケートを保存しました。'
+                ]);
+
+            default:
+                json_response([
+                    'success' => false,
+                    'message' => '指定された処理はありません。'
+                ]);
+        }
+    } catch (\Throwable $e) {
+        json_response([
+            'success' => false,
+            'message' => safe_error_message($e->getMessage())
+        ]);
+    }
+}
+
+$csrfToken = (string)$_SESSION[APP_SESSION_KEY]['csrf_token'];
+
+$mail = $settings['mail'] ?? [];
+$kintone = $settings['kintone'] ?? [];
 
 ?>
 <!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="csrf-token" content="<?= h($csrfToken) ?>">
 <title>アンケート業務運営</title>
+
 <style>
 *{box-sizing:border-box}
 body{
     margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Yu Gothic",Meiryo,sans-serif;
     color:#263238;
     background:#f4f6f8;
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Yu Gothic",Meiryo,sans-serif
 }
 button,input,textarea,select{font:inherit}
 button{cursor:pointer}
 button:disabled{cursor:not-allowed;opacity:.55}
 .topbar{
-    height:60px;
+    min-height:60px;
     background:#1f3a5f;
     color:#fff;
     display:flex;
     align-items:center;
     padding:0 24px;
-    gap:30px
+    gap:30px;
 }
 .logo{font-size:18px;font-weight:bold;white-space:nowrap}
-.main-nav{height:100%;display:flex;align-items:center;gap:2px}
-.main-nav button{
-    height:100%;
-    padding:0 17px;
-    border:0;
-    background:transparent;
-    color:#dce7f3
+.main-nav{
+    display:flex;
+    min-height:60px;
+    align-items:center;
+    gap:2px;
+    flex-wrap:wrap;
 }
-.main-nav button.active,
-.main-nav button:hover{background:#31557f;color:#fff}
-.app{max-width:1440px;margin:0 auto;padding:24px}
+.main-nav button{
+    min-height:60px;
+    padding:0 17px;
+    color:#dce7f3;
+    background:transparent;
+    border:0;
+}
+.main-nav button:hover,
+.main-nav button.active{
+    background:#31557f;
+    color:#fff
+}
+.app{
+    max-width:1440px;
+    margin:0 auto;
+    padding:24px
+}
 .hidden{display:none!important}
 .page-header{
     display:flex;
     justify-content:space-between;
     align-items:center;
     gap:20px;
-    margin-bottom:20px
+    margin-bottom:20px;
 }
 .page-header h1{margin:0;font-size:25px}
 .subtext{color:#718096;font-size:13px;margin-top:5px}
-.card{
-    background:#fff;
-    border:1px solid #dfe5eb;
-    border-radius:7px;
-    padding:20px;
-    margin-bottom:18px
-}
-.card-title{font-size:17px;font-weight:bold;margin-bottom:15px}
 .btn{
     border:1px solid #cbd5e0;
     background:#fff;
     color:#34495e;
     border-radius:5px;
-    padding:8px 15px
+    padding:8px 15px;
 }
+.btn:hover{background:#f7fafc}
 .btn-primary{background:#2878c8;border-color:#2878c8;color:#fff}
-.btn-danger{border-color:#e05a5a;color:#c53f3f}
-.btn-success{background:#2f855a;border-color:#2f855a;color:#fff}
-.btn-small{padding:5px 10px;font-size:12px}
-.table{width:100%;border-collapse:collapse}
+.btn-primary:hover{background:#2068ad}
+.btn-danger{border-color:#e05a5a;color:#c53f3f;background:#fff}
+.card{
+    background:#fff;
+    border:1px solid #dfe5eb;
+    border-radius:7px;
+    padding:20px;
+    margin-bottom:18px;
+}
+.card-title{font-size:17px;font-weight:bold;margin-bottom:15px}
+.table{
+    width:100%;
+    border-collapse:collapse
+}
 .table th,.table td{
     padding:12px 10px;
     border-bottom:1px solid #e6ebef;
     text-align:left;
     vertical-align:middle;
-    font-size:13px
+    font-size:13px;
 }
-.table th{background:#f8fafc;color:#52606d}
+.table th{background:#f8fafc;color:#52606d;font-weight:bold}
 .table tr:hover td{background:#fbfdff}
 .empty{text-align:center!important;color:#8a98a5;padding:40px!important}
-.badge{
-    display:inline-block;
-    padding:4px 9px;
-    border-radius:12px;
-    font-size:11px;
-    font-weight:bold
-}
-.badge-open{background:#e6f6ed;color:#237a49}
-.badge-draft{background:#edf2f7;color:#66788a}
-.badge-end{background:#fdecec;color:#b43b3b}
 .form-grid{
     display:grid;
     grid-template-columns:1fr 1fr;
-    gap:16px
+    gap:16px;
 }
 .field{margin-bottom:15px}
 .field label{
@@ -117,23 +1283,18 @@ button:disabled{cursor:not-allowed;opacity:.55}
     font-size:13px;
     font-weight:bold;
     margin-bottom:6px;
-    color:#455563
+    color:#455563;
 }
-.field input,.field textarea,.field select{
+.field input,
+.field textarea,
+.field select{
     width:100%;
     border:1px solid #cbd5e0;
     border-radius:5px;
     padding:9px 10px;
-    background:#fff
+    background:#fff;
 }
 .field textarea{min-height:90px;resize:vertical}
-.radio-row{display:flex;gap:22px;flex-wrap:wrap}
-.radio-row label{
-    font-weight:normal;
-    display:inline-flex;
-    align-items:center;
-    gap:5px
-}
 .notice{
     padding:11px 13px;
     border-radius:5px;
@@ -141,203 +1302,11 @@ button:disabled{cursor:not-allowed;opacity:.55}
     border:1px solid #c9e2fa;
     color:#2b5f8a;
     font-size:13px;
-    margin-bottom:15px
+    margin-bottom:15px;
 }
 .notice.success{background:#edf9f1;border-color:#c9ead5;color:#267348}
 .notice.warning{background:#fff8e6;border-color:#f0dfae;color:#8a6408}
-.group-card{
-    background:#fff;
-    border:1px solid #dfe5eb;
-    border-radius:7px;
-    margin-bottom:16px
-}
-.group-header{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    padding:13px 15px;
-    background:#f7f9fb;
-    border-bottom:1px solid #e3e8ed
-}
-.group-title{flex:1}
-.group-title input{
-    width:100%;
-    border:1px solid transparent;
-    background:transparent;
-    padding:5px 7px;
-    font-weight:bold;
-    font-size:16px
-}
-.group-actions{display:flex;gap:5px}
-.question-card{
-    padding:15px;
-    border-bottom:1px solid #e6ebef
-}
-.question-card:last-child{border-bottom:0}
-.question-head{
-    display:flex;
-    align-items:center;
-    gap:8px
-}
-.question-number{
-    width:65px;
-    color:#2878c8;
-    font-weight:bold;
-    flex:none
-}
-.question-title{flex:1}
-.question-title input{
-    width:100%;
-    border:1px solid #cbd5e0;
-    border-radius:4px;
-    padding:8px
-}
-.question-tools{display:flex;gap:6px}
-.question-tools select{
-    border:1px solid #cbd5e0;
-    border-radius:4px;
-    padding:6px
-}
-.question-meta{
-    display:flex;
-    gap:18px;
-    align-items:center;
-    margin-top:10px;
-    padding-left:65px;
-    color:#657786;
-    font-size:13px
-}
-.question-options{margin-top:12px;padding-left:65px}
-.option-row{
-    display:flex;
-    align-items:center;
-    gap:7px;
-    margin-bottom:7px
-}
-.option-row input{
-    flex:1;
-    border:1px solid #cbd5e0;
-    border-radius:4px;
-    padding:7px
-}
-.add-question-area{padding:12px 14px}
-.add-group-area{text-align:center;margin-top:8px}
-.editor-toolbar{
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    gap:10px;
-    margin-top:20px
-}
-.editor-actions{display:flex;gap:8px}
-.detail-tabs{
-    display:flex;
-    border-bottom:1px solid #dfe5eb;
-    margin-bottom:18px
-}
-.detail-tabs button{
-    border:0;
-    background:transparent;
-    padding:12px 20px;
-    color:#687887;
-    border-bottom:3px solid transparent
-}
-.detail-tabs button.active{
-    color:#2878c8;
-    border-bottom-color:#2878c8
-}
-.detail-summary{
-    display:grid;
-    grid-template-columns:repeat(4,1fr);
-    gap:14px;
-    margin-bottom:18px
-}
-.stat-card{
-    background:#fff;
-    border:1px solid #dfe5eb;
-    border-radius:7px;
-    padding:17px
-}
-.stat-label{color:#718096;font-size:12px}
-.stat-value{font-size:27px;font-weight:bold;margin-top:5px}
-.stat-note{font-size:11px;color:#8a98a5;margin-top:3px}
-.send-layout{
-    display:grid;
-    grid-template-columns:1.1fr .9fr;
-    gap:18px
-}
-.customer-toolbar{display:flex;gap:8px;margin-bottom:12px}
-.customer-toolbar input{flex:1}
-.customer-toolbar input,.customer-toolbar select{
-    border:1px solid #cbd5e0;
-    border-radius:5px;
-    padding:8px
-}
-.selection-summary{
-    padding:10px 12px;
-    background:#edf6ff;
-    color:#2b5f8a;
-    border-radius:5px;
-    margin-bottom:12px;
-    font-size:13px
-}
-.email-preview{
-    border:1px solid #dfe5eb;
-    border-radius:6px;
-    background:#fafbfc;
-    padding:15px;
-    white-space:pre-wrap;
-    min-height:150px;
-    font-size:13px
-}
-.recipient-chip{
-    display:inline-block;
-    padding:5px 8px;
-    margin:3px;
-    border-radius:4px;
-    background:#edf2f7;
-    font-size:12px
-}
-.progress{
-    height:10px;
-    background:#e8edf2;
-    border-radius:5px;
-    overflow:hidden;
-    margin-top:8px
-}
-.progress span{display:block;height:100%;background:#4285c5}
-.bar{
-    height:9px;
-    background:#e8edf2;
-    border-radius:5px;
-    overflow:hidden;
-    margin-top:6px
-}
-.bar span{display:block;height:100%;background:#4285c5}
-.result-item{
-    padding:18px;
-    border-bottom:1px solid #e6ebef
-}
-.result-answer{
-    padding:8px 10px;
-    background:#f7f9fb;
-    border:1px solid #e6ebef;
-    border-radius:4px;
-    margin:5px 0;
-    font-size:13px
-}
-.settings-tabs{display:flex;gap:5px;margin-bottom:18px}
-.settings-tabs button{
-    border:1px solid #d6dee6;
-    background:#fff;
-    padding:9px 16px;
-    border-radius:5px
-}
-.settings-tabs button.active{
-    background:#2878c8;
-    color:#fff;
-    border-color:#2878c8
-}
+.notice.error{background:#fff0f0;border-color:#f0c5c5;color:#b43b3b}
 .status-line{
     display:flex;
     align-items:center;
@@ -345,16 +1314,143 @@ button:disabled{cursor:not-allowed;opacity:.55}
     padding:10px 12px;
     background:#f7f9fb;
     border-radius:5px;
-    margin-bottom:15px
+    margin-bottom:15px;
 }
 .status-dot{
     width:9px;
     height:9px;
     border-radius:50%;
-    background:#9aa7b3
+    background:#9aa7b3;
 }
 .status-dot.ok{background:#2f9e61}
 .status-dot.warn{background:#d39b25}
+.settings-tabs{
+    display:flex;
+    gap:5px;
+    margin-bottom:18px;
+}
+.settings-tabs button{
+    border:1px solid #d6dee6;
+    background:#fff;
+    padding:9px 16px;
+    border-radius:5px;
+}
+.settings-tabs button.active{
+    background:#2878c8;
+    color:#fff;
+    border-color:#2878c8
+}
+.actions{
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+    margin-top:15px;
+}
+.loading{
+    position:relative;
+    color:transparent!important;
+    pointer-events:none;
+}
+.loading:after{
+    content:"";
+    position:absolute;
+    width:14px;
+    height:14px;
+    border:2px solid rgba(255,255,255,.45);
+    border-top-color:#fff;
+    border-radius:50%;
+    left:50%;
+    top:50%;
+    margin:-7px 0 0 -7px;
+    animation:spin .7s linear infinite;
+}
+.btn:not(.btn-primary).loading:after{
+    border-color:rgba(40,120,200,.25);
+    border-top-color:#2878c8;
+}
+@keyframes spin{
+    to{transform:rotate(360deg)}
+}
+.field-list{
+    max-height:420px;
+    overflow:auto;
+    border:1px solid #dfe5eb;
+    border-radius:5px;
+}
+.field-row{
+    display:grid;
+    grid-template-columns:1.2fr 1fr 140px;
+    gap:10px;
+    padding:9px 12px;
+    border-bottom:1px solid #e6ebef;
+    font-size:13px;
+}
+.field-row:last-child{border-bottom:0}
+.field-row.header{
+    background:#f7f9fb;
+    font-weight:bold;
+}
+.customer-toolbar{
+    display:flex;
+    gap:8px;
+    margin-bottom:12px;
+}
+.customer-toolbar input{
+    flex:1;
+    border:1px solid #cbd5e0;
+    border-radius:5px;
+    padding:8px
+}
+.badge{
+    display:inline-block;
+    padding:4px 9px;
+    border-radius:12px;
+    font-size:11px;
+    font-weight:bold;
+}
+.badge-open{background:#e6f6ed;color:#237a49}
+.badge-draft{background:#edf2f7;color:#66788a}
+.badge-end{background:#fdecec;color:#b43b3b}
+.survey-card{
+    border:1px solid #dfe5eb;
+    background:#fff;
+    border-radius:7px;
+    padding:18px;
+    margin-bottom:15px;
+}
+.survey-card h3{margin:0 0 8px}
+.group{
+    border:1px solid #e1e7ec;
+    border-radius:6px;
+    margin:12px 0;
+    overflow:hidden;
+}
+.group-header{
+    padding:10px 12px;
+    background:#f7f9fb;
+    font-weight:bold;
+}
+.question{
+    padding:12px;
+    border-top:1px solid #e6ebef;
+}
+.question-title{
+    display:flex;
+    gap:10px;
+    align-items:center;
+}
+.question-number{
+    color:#2878c8;
+    font-weight:bold;
+    min-width:45px;
+}
+.question-options{
+    margin:8px 0 0 55px;
+}
+.option{
+    padding:4px 0;
+    color:#52606d;
+}
 .modal-backdrop{
     position:fixed;
     inset:0;
@@ -362,7 +1458,7 @@ button:disabled{cursor:not-allowed;opacity:.55}
     display:flex;
     align-items:center;
     justify-content:center;
-    z-index:1000
+    z-index:1000;
 }
 .modal{
     width:min(760px,calc(100% - 30px));
@@ -370,13 +1466,13 @@ button:disabled{cursor:not-allowed;opacity:.55}
     overflow:auto;
     background:#fff;
     border-radius:8px;
-    box-shadow:0 15px 50px rgba(0,0,0,.25)
+    box-shadow:0 15px 50px rgba(0,0,0,.25);
 }
 .modal-header{
     padding:16px 20px;
     border-bottom:1px solid #e3e8ed;
     display:flex;
-    justify-content:space-between
+    justify-content:space-between;
 }
 .modal-body{padding:20px}
 .modal-footer{
@@ -384,7 +1480,7 @@ button:disabled{cursor:not-allowed;opacity:.55}
     border-top:1px solid #e3e8ed;
     display:flex;
     justify-content:flex-end;
-    gap:8px
+    gap:8px;
 }
 .toast{
     position:fixed;
@@ -394,57 +1490,42 @@ button:disabled{cursor:not-allowed;opacity:.55}
     color:#fff;
     padding:12px 18px;
     border-radius:5px;
+    box-shadow:0 5px 20px rgba(0,0,0,.2);
     opacity:0;
     transform:translateY(10px);
     transition:.2s;
     pointer-events:none;
-    z-index:2000
+    z-index:2000;
 }
 .toast.show{opacity:1;transform:translateY(0)}
-.loading{
-    position:relative;
-    pointer-events:none
-}
-.loading:after{
-    content:"";
-    width:14px;
-    height:14px;
-    margin-left:7px;
-    display:inline-block;
-    vertical-align:-2px;
-    border:2px solid rgba(255,255,255,.45);
-    border-top-color:#fff;
-    border-radius:50%;
-    animation:spin .7s linear infinite
-}
-@keyframes spin{to{transform:rotate(360deg)}}
-@media(max-width:950px){
-    .send-layout{grid-template-columns:1fr}
-    .detail-summary{grid-template-columns:1fr 1fr}
-}
 @media(max-width:800px){
-    .topbar{padding:0 10px;gap:8px}
-    .logo{font-size:15px}
-    .main-nav button{padding:0 8px;font-size:12px}
+    .topbar{
+        padding:0 10px;
+        gap:8px;
+        flex-direction:column;
+        align-items:flex-start;
+    }
+    .main-nav{width:100%;overflow:auto}
+    .main-nav button{padding:0 10px}
     .app{padding:14px}
     .form-grid{grid-template-columns:1fr}
-    .question-head{align-items:flex-start;flex-wrap:wrap}
-    .question-title{min-width:70%}
-    .question-meta,.question-options{padding-left:0}
-    .table{min-width:800px}
-    .card{overflow-x:auto}
+    .field-row{grid-template-columns:1fr}
+    .customer-toolbar{flex-direction:column}
+    .page-header{align-items:flex-start;flex-direction:column}
 }
 </style>
 </head>
+
 <body>
 
 <header class="topbar">
     <div class="logo">アンケート業務運営</div>
+
     <nav class="main-nav">
-        <button id="nav-list">アンケート一覧</button>
-        <button id="nav-create">アンケート作成</button>
-        <button id="nav-customers">顧客一覧</button>
-        <button id="nav-settings">設定</button>
+        <button id="nav-list" data-page="page-list">アンケート一覧</button>
+        <button id="nav-create" data-page="page-editor">アンケート作成</button>
+        <button id="nav-customers" data-page="page-customers">顧客一覧</button>
+        <button id="nav-settings" data-page="page-settings">設定</button>
     </nav>
 </header>
 
@@ -456,44 +1537,31 @@ button:disabled{cursor:not-allowed;opacity:.55}
             <h1>アンケート一覧</h1>
             <div class="subtext">作成済みのアンケートを管理します</div>
         </div>
-        <button id="btn-create" class="btn btn-primary">＋ アンケート作成</button>
+        <button id="create-survey" class="btn btn-primary">
+            ＋ アンケート作成
+        </button>
     </div>
-    <div class="card">
-        <table class="table">
-            <thead>
-            <tr>
-                <th>アンケート名</th>
-                <th>状態</th>
-                <th>作成日</th>
-                <th>公開期間</th>
-                <th>回答数</th>
-                <th>最終更新日</th>
-                <th>操作</th>
-            </tr>
-            </thead>
-            <tbody id="survey-list-body"></tbody>
-        </table>
-    </div>
+
+    <div id="survey-list"></div>
 </section>
 
 <section id="page-editor" class="hidden">
     <div class="page-header">
         <div>
-            <h1 id="editor-page-title">アンケート作成</h1>
-            <div class="subtext">アンケート全体を編集できます</div>
+            <h1 id="editor-title">アンケート作成</h1>
+            <div class="subtext">
+                アンケート全体を確認しながら編集します
+            </div>
         </div>
-    </div>
-
-    <div class="notice">
-        質問とグループを編集できます。質問番号は自動的に更新されます。
     </div>
 
     <div class="card">
         <div class="form-grid">
             <div class="field">
                 <label>アンケート名 *</label>
-                <input id="survey-name" type="text" placeholder="例：新商品アンケート">
+                <input id="survey-name">
             </div>
+
             <div class="field">
                 <label>公開状態</label>
                 <select id="survey-status">
@@ -514,6 +1582,7 @@ button:disabled{cursor:not-allowed;opacity:.55}
                 <label>公開開始日</label>
                 <input id="survey-start" type="date">
             </div>
+
             <div class="field">
                 <label>公開終了日</label>
                 <input id="survey-end" type="date">
@@ -522,31 +1591,27 @@ button:disabled{cursor:not-allowed;opacity:.55}
 
         <div class="field">
             <label>質問番号</label>
-            <div class="radio-row">
-                <label>
-                    <input type="radio" name="numbering" value="global">
-                    全体で通番（Q1、Q2、Q3…）
-                </label>
-                <label>
-                    <input type="radio" name="numbering" value="group">
-                    グループごと（Q1-1、Q1-2、Q2-1…）
-                </label>
-            </div>
+
+            <select id="survey-numbering">
+                <option value="global">全体で通番（Q1、Q2、Q3…）</option>
+                <option value="group">グループごと（Q1-1、Q1-2…）</option>
+            </select>
         </div>
     </div>
 
-    <div id="groups"></div>
+    <div id="editor-groups"></div>
 
-    <div class="add-group-area">
-        <button id="btn-add-group" class="btn btn-primary">＋ グループ追加</button>
+    <div class="actions">
+        <button id="add-group" class="btn btn-primary">
+            ＋ グループ追加
+        </button>
     </div>
 
-    <div class="editor-toolbar">
-        <button id="btn-editor-back" class="btn">一覧へ戻る</button>
-        <div class="editor-actions">
-            <button id="btn-preview" class="btn">内容確認</button>
-            <button id="btn-save" class="btn btn-primary">保存</button>
-        </div>
+    <div class="actions">
+        <button id="editor-back" class="btn">一覧へ戻る</button>
+        <button id="save-survey" class="btn btn-primary">
+            保存
+        </button>
     </div>
 </section>
 
@@ -556,47 +1621,52 @@ button:disabled{cursor:not-allowed;opacity:.55}
             <h1 id="detail-title"></h1>
             <div class="subtext" id="detail-subtitle"></div>
         </div>
-        <div>
-            <button id="btn-detail-edit" class="btn">編集</button>
-            <button id="btn-detail-send" class="btn btn-primary">送信</button>
-            <button id="btn-detail-back" class="btn">一覧へ戻る</button>
+
+        <div class="actions">
+            <button id="detail-edit" class="btn">編集</button>
+            <button id="detail-send" class="btn btn-primary">送信</button>
+            <button id="detail-back" class="btn">一覧へ戻る</button>
         </div>
     </div>
 
-    <div class="detail-tabs">
-        <button id="tab-content">アンケート内容</button>
-        <button id="tab-send">送信</button>
-        <button id="tab-status">回答状況</button>
-        <button id="tab-result">回答結果</button>
-    </div>
-
-    <div id="detail-content"></div>
+    <div id="detail-body"></div>
 </section>
 
 <section id="page-customers" class="hidden">
     <div class="page-header">
         <div>
             <h1>顧客一覧</h1>
-            <div class="subtext">キントーンの顧客管理アプリから取得した顧客です</div>
+            <div class="subtext">
+                kintoneの顧客管理アプリから取得します
+            </div>
         </div>
-        <button id="btn-customer-settings" class="btn">キントーン設定</button>
+
+        <button id="customers-settings" class="btn">
+            kintone設定
+        </button>
     </div>
 
     <div id="customer-status"></div>
 
     <div class="card">
         <div class="customer-toolbar">
-            <input id="customer-search" placeholder="顧客名・メールアドレスで検索">
-            <button id="btn-refresh-customers" class="btn">顧客一覧を更新</button>
+            <input
+                id="customer-search"
+                placeholder="顧客名・メールアドレス・会社名などで検索"
+            >
+            <button id="refresh-customers" class="btn">
+                顧客一覧を更新
+            </button>
         </div>
+
         <table class="table">
             <thead>
-            <tr>
-                <th>顧客名</th>
-                <th>メールアドレス</th>
-                <th>会社名</th>
-                <th>顧客番号</th>
-            </tr>
+                <tr>
+                    <th>顧客名</th>
+                    <th>メールアドレス</th>
+                    <th>会社名</th>
+                    <th>顧客番号</th>
+                </tr>
             </thead>
             <tbody id="customer-body"></tbody>
         </table>
@@ -607,13 +1677,15 @@ button:disabled{cursor:not-allowed;opacity:.55}
     <div class="page-header">
         <div>
             <h1>設定</h1>
-            <div class="subtext">メール送信と顧客一覧取得に必要な設定を管理します</div>
+            <div class="subtext">
+                メール送信とkintone接続を設定します
+            </div>
         </div>
     </div>
 
     <div class="settings-tabs">
-        <button id="settings-tab-mail">メール送信設定</button>
-        <button id="settings-tab-kintone">キントーン設定</button>
+        <button id="tab-mail">メール送信設定</button>
+        <button id="tab-kintone">kintone設定</button>
     </div>
 
     <div id="settings-content"></div>
@@ -625,10 +1697,12 @@ button:disabled{cursor:not-allowed;opacity:.55}
     <div class="modal">
         <div class="modal-header">
             <strong id="modal-title"></strong>
-            <button id="modal-close" class="btn btn-small">閉じる</button>
+            <button id="modal-close" class="btn">閉じる</button>
         </div>
-        <div class="modal-body" id="modal-body"></div>
-        <div class="modal-footer" id="modal-footer"></div>
+
+        <div id="modal-body" class="modal-body"></div>
+
+        <div id="modal-footer" class="modal-footer"></div>
     </div>
 </div>
 
@@ -638,142 +1712,102 @@ button:disabled{cursor:not-allowed;opacity:.55}
 document.addEventListener('DOMContentLoaded', function () {
     'use strict';
 
-    var surveys = [
-        {
-            id:1,
-            name:'新商品アンケート',
-            description:'新商品の利用状況とご意見をお聞きするアンケートです。',
-            status:'open',
-            created:'2026-09-01',
-            start:'2026-09-01',
-            end:'2026-09-30',
-            answers:128,
-            target:200,
-            sent:195,
-            updated:'2026-09-20',
-            numbering:'global',
-            groups:[
-                {
-                    id:101,
-                    name:'ご利用状況',
-                    questions:[
-                        {
-                            id:1001,
-                            text:'当社の商品を利用したことがありますか？',
-                            type:'single',
-                            required:true,
-                            options:[
-                                {text:'はい',branch:''},
-                                {text:'いいえ',branch:'1003'}
-                            ]
-                        },
-                        {
-                            id:1002,
-                            text:'商品についての満足度を教えてください。',
-                            type:'single',
-                            required:true,
-                            options:[
-                                {text:'満足',branch:''},
-                                {text:'普通',branch:''},
-                                {text:'不満',branch:'1003'}
-                            ]
-                        }
-                    ]
-                },
-                {
-                    id:102,
-                    name:'ご意見',
-                    questions:[
-                        {
-                            id:1003,
-                            text:'今後の商品についてご意見をお聞かせください。',
-                            type:'free',
-                            required:false,
-                            options:[]
-                        }
-                    ]
-                }
+    var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+    var csrfToken = csrfMeta ? csrfMeta.getAttribute('content') : '';
+
+    var surveys = <?= json_encode(
+        $surveys,
+        JSON_UNESCAPED_UNICODE |
+        JSON_UNESCAPED_SLASHES |
+        JSON_INVALID_UTF8_SUBSTITUTE
+    ) ?>;
+
+    var settings = <?= json_encode(
+        [
+            'mail' => [
+                'smtp' => (string)($mail['smtp'] ?? ''),
+                'port' => (string)($mail['port'] ?? '587'),
+                'security' => (string)($mail['security'] ?? 'STARTTLS'),
+                'username' => (string)($mail['username'] ?? ''),
+                'from' => (string)($mail['from'] ?? ''),
+                'fromName' => (string)($mail['fromName'] ?? ''),
+                'testTo' => (string)($mail['testTo'] ?? '')
+            ],
+            'kintone' => [
+                'domain' => (string)($kintone['domain'] ?? ''),
+                'appId' => (string)($kintone['appId'] ?? ''),
+                'loginName' => (string)($kintone['loginName'] ?? ''),
+                'proxy' => (string)($kintone['proxy'] ?? ''),
+                'nameField' => (string)($kintone['nameField'] ?? ''),
+                'emailField' => (string)($kintone['emailField'] ?? ''),
+                'companyField' => (string)($kintone['companyField'] ?? ''),
+                'codeField' => (string)($kintone['codeField'] ?? '')
             ]
-        },
-        {
-            id:2,
-            name:'サービス利用後アンケート',
-            description:'サービスをご利用いただいた感想をお聞きします。',
-            status:'draft',
-            created:'2026-09-10',
-            start:'',
-            end:'',
-            answers:0,
-            target:0,
-            sent:0,
-            updated:'2026-09-21',
-            numbering:'group',
-            groups:[
-                {
-                    id:201,
-                    name:'サービスについて',
-                    questions:[
-                        {
-                            id:2001,
-                            text:'サービスについての感想を教えてください。',
-                            type:'multiple',
-                            required:false,
-                            options:[
-                                {text:'便利だった',branch:''},
-                                {text:'分かりやすかった',branch:''},
-                                {text:'また利用したい',branch:''}
-                            ]
-                        }
-                    ]
-                }
-            ]
-        }
-    ];
+        ],
+        JSON_UNESCAPED_UNICODE |
+        JSON_UNESCAPED_SLASHES |
+        JSON_INVALID_UTF8_SUBSTITUTE
+    ) ?>;
 
-    var customers = [
-        {id:1,name:'山田 太郎',email:'taro@example.com',company:'株式会社サンプル',code:'C001'},
-        {id:2,name:'佐藤 花子',email:'hanako@example.com',company:'サンプル商事',code:'C002'},
-        {id:3,name:'鈴木 一郎',email:'ichiro@example.com',company:'株式会社テスト',code:'C003'},
-        {id:4,name:'田中 美咲',email:'misaki@example.com',company:'テスト株式会社',code:'C004'},
-        {id:5,name:'高橋 健',email:'ken@example.com',company:'株式会社サンプル',code:'C005'}
-    ];
-
-    var mailSettings = {
-        ready:false,
-        smtp:'',
-        port:'',
-        security:'STARTTLS',
-        username:'',
-        password:'',
-        from:'',
-        fromName:''
-    };
-
-    var kintoneSettings = {
-        ready:false,
-        domain:'',
-        appId:'',
-        loginName:'',
-        password:'',
-        proxyHost:'',
-        proxyPort:'',
-        proxyAuth:false,
-        sslVerify:false
-    };
-
+    var customers = [];
     var currentSurveyId = null;
-    var currentEditingId = null;
     var currentSettingsTab = 'mail';
-    var selectedCustomers = [];
+    var nextId = 10000;
 
-    function $(id) {
+    function get(id) {
         return document.getElementById(id);
     }
 
     function escapeHtml(value) {
-        var div = document.createElement('div');
-        div.textContent = value == null ? '' : String(value);
-        return div.innerHTML;
+        var text = value === null || value === undefined
+            ? ''
+            : String(value);
+
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function showToast(message) {
+        var toast = get('toast');
+
+        if (!toast) {
+            return;
+        }
+
+        toast.textContent = message;
+        toast.classList.add('show');
+
+        window.setTimeout(function () {
+            toast.classList.remove('show');
+        }, 2500);
+    }
+
+    function showModal(title, message) {
+        var modal = get('modal');
+        var titleEl = get('modal-title');
+        var bodyEl = get('modal-body');
+
+        if (!modal || !titleEl || !bodyEl) {
+            return;
+        }
+
+        titleEl.textContent = title;
+        bodyEl.textContent = message;
+        modal.classList.remove('hidden');
+    }
+
+    function closeModal() {
+        var modal = get('modal');
+
+        if (!modal) {
+            return;
+        }
+
+        modal.classList.add('hidden');
     }
 
     function setLoading(button, loading) {
@@ -790,7 +1824,47 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function showPage(id) {
+    function postJson(action, data, button) {
+        if (button) {
+            button.disabled = true;
+            button.classList.add('loading');
+        }
+
+        var payload = data || {};
+        payload.action = action;
+
+        return fetch(window.location.pathname, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+            },
+            body: JSON.stringify(payload),
+            credentials: 'same-origin'
+        })
+        .then(function (response) {
+            return response.json();
+        })
+        .then(function (result) {
+            if (!result || result.success !== true) {
+                throw new Error(
+                    result && result.message
+                        ? result.message
+                        : '処理に失敗しました。'
+                );
+            }
+
+            return result;
+        })
+        .finally(function () {
+            if (button) {
+                button.disabled = false;
+                button.classList.remove('loading');
+            }
+        });
+    }
+
+    function showPage(pageId) {
         var pages = [
             'page-list',
             'page-editor',
@@ -799,222 +1873,209 @@ document.addEventListener('DOMContentLoaded', function () {
             'page-settings'
         ];
 
-        pages.forEach(function (pageId) {
-            var page = $(pageId);
+        pages.forEach(function (id) {
+            var page = get(id);
+
             if (page) {
-                page.classList.toggle('hidden', pageId !== id);
+                page.classList.add('hidden');
             }
         });
 
-        var navs = {
-            'page-list':'nav-list',
-            'page-editor':'nav-create',
-            'page-detail':'nav-list',
-            'page-customers':'nav-customers',
-            'page-settings':'nav-settings'
-        };
+        var target = get(pageId);
 
-        Object.keys(navs).forEach(function (pageId) {
-            var nav = $(navs[pageId]);
+        if (target) {
+            target.classList.remove('hidden');
+        }
+
+        var navs = [
+            'nav-list',
+            'nav-create',
+            'nav-customers',
+            'nav-settings'
+        ];
+
+        navs.forEach(function (id) {
+            var nav = get(id);
+
             if (nav) {
-                nav.classList.toggle('active', pageId === id);
-            }
-        });
-    }
-
-    function getSurvey(id) {
-        return surveys.find(function (survey) {
-            return survey.id === id;
-        }) || null;
-    }
-
-    function getCurrentSurvey() {
-        return getSurvey(currentSurveyId);
-    }
-
-    function countQuestions(survey) {
-        var count = 0;
-
-        if (!survey || !Array.isArray(survey.groups)) {
-            return count;
-        }
-
-        survey.groups.forEach(function (group) {
-            if (group && Array.isArray(group.questions)) {
-                count += group.questions.length;
+                nav.classList.remove('active');
             }
         });
 
-        return count;
-    }
-
-    function questionNumber(survey, groupIndex, questionIndex) {
-        if (!survey || survey.numbering === 'group') {
-            return 'Q' + (groupIndex + 1) + '-' + (questionIndex + 1);
+        if (pageId === 'page-list') {
+            var listNav = get('nav-list');
+            if (listNav) {
+                listNav.classList.add('active');
+            }
         }
 
-        var number = 0;
-
-        for (var i = 0; i < groupIndex; i++) {
-            number += survey.groups[i].questions.length;
+        if (pageId === 'page-editor') {
+            var createNav = get('nav-create');
+            if (createNav) {
+                createNav.classList.add('active');
+            }
         }
 
-        number += questionIndex + 1;
+        if (pageId === 'page-customers') {
+            var customerNav = get('nav-customers');
+            if (customerNav) {
+                customerNav.classList.add('active');
+            }
+        }
 
-        return 'Q' + number;
+        if (pageId === 'page-settings') {
+            var settingsNav = get('nav-settings');
+            if (settingsNav) {
+                settingsNav.classList.add('active');
+            }
+        }
     }
 
     function renderList() {
-        var body = $('survey-list-body');
+        var container = get('survey-list');
 
-        if (!body) {
+        if (!container) {
             return;
         }
 
-        body.textContent = '';
+        container.textContent = '';
 
-        if (!surveys.length) {
-            var emptyRow = document.createElement('tr');
-            var emptyCell = document.createElement('td');
-            emptyCell.colSpan = 7;
-            emptyCell.className = 'empty';
-            emptyCell.textContent = 'アンケートがありません。';
-            emptyRow.appendChild(emptyCell);
-            body.appendChild(emptyRow);
+        if (!Array.isArray(surveys) || surveys.length === 0) {
+            var emptyCard = document.createElement('div');
+            emptyCard.className = 'card';
+            emptyCard.textContent = 'アンケートはありません。';
+            container.appendChild(emptyCard);
             return;
         }
 
         surveys.forEach(function (survey) {
-            var row = document.createElement('tr');
+            var card = document.createElement('div');
+            card.className = 'survey-card';
 
-            var name = document.createElement('td');
-            name.textContent = survey.name;
+            var title = document.createElement('h3');
+            title.textContent = survey.name || '名称未設定';
 
-            var status = document.createElement('td');
-            var badge = document.createElement('span');
-            badge.className = 'badge';
+            var info = document.createElement('div');
+            info.className = 'subtext';
+            info.textContent =
+                '状態：' +
+                getStatusText(survey.status) +
+                '　回答数：' +
+                String(survey.answers || 0) +
+                '件　最終更新：' +
+                String(survey.updated || '');
 
-            if (survey.status === 'open') {
-                badge.classList.add('badge-open');
-                badge.textContent = '公開中';
-            } else if (survey.status === 'end') {
-                badge.classList.add('badge-end');
-                badge.textContent = '終了';
-            } else {
-                badge.classList.add('badge-draft');
-                badge.textContent = '下書き';
-            }
+            var actions = document.createElement('div');
+            actions.className = 'actions';
 
-            status.appendChild(badge);
+            var openButton = document.createElement('button');
+            openButton.className = 'btn';
+            openButton.textContent = '開く';
+            openButton.setAttribute(
+                'data-survey-open',
+                String(survey.id)
+            );
 
-            var created = document.createElement('td');
-            created.textContent = survey.created || '';
+            var editButton = document.createElement('button');
+            editButton.className = 'btn';
+            editButton.textContent = '編集';
+            editButton.setAttribute(
+                'data-survey-edit',
+                String(survey.id)
+            );
 
-            var period = document.createElement('td');
-            period.textContent =
-                (survey.start || '未設定') +
-                ' ～ ' +
-                (survey.end || '未設定');
-
-            var answers = document.createElement('td');
-            answers.textContent = String(survey.answers || 0) + '件';
-
-            var updated = document.createElement('td');
-            updated.textContent = survey.updated || '';
-
-            var actions = document.createElement('td');
-
-            var detailButton = document.createElement('button');
-            detailButton.className = 'btn btn-small';
-            detailButton.textContent = '詳細';
-            detailButton.dataset.id = String(survey.id);
-            detailButton.addEventListener('click', function () {
-                showDetail(Number(this.dataset.id));
-            });
-
-            actions.appendChild(detailButton);
+            actions.appendChild(openButton);
+            actions.appendChild(editButton);
 
             if (survey.status === 'draft') {
                 var publishButton = document.createElement('button');
-                publishButton.className = 'btn btn-small btn-success';
+                publishButton.className = 'btn btn-primary';
                 publishButton.textContent = '公開';
-                publishButton.style.marginLeft = '5px';
-                publishButton.dataset.id = String(survey.id);
-
-                publishButton.addEventListener('click', function () {
-                    publishSurvey(Number(this.dataset.id), this);
-                });
-
+                publishButton.setAttribute(
+                    'data-survey-publish',
+                    String(survey.id)
+                );
                 actions.appendChild(publishButton);
 
                 var deleteButton = document.createElement('button');
-                deleteButton.className = 'btn btn-small btn-danger';
+                deleteButton.className = 'btn btn-danger';
                 deleteButton.textContent = '削除';
-                deleteButton.style.marginLeft = '5px';
-                deleteButton.dataset.id = String(survey.id);
-
-                deleteButton.addEventListener('click', function () {
-                    deleteSurvey(Number(this.dataset.id), this);
-                });
-
+                deleteButton.setAttribute(
+                    'data-survey-delete',
+                    String(survey.id)
+                );
                 actions.appendChild(deleteButton);
             }
 
             if (survey.status === 'open') {
                 var endButton = document.createElement('button');
-                endButton.className = 'btn btn-small';
+                endButton.className = 'btn';
                 endButton.textContent = '終了';
-                endButton.style.marginLeft = '5px';
-                endButton.dataset.id = String(survey.id);
-
-                endButton.addEventListener('click', function () {
-                    endSurvey(Number(this.dataset.id), this);
-                });
-
+                endButton.setAttribute(
+                    'data-survey-end',
+                    String(survey.id)
+                );
                 actions.appendChild(endButton);
             }
 
-            row.appendChild(name);
-            row.appendChild(status);
-            row.appendChild(created);
-            row.appendChild(period);
-            row.appendChild(answers);
-            row.appendChild(updated);
-            row.appendChild(actions);
+            card.appendChild(title);
+            card.appendChild(info);
+            card.appendChild(actions);
 
-            body.appendChild(row);
+            container.appendChild(card);
         });
     }
 
-    function openCreate() {
-        currentEditingId = null;
+    function getStatusText(status) {
+        if (status === 'open') {
+            return '公開中';
+        }
 
-        var title = $('editor-page-title');
+        if (status === 'end') {
+            return '終了';
+        }
+
+        return '下書き';
+    }
+
+    function findSurvey(id) {
+        var found = null;
+
+        surveys.forEach(function (survey) {
+            if (String(survey.id) === String(id)) {
+                found = survey;
+            }
+        });
+
+        return found;
+    }
+
+    function openCreate() {
+        currentSurveyId = null;
+
+        var title = get('editor-title');
         if (title) {
             title.textContent = 'アンケート作成';
         }
 
         setEditorValues({
-            name:'',
-            description:'',
-            status:'draft',
-            start:'',
-            end:'',
-            numbering:'global',
-            groups:[
+            name: '',
+            description: '',
+            status: 'draft',
+            start: '',
+            end: '',
+            numbering: 'global',
+            groups: [
                 {
-                    id:Date.now(),
-                    name:'グループ1',
-                    questions:[
+                    id: nextId++,
+                    name: '基本情報',
+                    questions: [
                         {
-                            id:Date.now() + 1,
-                            text:'',
-                            type:'single',
-                            required:false,
-                            options:[
-                                {text:'選択肢1',branch:''},
-                                {text:'選択肢2',branch:''}
-                            ]
+                            id: nextId++,
+                            text: '',
+                            type: 'free',
+                            required: false,
+                            options: []
                         }
                     ]
                 }
@@ -1024,52 +2085,63 @@ document.addEventListener('DOMContentLoaded', function () {
         showPage('page-editor');
     }
 
-    function editSurvey(id) {
-        var survey = getSurvey(id);
+    function openEdit(id) {
+        var survey = findSurvey(id);
 
         if (!survey) {
             return;
         }
 
-        currentEditingId = id;
+        currentSurveyId = survey.id;
 
-        var title = $('editor-page-title');
+        var title = get('editor-title');
         if (title) {
             title.textContent = 'アンケート編集';
         }
 
-        setEditorValues(JSON.parse(JSON.stringify(survey)));
+        setEditorValues(survey);
         showPage('page-editor');
     }
 
     function setEditorValues(survey) {
-        var name = $('survey-name');
-        var description = $('survey-description');
-        var status = $('survey-status');
-        var start = $('survey-start');
-        var end = $('survey-end');
+        var name = get('survey-name');
+        var description = get('survey-description');
+        var status = get('survey-status');
+        var start = get('survey-start');
+        var end = get('survey-end');
+        var numbering = get('survey-numbering');
 
-        if (name) name.value = survey.name || '';
-        if (description) description.value = survey.description || '';
-        if (status) status.value = survey.status || 'draft';
-        if (start) start.value = survey.start || '';
-        if (end) end.value = survey.end || '';
+        if (name) {
+            name.value = survey.name || '';
+        }
 
-        var numbering = document.querySelector(
-            'input[name="numbering"][value="' +
-            (survey.numbering || 'global') +
-            '"]'
+        if (description) {
+            description.value = survey.description || '';
+        }
+
+        if (status) {
+            status.value = survey.status || 'draft';
+        }
+
+        if (start) {
+            start.value = survey.start || '';
+        }
+
+        if (end) {
+            end.value = survey.end || '';
+        }
+
+        if (numbering) {
+            numbering.value = survey.numbering || 'global';
+        }
+
+        renderEditorGroups(
+            Array.isArray(survey.groups) ? survey.groups : []
         );
-
-        document.querySelectorAll('input[name="numbering"]').forEach(function (radio) {
-            radio.checked = radio === numbering;
-        });
-
-        renderEditorGroups(survey);
     }
 
-    function renderEditorGroups(survey) {
-        var container = $('groups');
+    function renderEditorGroups(groups) {
+        var container = get('editor-groups');
 
         if (!container) {
             return;
@@ -1077,1209 +2149,1421 @@ document.addEventListener('DOMContentLoaded', function () {
 
         container.textContent = '';
 
-        survey.groups.forEach(function (group, groupIndex) {
+        groups.forEach(function (group, groupIndex) {
             var card = document.createElement('div');
-            card.className = 'group-card';
+            card.className = 'group';
 
             var header = document.createElement('div');
             header.className = 'group-header';
 
-            var title = document.createElement('div');
-            title.className = 'group-title';
-
             var groupInput = document.createElement('input');
+            groupInput.type = 'text';
             groupInput.value = group.name || '';
-            groupInput.dataset.groupIndex = String(groupIndex);
-
-            title.appendChild(groupInput);
-
-            var actions = document.createElement('div');
-            actions.className = 'group-actions';
-
-            var addQuestion = document.createElement('button');
-            addQuestion.className = 'btn btn-small';
-            addQuestion.textContent = '質問追加';
-            addQuestion.dataset.groupIndex = String(groupIndex);
-
-            addQuestion.addEventListener('click', function () {
-                addQuestionToGroup(Number(this.dataset.groupIndex));
-            });
+            groupInput.className = 'group-name';
+            groupInput.setAttribute('data-group-id', String(group.id));
+            groupInput.style.width = 'calc(100% - 100px)';
+            groupInput.style.padding = '7px';
 
             var removeGroup = document.createElement('button');
-            removeGroup.className = 'btn btn-small btn-danger';
+            removeGroup.className = 'btn btn-danger';
             removeGroup.textContent = 'グループ削除';
-            removeGroup.dataset.groupIndex = String(groupIndex);
+            removeGroup.setAttribute(
+                'data-remove-group',
+                String(group.id)
+            );
 
-            removeGroup.addEventListener('click', function () {
-                removeGroupAt(Number(this.dataset.groupIndex));
-            });
+            header.appendChild(groupInput);
+            header.appendChild(removeGroup);
 
-            actions.appendChild(addQuestion);
-            actions.appendChild(removeGroup);
-
-            header.appendChild(title);
-            header.appendChild(actions);
             card.appendChild(header);
 
-            group.questions.forEach(function (question, questionIndex) {
-                card.appendChild(
-                    createQuestionEditor(
-                        question,
+            var questions = Array.isArray(group.questions)
+                ? group.questions
+                : [];
+
+            questions.forEach(function (question, questionIndex) {
+                var questionBox = document.createElement('div');
+                questionBox.className = 'question';
+
+                var title = document.createElement('div');
+                title.className = 'question-title';
+
+                var number = document.createElement('span');
+                number.className = 'question-number';
+
+                var numbering = get('survey-numbering');
+                var mode = numbering ? numbering.value : 'global';
+
+                if (mode === 'group') {
+                    number.textContent =
+                        'Q' +
+                        String(groupIndex + 1) +
+                        '-' +
+                        String(questionIndex + 1);
+                } else {
+                    var globalNumber = getGlobalQuestionNumber(
+                        groups,
                         groupIndex,
-                        questionIndex,
-                        survey
-                    )
+                        questionIndex
+                    );
+
+                    number.textContent =
+                        'Q' + String(globalNumber);
+                }
+
+                var textInput = document.createElement('input');
+                textInput.type = 'text';
+                textInput.value = question.text || '';
+                textInput.className = 'question-text';
+                textInput.setAttribute(
+                    'data-question-id',
+                    String(question.id)
                 );
+                textInput.style.flex = '1';
+
+                var typeSelect = document.createElement('select');
+                typeSelect.className = 'question-type';
+                typeSelect.setAttribute(
+                    'data-question-id',
+                    String(question.id)
+                );
+
+                [
+                    ['free', '自由記述'],
+                    ['single', '単一選択'],
+                    ['multiple', '複数選択']
+                ].forEach(function (item) {
+                    var option = document.createElement('option');
+                    option.value = item[0];
+                    option.textContent = item[1];
+
+                    if (question.type === item[0]) {
+                        option.selected = true;
+                    }
+
+                    typeSelect.appendChild(option);
+                });
+
+                var requiredLabel = document.createElement('label');
+                requiredLabel.style.display = 'inline-flex';
+                requiredLabel.style.alignItems = 'center';
+                requiredLabel.style.gap = '4px';
+
+                var required = document.createElement('input');
+                required.type = 'checkbox';
+                required.checked = question.required === true;
+                required.className = 'question-required';
+                required.setAttribute(
+                    'data-question-id',
+                    String(question.id)
+                );
+
+                requiredLabel.appendChild(required);
+                requiredLabel.appendChild(
+                    document.createTextNode('必須')
+                );
+
+                var removeQuestion = document.createElement('button');
+                removeQuestion.className = 'btn btn-danger';
+                removeQuestion.textContent = '削除';
+                removeQuestion.setAttribute(
+                    'data-remove-question',
+                    String(question.id)
+                );
+
+                title.appendChild(number);
+                title.appendChild(textInput);
+                title.appendChild(typeSelect);
+                title.appendChild(requiredLabel);
+                title.appendChild(removeQuestion);
+
+                questionBox.appendChild(title);
+
+                if (
+                    question.type === 'single' ||
+                    question.type === 'multiple'
+                ) {
+                    var optionArea = document.createElement('div');
+                    optionArea.className = 'question-options';
+
+                    var options = Array.isArray(question.options)
+                        ? question.options
+                        : [];
+
+                    options.forEach(function (item, optionIndex) {
+                        var row = document.createElement('div');
+                        row.className = 'option';
+
+                        var optionInput = document.createElement('input');
+                        optionInput.type = 'text';
+                        optionInput.value = item.text || '';
+                        optionInput.className = 'question-option';
+                        optionInput.setAttribute(
+                            'data-question-id',
+                            String(question.id)
+                        );
+                        optionInput.setAttribute(
+                            'data-option-index',
+                            String(optionIndex)
+                        );
+
+                        row.appendChild(optionInput);
+
+                        optionArea.appendChild(row);
+                    });
+
+                    var addOption = document.createElement('button');
+                    addOption.className = 'btn';
+                    addOption.textContent = '＋ 選択肢追加';
+                    addOption.setAttribute(
+                        'data-add-option',
+                        String(question.id)
+                    );
+
+                    optionArea.appendChild(addOption);
+                    questionBox.appendChild(optionArea);
+                }
+
+                card.appendChild(questionBox);
             });
 
-            var addArea = document.createElement('div');
-            addArea.className = 'add-question-area';
+            var addQuestionArea = document.createElement('div');
+            addQuestionArea.style.padding = '10px';
 
-            var addButton = document.createElement('button');
-            addButton.className = 'btn btn-small';
-            addButton.textContent = '＋ 質問を追加';
-            addButton.dataset.groupIndex = String(groupIndex);
+            var addQuestion = document.createElement('button');
+            addQuestion.className = 'btn';
+            addQuestion.textContent = '＋ 質問追加';
+            addQuestion.setAttribute(
+                'data-add-question',
+                String(group.id)
+            );
 
-            addButton.addEventListener('click', function () {
-                addQuestionToGroup(Number(this.dataset.groupIndex));
-            });
-
-            addArea.appendChild(addButton);
-            card.appendChild(addArea);
+            addQuestionArea.appendChild(addQuestion);
+            card.appendChild(addQuestionArea);
 
             container.appendChild(card);
         });
     }
 
-    function createQuestionEditor(question, groupIndex, questionIndex, survey) {
-        var wrapper = document.createElement('div');
-        wrapper.className = 'question-card';
+    function getGlobalQuestionNumber(groups, groupIndex, questionIndex) {
+        var number = 0;
 
-        var head = document.createElement('div');
-        head.className = 'question-head';
+        for (var i = 0; i <= groupIndex; i++) {
+            var questions = Array.isArray(groups[i].questions)
+                ? groups[i].questions
+                : [];
 
-        var number = document.createElement('div');
-        number.className = 'question-number';
-        number.textContent = questionNumber(survey, groupIndex, questionIndex);
+            if (i === groupIndex) {
+                number += questionIndex + 1;
+            } else {
+                number += questions.length;
+            }
+        }
 
-        var title = document.createElement('div');
-        title.className = 'question-title';
+        return number;
+    }
 
-        var input = document.createElement('input');
-        input.value = question.text || '';
-        input.dataset.groupIndex = String(groupIndex);
-        input.dataset.questionIndex = String(questionIndex);
+    function collectEditorData() {
+        var result = {
+            id: currentSurveyId || nextId++,
+            name: get('survey-name') ? get('survey-name').value.trim() : '',
+            description: get('survey-description')
+                ? get('survey-description').value.trim()
+                : '',
+            status: get('survey-status')
+                ? get('survey-status').value
+                : 'draft',
+            start: get('survey-start')
+                ? get('survey-start').value
+                : '',
+            end: get('survey-end')
+                ? get('survey-end').value
+                : '',
+            numbering: get('survey-numbering')
+                ? get('survey-numbering').value
+                : 'global',
+            created: '',
+            updated: new Date().toISOString().slice(0, 10),
+            answers: 0,
+            sent: 0,
+            groups: []
+        };
 
-        input.addEventListener('input', function () {
-            var s = getEditorObject();
-            var gi = Number(this.dataset.groupIndex);
-            var qi = Number(this.dataset.questionIndex);
+        var existing = currentSurveyId
+            ? findSurvey(currentSurveyId)
+            : null;
 
-            if (s.groups[gi] && s.groups[gi].questions[qi]) {
-                s.groups[gi].questions[qi].text = this.value;
-                window.currentEditor = s;
+        if (existing) {
+            result.created = existing.created || '';
+            result.answers = existing.answers || 0;
+            result.sent = existing.sent || 0;
+        } else {
+            result.created = result.updated;
+        }
+
+        var groupElements = document.querySelectorAll(
+            '#editor-groups .group'
+        );
+
+        Array.prototype.forEach.call(
+            groupElements,
+            function (groupElement) {
+                var groupInput =
+                    groupElement.querySelector('.group-name');
+
+                var groupId = groupInput
+                    ? Number(groupInput.getAttribute('data-group-id'))
+                    : nextId++;
+
+                var group = {
+                    id: groupId,
+                    name: groupInput
+                        ? groupInput.value.trim()
+                        : '',
+                    questions: []
+                };
+
+                var questionElements =
+                    groupElement.querySelectorAll('.question');
+
+                Array.prototype.forEach.call(
+                    questionElements,
+                    function (questionElement) {
+                        var textInput =
+                            questionElement.querySelector('.question-text');
+
+                        var typeSelect =
+                            questionElement.querySelector('.question-type');
+
+                        var required =
+                            questionElement.querySelector('.question-required');
+
+                        var questionId = textInput
+                            ? Number(
+                                textInput.getAttribute(
+                                    'data-question-id'
+                                )
+                            )
+                            : nextId++;
+
+                        var question = {
+                            id: questionId,
+                            text: textInput
+                                ? textInput.value.trim()
+                                : '',
+                            type: typeSelect
+                                ? typeSelect.value
+                                : 'free',
+                            required: required
+                                ? required.checked
+                                : false,
+                            options: []
+                        };
+
+                        var optionInputs =
+                            questionElement.querySelectorAll(
+                                '.question-option'
+                            );
+
+                        Array.prototype.forEach.call(
+                            optionInputs,
+                            function (optionInput) {
+                                question.options.push({
+                                    text: optionInput.value.trim(),
+                                    branch: ''
+                                });
+                            }
+                        );
+
+                        result.groups.push;
+                        group.questions.push(question);
+                    }
+                );
+
+                result.groups.push(group);
+            }
+        );
+
+        return result;
+    }
+
+    function saveSurvey() {
+        var button = get('save-survey');
+
+        if (button) {
+            button.disabled = true;
+            button.classList.add('loading');
+        }
+
+        var survey = collectEditorData();
+
+        if (survey.name === '') {
+            if (button) {
+                button.disabled = false;
+                button.classList.remove('loading');
+            }
+
+            showModal(
+                '入力確認',
+                'アンケート名を入力してください。'
+            );
+
+            return;
+        }
+
+        var index = -1;
+
+        surveys.forEach(function (item, i) {
+            if (String(item.id) === String(survey.id)) {
+                index = i;
             }
         });
 
-        title.appendChild(input);
+        if (index >= 0) {
+            surveys[index] = survey;
+        } else {
+            surveys.push(survey);
+        }
 
-        var tools = document.createElement('div');
-        tools.className = 'question-tools';
-
-        var type = document.createElement('select');
-        type.dataset.groupIndex = String(groupIndex);
-        type.dataset.questionIndex = String(questionIndex);
-
-        [
-            ['single','単一選択'],
-            ['multiple','複数選択'],
-            ['free','自由記述']
-        ].forEach(function (item) {
-            var option = document.createElement('option');
-            option.value = item[0];
-            option.textContent = item[1];
-
-            if (question.type === item[0]) {
-                option.selected = true;
-            }
-
-            type.appendChild(option);
-        });
-
-        type.addEventListener('change', function () {
-            var s = getEditorObject();
-            var gi = Number(this.dataset.groupIndex);
-            var qi = Number(this.dataset.questionIndex);
-
-            if (!s.groups[gi] || !s.groups[gi].questions[qi]) {
-                return;
-            }
-
-            s.groups[gi].questions[qi].type = this.value;
-
-            if (this.value === 'free') {
-                s.groups[gi].questions[qi].options = [];
-            } else if (!s.groups[gi].questions[qi].options.length) {
-                s.groups[gi].questions[qi].options = [
-                    {text:'選択肢1',branch:''},
-                    {text:'選択肢2',branch:''}
-                ];
-            }
-
-            window.currentEditor = s;
-            renderEditorGroups(s);
-        });
-
-        var remove = document.createElement('button');
-        remove.className = 'btn btn-small btn-danger';
-        remove.textContent = '削除';
-        remove.dataset.groupIndex = String(groupIndex);
-        remove.dataset.questionIndex = String(questionIndex);
-
-        remove.addEventListener('click', function () {
-            removeQuestion(
-                Number(this.dataset.groupIndex),
-                Number(this.dataset.questionIndex)
+        postJson(
+            'save_surveys',
+            { surveys: surveys },
+            button
+        )
+        .then(function () {
+            showToast('アンケートを保存しました。');
+            renderList();
+            showPage('page-list');
+        })
+        .catch(function (error) {
+            showModal(
+                '保存できませんでした',
+                error.message
             );
         });
+    }
 
-        tools.appendChild(type);
-        tools.appendChild(remove);
+    function renderDetail(survey) {
+        var title = get('detail-title');
+        var subtitle = get('detail-subtitle');
+        var body = get('detail-body');
 
-        head.appendChild(number);
-        head.appendChild(title);
-        head.appendChild(tools);
+        if (!title || !subtitle || !body) {
+            return;
+        }
 
-        wrapper.appendChild(head);
+        title.textContent = survey.name || '';
+        subtitle.textContent =
+            '状態：' + getStatusText(survey.status);
 
-        var meta = document.createElement('div');
-        meta.className = 'question-meta';
+        body.textContent = '';
 
-        var requiredLabel = document.createElement('label');
+        var info = document.createElement('div');
+        info.className = 'card';
 
-        var required = document.createElement('input');
-        required.type = 'checkbox';
-        required.checked = !!question.required;
-        required.dataset.groupIndex = String(groupIndex);
-        required.dataset.questionIndex = String(questionIndex);
+        var infoText = document.createElement('div');
+        infoText.textContent =
+            '回答数：' +
+            String(survey.answers || 0) +
+            '件　　送信済み：' +
+            String(survey.sent || 0) +
+            '件';
 
-        required.addEventListener('change', function () {
-            var s = getEditorObject();
-            var gi = Number(this.dataset.groupIndex);
-            var qi = Number(this.dataset.questionIndex);
+        info.appendChild(infoText);
+        body.appendChild(info);
 
-            if (s.groups[gi] && s.groups[gi].questions[qi]) {
-                s.groups[gi].questions[qi].required = this.checked;
-                window.currentEditor = s;
-            }
+        var groups = Array.isArray(survey.groups)
+            ? survey.groups
+            : [];
+
+        groups.forEach(function (group, groupIndex) {
+            var groupBox = document.createElement('div');
+            groupBox.className = 'group';
+
+            var groupHeader = document.createElement('div');
+            groupHeader.className = 'group-header';
+            groupHeader.textContent =
+                group.name || ('グループ' + String(groupIndex + 1));
+
+            groupBox.appendChild(groupHeader);
+
+            var questions = Array.isArray(group.questions)
+                ? group.questions
+                : [];
+
+            questions.forEach(function (question, questionIndex) {
+                var q = document.createElement('div');
+                q.className = 'question';
+
+                var qTitle = document.createElement('div');
+                qTitle.className = 'question-title';
+
+                var qNo = document.createElement('span');
+                qNo.className = 'question-number';
+
+                if (survey.numbering === 'group') {
+                    qNo.textContent =
+                        'Q' +
+                        String(groupIndex + 1) +
+                        '-' +
+                        String(questionIndex + 1);
+                } else {
+                    qNo.textContent =
+                        'Q' +
+                        String(
+                            getGlobalQuestionNumber(
+                                groups,
+                                groupIndex,
+                                questionIndex
+                            )
+                        );
+                }
+
+                var qText = document.createElement('span');
+                qText.textContent = question.text || '';
+
+                qTitle.appendChild(qNo);
+                qTitle.appendChild(qText);
+                q.appendChild(qTitle);
+
+                var options = Array.isArray(question.options)
+                    ? question.options
+                    : [];
+
+                options.forEach(function (option) {
+                    var op = document.createElement('div');
+                    op.className = 'option';
+                    op.textContent = '・' + (option.text || '');
+                    q.appendChild(op);
+                });
+
+                groupBox.appendChild(q);
+            });
+
+            body.appendChild(groupBox);
         });
 
-        requiredLabel.appendChild(required);
-        requiredLabel.appendChild(document.createTextNode(' 必須'));
+        if (survey.status === 'open') {
+            var end = document.createElement('div');
+            end.className = 'notice';
+            end.textContent =
+                'このアンケートは公開中です。';
 
-        meta.appendChild(requiredLabel);
-        wrapper.appendChild(meta);
-
-        if (question.type !== 'free') {
-            var options = document.createElement('div');
-            options.className = 'question-options';
-
-            question.options.forEach(function (opt, optionIndex) {
-                var row = document.createElement('div');
-                row.className = 'option-row';
-
-                var optionInput = document.createElement('input');
-                optionInput.value = opt.text || '';
-                optionInput.dataset.groupIndex = String(groupIndex);
-                optionInput.dataset.questionIndex = String(questionIndex);
-                optionInput.dataset.optionIndex = String(optionIndex);
-
-                optionInput.addEventListener('input', function () {
-                    var s = getEditorObject();
-                    var gi = Number(this.dataset.groupIndex);
-                    var qi = Number(this.dataset.questionIndex);
-                    var oi = Number(this.dataset.optionIndex);
-
-                    if (
-                        s.groups[gi] &&
-                        s.groups[gi].questions[qi] &&
-                        s.groups[gi].questions[qi].options[oi]
-                    ) {
-                        s.groups[gi].questions[qi].options[oi].text = this.value;
-                        window.currentEditor = s;
-                    }
-                });
-
-                var removeOption = document.createElement('button');
-                removeOption.className = 'btn btn-small';
-                removeOption.textContent = '削除';
-                removeOption.dataset.groupIndex = String(groupIndex);
-                removeOption.dataset.questionIndex = String(questionIndex);
-                removeOption.dataset.optionIndex = String(optionIndex);
-
-                removeOption.addEventListener('click', function () {
-                    var s = getEditorObject();
-                    var gi = Number(this.dataset.groupIndex);
-                    var qi = Number(this.dataset.questionIndex);
-                    var oi = Number(this.dataset.optionIndex);
-
-                    if (
-                        s.groups[gi] &&
-                        s.groups[gi].questions[qi]
-                    ) {
-                        s.groups[gi].questions[qi].options.splice(oi, 1);
-                        window.currentEditor = s;
-                        renderEditorGroups(s);
-                    }
-                });
-
-                row.appendChild(optionInput);
-                row.appendChild(removeOption);
-                options.appendChild(row);
-            });
-
-            var addOption = document.createElement('button');
-            addOption.className = 'btn btn-small';
-            addOption.textContent = '＋ 選択肢追加';
-            addOption.dataset.groupIndex = String(groupIndex);
-            addOption.dataset.questionIndex = String(questionIndex);
-
-            addOption.addEventListener('click', function () {
-                var s = getEditorObject();
-                var gi = Number(this.dataset.groupIndex);
-                var qi = Number(this.dataset.questionIndex);
-
-                if (s.groups[gi] && s.groups[gi].questions[qi]) {
-                    s.groups[gi].questions[qi].options.push({
-                        text:'新しい選択肢',
-                        branch:''
-                    });
-
-                    window.currentEditor = s;
-                    renderEditorGroups(s);
-                }
-            });
-
-            options.appendChild(addOption);
-            wrapper.appendChild(options);
+            body.appendChild(end);
         }
-
-        return wrapper;
     }
 
-    window.currentEditor = null;
+    function openDetail(id) {
+        var survey = findSurvey(id);
 
-    function getEditorObject() {
-        if (!window.currentEditor) {
-            window.currentEditor = {
-                name:'',
-                description:'',
-                status:'draft',
-                start:'',
-                end:'',
-                numbering:'global',
-                groups:[]
-            };
+        if (!survey) {
+            return;
         }
 
-        return window.currentEditor;
-    }
-
-    function syncEditorHeader() {
-        var s = getEditorObject();
-
-        var name = $('survey-name');
-        var description = $('survey-description');
-        var status = $('survey-status');
-        var start = $('survey-start');
-        var end = $('survey-end');
-
-        if (name) s.name = name.value;
-        if (description) s.description = description.value;
-        if (status) s.status = status.value;
-        if (start) s.start = start.value;
-        if (end) s.end = end.value;
-
-        var radio = document.querySelector('input[name="numbering"]:checked');
-        s.numbering = radio ? radio.value : 'global';
-
-        return s;
+        currentSurveyId = survey.id;
+        renderDetail(survey);
+        showPage('page-detail');
     }
 
     function addGroup() {
-        var s = syncEditorHeader();
+        var survey = collectEditorData();
 
-        s.groups.push({
-            id:Date.now() + s.groups.length,
-            name:'新しいグループ',
-            questions:[]
+        survey.groups.push({
+            id: nextId++,
+            name: '新しいグループ',
+            questions: []
         });
 
-        window.currentEditor = s;
-        renderEditorGroups(s);
+        renderEditorGroups(survey.groups);
     }
 
-    function addQuestionToGroup(groupIndex) {
-        var s = syncEditorHeader();
+    function addQuestion(groupId) {
+        var survey = collectEditorData();
 
-        if (!s.groups[groupIndex]) {
-            return;
-        }
-
-        s.groups[groupIndex].questions.push({
-            id:Date.now(),
-            text:'新しい質問',
-            type:'single',
-            required:false,
-            options:[
-                {text:'選択肢1',branch:''},
-                {text:'選択肢2',branch:''}
-            ]
-        });
-
-        window.currentEditor = s;
-        renderEditorGroups(s);
-    }
-
-    function removeGroupAt(groupIndex) {
-        var s = syncEditorHeader();
-
-        if (!confirm('このグループを削除しますか？')) {
-            return;
-        }
-
-        s.groups.splice(groupIndex, 1);
-        window.currentEditor = s;
-        renderEditorGroups(s);
-    }
-
-    function removeQuestion(groupIndex, questionIndex) {
-        var s = syncEditorHeader();
-
-        if (!confirm('この質問を削除しますか？')) {
-            return;
-        }
-
-        if (s.groups[groupIndex]) {
-            s.groups[groupIndex].questions.splice(questionIndex, 1);
-        }
-
-        window.currentEditor = s;
-        renderEditorGroups(s);
-    }
-
-    function saveSurvey(button) {
-        var s = syncEditorHeader();
-
-        if (!s.name.trim()) {
-            alert('アンケート名を入力してください。');
-            return;
-        }
-
-        if (!s.groups.length || countQuestions(s) === 0) {
-            alert('質問を1問以上設定してください。');
-            return;
-        }
-
-        setLoading(button, true);
-
-        setTimeout(function () {
-            if (currentEditingId !== null) {
-                var existing = getSurvey(currentEditingId);
-
-                if (existing) {
-                    s.id = existing.id;
-                    s.created = existing.created;
-                    s.answers = existing.answers || 0;
-                    s.target = existing.target || 0;
-                    s.sent = existing.sent || 0;
-                    s.updated = '2026-09-24';
-
-                    var index = surveys.findIndex(function (item) {
-                        return item.id === currentEditingId;
-                    });
-
-                    if (index >= 0) {
-                        surveys[index] = JSON.parse(JSON.stringify(s));
-                    }
-                }
-            } else {
-                s.id = Date.now();
-                s.created = '2026-09-24';
-                s.answers = 0;
-                s.target = 0;
-                s.sent = 0;
-                s.updated = '2026-09-24';
-                surveys.push(JSON.parse(JSON.stringify(s)));
-            }
-
-            setLoading(button, false);
-            showToast('アンケートを保存しました');
-            renderList();
-            showPage('page-list');
-        }, 250);
-    }
-
-    function previewEditor() {
-        var s = syncEditorHeader();
-
-        var html = '<div class="card">';
-        html += '<div class="card-title">' + escapeHtml(s.name) + '</div>';
-
-        if (s.description) {
-            html += '<p>' + escapeHtml(s.description) + '</p>';
-        }
-
-        s.groups.forEach(function (group, gi) {
-            html += '<h3>' + escapeHtml(group.name) + '</h3>';
-
-            group.questions.forEach(function (question, qi) {
-                html += '<div class="result-item">';
-                html += '<strong>' +
-                    escapeHtml(questionNumber(s, gi, qi)) +
-                    '　' +
-                    escapeHtml(question.text) +
-                    '</strong>';
-
-                question.options.forEach(function (option) {
-                    html += '<div class="result-answer">' +
-                        escapeHtml(option.text) +
-                        '</div>';
+        survey.groups.forEach(function (group) {
+            if (String(group.id) === String(groupId)) {
+                group.questions.push({
+                    id: nextId++,
+                    text: '',
+                    type: 'free',
+                    required: false,
+                    options: []
                 });
+            }
+        });
 
-                html += '</div>';
+        renderEditorGroups(survey.groups);
+    }
+
+    function addOption(questionId) {
+        var survey = collectEditorData();
+
+        survey.groups.forEach(function (group) {
+            group.questions.forEach(function (question) {
+                if (String(question.id) === String(questionId)) {
+                    question.options.push({
+                        text: '',
+                        branch: ''
+                    });
+                }
             });
         });
 
-        html += '</div>';
-
-        openModal(
-            'アンケート内容確認',
-            html,
-            '<button class="btn" id="preview-close">閉じる</button>'
-        );
-
-        var close = $('preview-close');
-
-        if (close) {
-            close.addEventListener('click', closeModal);
-        }
+        renderEditorGroups(survey.groups);
     }
 
-    function showDetail(id) {
-        var survey = getSurvey(id);
+    function removeQuestion(questionId) {
+        var survey = collectEditorData();
+
+        survey.groups.forEach(function (group) {
+            group.questions = group.questions.filter(function (question) {
+                return String(question.id) !== String(questionId);
+            });
+        });
+
+        renderEditorGroups(survey.groups);
+    }
+
+    function removeGroup(groupId) {
+        var survey = collectEditorData();
+
+        survey.groups = survey.groups.filter(function (group) {
+            return String(group.id) !== String(groupId);
+        });
+
+        renderEditorGroups(survey.groups);
+    }
+
+    function publishSurvey(id) {
+        var survey = findSurvey(id);
 
         if (!survey) {
             return;
         }
 
-        currentSurveyId = id;
+        survey.status = 'open';
+        survey.updated = new Date().toISOString().slice(0, 10);
 
-        var title = $('detail-title');
-        var subtitle = $('detail-subtitle');
-
-        if (title) title.textContent = survey.name;
-        if (subtitle) subtitle.textContent = 'アンケート詳細';
-
-        showPage('page-detail');
-        showDetailTab('content');
+        postJson(
+            'save_surveys',
+            { surveys: surveys },
+            null
+        )
+        .then(function () {
+            renderList();
+            showToast('アンケートを公開しました。');
+        })
+        .catch(function (error) {
+            showModal('公開できませんでした', error.message);
+        });
     }
 
-    function editCurrentSurvey() {
-        if (currentSurveyId !== null) {
-            editSurvey(currentSurveyId);
-        }
-    }
-
-    function showDetailTab(tab) {
-        var survey = getCurrentSurvey();
+    function endSurvey(id) {
+        var survey = findSurvey(id);
 
         if (!survey) {
             return;
         }
 
-        var tabs = {
-            content:'tab-content',
-            send:'tab-send',
-            status:'tab-status',
-            result:'tab-result'
+        survey.status = 'end';
+        survey.updated = new Date().toISOString().slice(0, 10);
+
+        postJson(
+            'save_surveys',
+            { surveys: surveys },
+            null
+        )
+        .then(function () {
+            renderList();
+            showToast('アンケートを終了しました。');
+        })
+        .catch(function (error) {
+            showModal('終了できませんでした', error.message);
+        });
+    }
+
+    function deleteSurvey(id) {
+        var survey = findSurvey(id);
+
+        if (!survey) {
+            return;
+        }
+
+        if (!window.confirm(
+            'この下書きアンケートを削除しますか？'
+        )) {
+            return;
+        }
+
+        surveys = surveys.filter(function (item) {
+            return String(item.id) !== String(id);
+        });
+
+        postJson(
+            'save_surveys',
+            { surveys: surveys },
+            null
+        )
+        .then(function () {
+            renderList();
+            showToast('アンケートを削除しました。');
+        })
+        .catch(function (error) {
+            showModal('削除できませんでした', error.message);
+        });
+    }
+
+    function renderMailSettings() {
+        var container = get('settings-content');
+
+        if (!container) {
+            return;
+        }
+
+        container.textContent = '';
+
+        var card = document.createElement('div');
+        card.className = 'card';
+
+        var title = document.createElement('div');
+        title.className = 'card-title';
+        title.textContent = 'メール送信設定';
+
+        card.appendChild(title);
+
+        var status = document.createElement('div');
+        status.className = 'status-line';
+
+        var dot = document.createElement('span');
+        dot.className =
+            'status-dot ' +
+            (settings.mail.smtp &&
+             settings.mail.from
+                ? 'ok'
+                : 'warn');
+
+        var statusText = document.createElement('span');
+        statusText.textContent =
+            settings.mail.smtp &&
+            settings.mail.from
+                ? 'メール設定が保存されています。'
+                : 'メール設定が未完了です。';
+
+        status.appendChild(dot);
+        status.appendChild(statusText);
+        card.appendChild(status);
+
+        card.appendChild(createField(
+            'SMTPサーバ *',
+            'smtp-server',
+            settings.mail.smtp,
+            'text'
+        ));
+
+        var grid = document.createElement('div');
+        grid.className = 'form-grid';
+
+        grid.appendChild(createField(
+            'ポート番号 *',
+            'smtp-port',
+            settings.mail.port || '587',
+            'text'
+        ));
+
+        var securityWrap = document.createElement('div');
+        securityWrap.className = 'field';
+
+        var securityLabel = document.createElement('label');
+        securityLabel.textContent = '接続方式';
+
+        var security = document.createElement('select');
+        security.id = 'smtp-security';
+
+        [
+            ['なし', 'なし'],
+            ['STARTTLS', 'STARTTLS'],
+            ['SSL/TLS', 'SSL/TLS']
+        ].forEach(function (item) {
+            var op = document.createElement('option');
+            op.value = item[0];
+            op.textContent = item[1];
+
+            if (settings.mail.security === item[0]) {
+                op.selected = true;
+            }
+
+            security.appendChild(op);
+        });
+
+        securityWrap.appendChild(securityLabel);
+        securityWrap.appendChild(security);
+        grid.appendChild(securityWrap);
+
+        card.appendChild(grid);
+
+        var authGrid = document.createElement('div');
+        authGrid.className = 'form-grid';
+
+        authGrid.appendChild(createField(
+            '認証ユーザー名',
+            'smtp-user',
+            settings.mail.username,
+            'text'
+        ));
+
+        authGrid.appendChild(createField(
+            '認証パスワード',
+            'smtp-password',
+            '',
+            'password'
+        ));
+
+        card.appendChild(authGrid);
+
+        var fromGrid = document.createElement('div');
+        fromGrid.className = 'form-grid';
+
+        fromGrid.appendChild(createField(
+            '送信元メールアドレス *',
+            'smtp-from',
+            settings.mail.from,
+            'email'
+        ));
+
+        fromGrid.appendChild(createField(
+            '送信元名',
+            'smtp-from-name',
+            settings.mail.fromName,
+            'text'
+        ));
+
+        card.appendChild(fromGrid);
+
+        card.appendChild(createField(
+            'テスト送信先メールアドレス',
+            'smtp-test-to',
+            settings.mail.testTo,
+            'email'
+        ));
+
+        var notice = document.createElement('div');
+        notice.className = 'notice';
+        notice.textContent =
+            '「テストメール送信」を押すと、入力したテスト送信先へ実際にメールを送信します。';
+
+        card.appendChild(notice);
+
+        var actions = document.createElement('div');
+        actions.className = 'actions';
+
+        var save = document.createElement('button');
+        save.id = 'save-mail-settings';
+        save.className = 'btn btn-primary';
+        save.textContent = '設定を保存';
+
+        var test = document.createElement('button');
+        test.id = 'test-mail-settings';
+        test.className = 'btn';
+        test.textContent = 'テストメール送信';
+
+        actions.appendChild(save);
+        actions.appendChild(test);
+
+        card.appendChild(actions);
+        container.appendChild(card);
+    }
+
+    function createField(labelText, id, value, type) {
+        var wrap = document.createElement('div');
+        wrap.className = 'field';
+
+        var label = document.createElement('label');
+        label.setAttribute('for', id);
+        label.textContent = labelText;
+
+        var input = document.createElement('input');
+        input.id = id;
+        input.type = type || 'text';
+        input.value = value || '';
+
+        wrap.appendChild(label);
+        wrap.appendChild(input);
+
+        return wrap;
+    }
+
+    function saveMailSettings() {
+        var button = get('save-mail-settings');
+
+        if (button) {
+            button.disabled = true;
+            button.classList.add('loading');
+        }
+
+        var passwordInput = get('smtp-password');
+
+        var mail = {
+            smtp: get('smtp-server')
+                ? get('smtp-server').value.trim()
+                : '',
+            port: get('smtp-port')
+                ? get('smtp-port').value.trim()
+                : '',
+            security: get('smtp-security')
+                ? get('smtp-security').value
+                : 'STARTTLS',
+            username: get('smtp-user')
+                ? get('smtp-user').value.trim()
+                : '',
+            password: passwordInput
+                ? passwordInput.value
+                : '',
+            from: get('smtp-from')
+                ? get('smtp-from').value.trim()
+                : '',
+            fromName: get('smtp-from-name')
+                ? get('smtp-from-name').value.trim()
+                : '',
+            testTo: get('smtp-test-to')
+                ? get('smtp-test-to').value.trim()
+                : ''
         };
 
-        Object.keys(tabs).forEach(function (key) {
-            var button = $(tabs[key]);
+        postJson(
+            'save_mail_settings',
+            { mail: mail },
+            button
+        )
+        .then(function () {
+            settings.mail.smtp = mail.smtp;
+            settings.mail.port = mail.port;
+            settings.mail.security = mail.security;
+            settings.mail.username = mail.username;
+            settings.mail.from = mail.from;
+            settings.mail.fromName = mail.fromName;
+            settings.mail.testTo = mail.testTo;
 
-            if (button) {
-                button.classList.toggle('active', key === tab);
+            renderMailSettings();
+            showToast('メール設定を保存しました。');
+        })
+        .catch(function (error) {
+            showModal('保存できませんでした', error.message);
+        });
+    }
+
+    function testMailSettings() {
+        var button = get('test-mail-settings');
+
+        if (button) {
+            button.disabled = true;
+            button.classList.add('loading');
+        }
+
+        var to = get('smtp-test-to')
+            ? get('smtp-test-to').value.trim()
+            : '';
+
+        postJson(
+            'test_mail',
+            { to: to },
+            button
+        )
+        .then(function (result) {
+            showModal(
+                'テストメール送信',
+                result.message
+            );
+        })
+        .catch(function (error) {
+            showModal(
+                'テストメールを送信できませんでした',
+                error.message
+            );
+        });
+    }
+
+    function renderKintoneSettings() {
+        var container = get('settings-content');
+
+        if (!container) {
+            return;
+        }
+
+        container.textContent = '';
+
+        var card = document.createElement('div');
+        card.className = 'card';
+
+        var title = document.createElement('div');
+        title.className = 'card-title';
+        title.textContent = 'kintone設定';
+
+        card.appendChild(title);
+
+        var notice = document.createElement('div');
+        notice.className = 'notice';
+        notice.textContent =
+            'kintoneへの接続にはログイン名・パスワードを使用します。APIトークンは使用しません。SSL証明書の検証は行いません。';
+
+        card.appendChild(notice);
+
+        card.appendChild(createField(
+            'kintoneの利用先 *',
+            'kt-domain',
+            settings.kintone.domain,
+            'text'
+        ));
+
+        card.appendChild(createField(
+            '顧客管理アプリID *',
+            'kt-appid',
+            settings.kintone.appId,
+            'text'
+        ));
+
+        var loginGrid = document.createElement('div');
+        loginGrid.className = 'form-grid';
+
+        loginGrid.appendChild(createField(
+            'ログイン名 *',
+            'kt-user',
+            settings.kintone.loginName,
+            'text'
+        ));
+
+        loginGrid.appendChild(createField(
+            'パスワード *',
+            'kt-password',
+            '',
+            'password'
+        ));
+
+        card.appendChild(loginGrid);
+
+        card.appendChild(createField(
+            'プロキシ（ホスト名:ポート番号）',
+            'kt-proxy',
+            settings.kintone.proxy,
+            'text'
+        ));
+
+        var proxyNotice = document.createElement('div');
+        proxyNotice.className = 'notice';
+        proxyNotice.textContent =
+            '例：proxy.example.local:8080　　プロキシを使用しない場合は空欄にしてください。';
+
+        card.appendChild(proxyNotice);
+
+        var actions = document.createElement('div');
+        actions.className = 'actions';
+
+        var save = document.createElement('button');
+        save.id = 'save-kt-settings';
+        save.className = 'btn btn-primary';
+        save.textContent = '設定を保存';
+
+        var test = document.createElement('button');
+        test.id = 'test-kt-settings';
+        test.className = 'btn';
+        test.textContent = '接続確認・項目一覧取得';
+
+        actions.appendChild(save);
+        actions.appendChild(test);
+        card.appendChild(actions);
+
+        var fieldTitle = document.createElement('div');
+        fieldTitle.className = 'card-title';
+        fieldTitle.style.marginTop = '25px';
+        fieldTitle.textContent = '顧客項目の設定';
+
+        card.appendChild(fieldTitle);
+
+        var fieldNotice = document.createElement('div');
+        fieldNotice.className = 'notice';
+        fieldNotice.textContent =
+            '「接続確認・項目一覧取得」でkintoneアプリの項目を取得すると、ここから顧客名・メールアドレスなどの項目を選択できます。';
+
+        card.appendChild(fieldNotice);
+
+        var mappingGrid = document.createElement('div');
+        mappingGrid.className = 'form-grid';
+
+        mappingGrid.appendChild(createFieldSelect(
+            '顧客名項目 *',
+            'kt-name-field',
+            settings.kintone.nameField,
+            window.kintoneFields || []
+        ));
+
+        mappingGrid.appendChild(createFieldSelect(
+            'メールアドレス項目 *',
+            'kt-email-field',
+            settings.kintone.emailField,
+            window.kintoneFields || []
+        ));
+
+        mappingGrid.appendChild(createFieldSelect(
+            '会社名項目',
+            'kt-company-field',
+            settings.kintone.companyField,
+            window.kintoneFields || []
+        ));
+
+        mappingGrid.appendChild(createFieldSelect(
+            '顧客番号項目',
+            'kt-code-field',
+            settings.kintone.codeField,
+            window.kintoneFields || []
+        ));
+
+        card.appendChild(mappingGrid);
+
+        var mappingSave = document.createElement('button');
+        mappingSave.id = 'save-kt-fields';
+        mappingSave.className = 'btn';
+        mappingSave.textContent = '顧客項目設定を保存';
+
+        card.appendChild(mappingSave);
+
+        var listTitle = document.createElement('div');
+        listTitle.className = 'card-title';
+        listTitle.style.marginTop = '25px';
+        listTitle.textContent = '取得したアプリ項目一覧';
+
+        card.appendChild(listTitle);
+
+        var fieldList = document.createElement('div');
+        fieldList.id = 'kintone-field-list';
+        fieldList.className = 'field-list';
+
+        renderFieldList(fieldList, window.kintoneFields || []);
+
+        card.appendChild(fieldList);
+
+        container.appendChild(card);
+    }
+
+    function createFieldSelect(
+        labelText,
+        id,
+        selectedValue,
+        fields
+    ) {
+        var wrap = document.createElement('div');
+        wrap.className = 'field';
+
+        var label = document.createElement('label');
+        label.textContent = labelText;
+
+        var select = document.createElement('select');
+        select.id = id;
+
+        var empty = document.createElement('option');
+        empty.value = '';
+        empty.textContent = '選択してください';
+        select.appendChild(empty);
+
+        fields.forEach(function (field) {
+            var option = document.createElement('option');
+            option.value = field.code;
+            option.textContent =
+                field.label +
+                ' [' +
+                field.code +
+                ']';
+
+            if (selectedValue === field.code) {
+                option.selected = true;
             }
+
+            select.appendChild(option);
         });
 
-        if (tab === 'content') {
-            renderDetailContent(survey);
-        } else if (tab === 'send') {
-            renderSend(survey);
-        } else if (tab === 'status') {
-            renderStatus(survey);
-        } else if (tab === 'result') {
-            renderResult(survey);
-        }
+        wrap.appendChild(label);
+        wrap.appendChild(select);
+
+        return wrap;
     }
 
-    function renderDetailContent(survey) {
-        var target = $('detail-content');
-
-        if (!target) {
+    function renderFieldList(container, fields) {
+        if (!container) {
             return;
         }
 
-        var html = '<div class="card">';
+        container.textContent = '';
 
-        html += '<div class="card-title">アンケート内容</div>';
+        var header = document.createElement('div');
+        header.className = 'field-row header';
 
-        if (survey.description) {
-            html += '<p>' + escapeHtml(survey.description) + '</p>';
-        }
-
-        survey.groups.forEach(function (group, gi) {
-            html += '<h3>' + escapeHtml(group.name) + '</h3>';
-
-            group.questions.forEach(function (question, qi) {
-                html += '<div class="result-item">';
-                html += '<div><strong>' +
-                    escapeHtml(questionNumber(survey, gi, qi)) +
-                    '　' +
-                    escapeHtml(question.text) +
-                    '</strong></div>';
-
-                if (question.required) {
-                    html += '<div style="font-size:12px;color:#c53f3f">必須</div>';
-                }
-
-                question.options.forEach(function (option) {
-                    html += '<div class="result-answer">' +
-                        escapeHtml(option.text) +
-                        '</div>';
-                });
-
-                html += '</div>';
-            });
+        [
+            '項目名',
+            'フィールドコード',
+            '種類'
+        ].forEach(function (text) {
+            var cell = document.createElement('div');
+            cell.textContent = text;
+            header.appendChild(cell);
         });
 
-        html += '</div>';
+        container.appendChild(header);
 
-        target.innerHTML = html;
-    }
-
-    function renderSend(survey) {
-        var target = $('detail-content');
-
-        if (!target) {
-            return;
-        }
-
-        selectedCustomers = [];
-
-        var html = '<div class="send-layout">';
-
-        html += '<div class="card">';
-        html += '<div class="card-title">送信対象者</div>';
-        html += '<div class="selection-summary">選択中：<span id="selected-count">0</span>名</div>';
-        html += '<div class="customer-toolbar">';
-        html += '<input id="send-customer-search" placeholder="顧客名・メールアドレスで検索">';
-        html += '<button id="btn-select-all" class="btn">表示中を全選択</button>';
-        html += '</div>';
-        html += '<div id="send-customers"></div>';
-        html += '</div>';
-
-        html += '<div class="card">';
-        html += '<div class="card-title">メール内容</div>';
-        html += '<div class="field"><label>件名</label>';
-        html += '<input id="send-subject" value="' +
-            escapeHtml(survey.name + ' 回答のお願い') +
-            '"></div>';
-        html += '<div class="field"><label>本文</label>';
-        html += '<textarea id="send-body">「' +
-            escapeHtml(survey.name) +
-            '」へのご回答をお願いいたします。</textarea></div>';
-        html += '<button id="btn-confirm-send" class="btn btn-primary">送信内容を確認</button>';
-        html += '</div>';
-
-        html += '</div>';
-
-        target.innerHTML = html;
-
-        renderSendCustomers();
-
-        var search = $('send-customer-search');
-
-        if (search) {
-            search.addEventListener('input', function () {
-                renderSendCustomers();
-            });
-        }
-
-        var selectAll = $('btn-select-all');
-
-        if (selectAll) {
-            selectAll.addEventListener('click', function () {
-                setLoading(this, true);
-
-                setTimeout(function () {
-                    selectAllVisibleCustomers();
-                    setLoading(selectAll, false);
-                }, 100);
-            });
-        }
-
-        var confirm = $('btn-confirm-send');
-
-        if (confirm) {
-            confirm.addEventListener('click', function () {
-                setLoading(this, true);
-
-                setTimeout(function () {
-                    setLoading(confirm, false);
-                    confirmSend();
-                }, 100);
-            });
-        }
-    }
-
-    function renderSendCustomers() {
-        var target = $('send-customers');
-
-        if (!target) {
-            return;
-        }
-
-        var searchInput = $('send-customer-search');
-        var search = searchInput ? searchInput.value.toLowerCase() : '';
-
-        var filtered = customers.filter(function (customer) {
-            return !search ||
-                customer.name.toLowerCase().indexOf(search) >= 0 ||
-                customer.email.toLowerCase().indexOf(search) >= 0 ||
-                customer.company.toLowerCase().indexOf(search) >= 0;
-        });
-
-        var table = document.createElement('table');
-        table.className = 'table';
-
-        var head = document.createElement('thead');
-        var headRow = document.createElement('tr');
-
-        ['','顧客名','メールアドレス','会社名'].forEach(function (text) {
-            var th = document.createElement('th');
-            th.textContent = text;
-            headRow.appendChild(th);
-        });
-
-        head.appendChild(headRow);
-        table.appendChild(head);
-
-        var body = document.createElement('tbody');
-
-        filtered.forEach(function (customer) {
-            var row = document.createElement('tr');
-
-            var checkCell = document.createElement('td');
-            var checkbox = document.createElement('input');
-
-            checkbox.type = 'checkbox';
-            checkbox.checked =
-                selectedCustomers.indexOf(customer.id) >= 0;
-            checkbox.dataset.id = String(customer.id);
-
-            checkbox.addEventListener('change', function () {
-                toggleCustomer(
-                    Number(this.dataset.id),
-                    this.checked
-                );
-            });
-
-            checkCell.appendChild(checkbox);
-
-            var name = document.createElement('td');
-            name.textContent = customer.name;
-
-            var email = document.createElement('td');
-            email.textContent = customer.email;
-
-            var company = document.createElement('td');
-            company.textContent = customer.company;
-
-            row.appendChild(checkCell);
-            row.appendChild(name);
-            row.appendChild(email);
-            row.appendChild(company);
-
-            body.appendChild(row);
-        });
-
-        table.appendChild(body);
-        target.textContent = '';
-
-        if (!filtered.length) {
+        if (!fields.length) {
             var empty = document.createElement('div');
-            empty.className = 'empty';
-            empty.textContent = '該当する顧客がありません。';
-            target.appendChild(empty);
-        } else {
-            target.appendChild(table);
+            empty.className = 'field-row';
+
+            var message = document.createElement('div');
+            message.textContent =
+                'まだ項目一覧を取得していません。';
+
+            empty.appendChild(message);
+            container.appendChild(empty);
+            return;
         }
 
-        var count = $('selected-count');
+        fields.forEach(function (field) {
+            var row = document.createElement('div');
+            row.className = 'field-row';
 
-        if (count) {
-            count.textContent = String(selectedCustomers.length);
-        }
-    }
+            var label = document.createElement('div');
+            label.textContent = field.label;
 
-    function toggleCustomer(id, checked) {
-        var index = selectedCustomers.indexOf(id);
+            var code = document.createElement('div');
+            code.textContent = field.code;
 
-        if (checked && index < 0) {
-            selectedCustomers.push(id);
-        }
+            var type = document.createElement('div');
+            type.textContent = field.type;
 
-        if (!checked && index >= 0) {
-            selectedCustomers.splice(index, 1);
-        }
+            row.appendChild(label);
+            row.appendChild(code);
+            row.appendChild(type);
 
-        var count = $('selected-count');
-
-        if (count) {
-            count.textContent = String(selectedCustomers.length);
-        }
-    }
-
-    function selectAllVisibleCustomers() {
-        var searchInput = $('send-customer-search');
-        var search = searchInput ? searchInput.value.toLowerCase() : '';
-
-        customers.forEach(function (customer) {
-            var visible =
-                !search ||
-                customer.name.toLowerCase().indexOf(search) >= 0 ||
-                customer.email.toLowerCase().indexOf(search) >= 0 ||
-                customer.company.toLowerCase().indexOf(search) >= 0;
-
-            if (
-                visible &&
-                selectedCustomers.indexOf(customer.id) < 0
-            ) {
-                selectedCustomers.push(customer.id);
-            }
+            container.appendChild(row);
         });
-
-        renderSendCustomers();
     }
 
-    function confirmSend() {
-        var survey = getCurrentSurvey();
+    function saveKintoneSettings() {
+        var button = get('save-kt-settings');
 
-        if (!survey) {
-            return;
+        if (button) {
+            button.disabled = true;
+            button.classList.add('loading');
         }
 
-        if (survey.status !== 'open') {
-            alert('公開中のアンケートのみ送信できます。');
-            return;
-        }
+        var passwordInput = get('kt-password');
 
-        if (!mailSettings.ready) {
-            alert('メール送信設定を完了してください。');
-            return;
-        }
+        var kintone = {
+            domain: get('kt-domain')
+                ? get('kt-domain').value.trim()
+                : '',
+            appId: get('kt-appid')
+                ? get('kt-appid').value.trim()
+                : '',
+            loginName: get('kt-user')
+                ? get('kt-user').value.trim()
+                : '',
+            password: passwordInput
+                ? passwordInput.value
+                : '',
+            proxy: get('kt-proxy')
+                ? get('kt-proxy').value.trim()
+                : '',
+            nameField: settings.kintone.nameField,
+            emailField: settings.kintone.emailField,
+            companyField: settings.kintone.companyField,
+            codeField: settings.kintone.codeField
+        };
 
-        if (!selectedCustomers.length) {
-            alert('送信対象者を1名以上選択してください。');
-            return;
-        }
+        postJson(
+            'save_kintone_settings',
+            { kintone: kintone },
+            button
+        )
+        .then(function () {
+            settings.kintone.domain = kintone.domain;
+            settings.kintone.appId = kintone.appId;
+            settings.kintone.loginName = kintone.loginName;
+            settings.kintone.proxy = kintone.proxy;
 
-        var subject = $('send-subject');
-        var body = $('send-body');
-
-        var recipients = customers.filter(function (customer) {
-            return selectedCustomers.indexOf(customer.id) >= 0;
+            showToast('kintone設定を保存しました。');
+        })
+        .catch(function (error) {
+            showModal(
+                '保存できませんでした',
+                error.message
+            );
         });
+    }
 
-        var html = '<div class="notice">以下の内容でメールを送信します。</div>';
-        html += '<p><strong>アンケート：</strong>' +
-            escapeHtml(survey.name) +
-            '</p>';
+    function testKintoneSettings() {
+        var button = get('test-kt-settings');
 
-        html += '<p><strong>送信対象者：</strong>' +
-            recipients.length +
-            '名</p>';
+        if (button) {
+            button.disabled = true;
+            button.classList.add('loading');
+        }
 
-        recipients.forEach(function (customer) {
-            html += '<span class="recipient-chip">' +
-                escapeHtml(customer.name) +
-                ' &lt;' +
-                escapeHtml(customer.email) +
-                '&gt;</span>';
+        postJson(
+            'test_kintone',
+            {},
+            button
+        )
+        .then(function (result) {
+            window.kintoneFields =
+                Array.isArray(result.fields)
+                    ? result.fields
+                    : [];
+
+            renderKintoneSettings();
+
+            showToast(
+                'kintone接続に成功し、' +
+                String(result.fieldCount || 0) +
+                '項目を取得しました。'
+            );
+        })
+        .catch(function (error) {
+            showModal(
+                'kintone接続に失敗しました',
+                error.message
+            );
         });
-
-        html += '<p><strong>件名：</strong>' +
-            escapeHtml(subject ? subject.value : '') +
-            '</p>';
-
-        html += '<div class="email-preview">' +
-            escapeHtml(body ? body.value : '') +
-            '</div>';
-
-        openModal(
-            'アンケート送信確認',
-            html,
-            '<button class="btn" id="send-back">戻る</button>' +
-            '<button class="btn btn-primary" id="send-execute">メールを送信する</button>'
-        );
-
-        var back = $('send-back');
-
-        if (back) {
-            back.addEventListener('click', closeModal);
-        }
-
-        var execute = $('send-execute');
-
-        if (execute) {
-            execute.addEventListener('click', function () {
-                setLoading(this, true);
-
-                setTimeout(function () {
-                    setLoading(execute, false);
-                    sendSurveyMail();
-                }, 300);
-            });
-        }
     }
 
-    function sendSurveyMail() {
-        var survey = getCurrentSurvey();
+    function saveKintoneFields() {
+        var button = get('save-kt-fields');
 
-        if (!survey) {
-            return;
+        if (button) {
+            button.disabled = true;
+            button.classList.add('loading');
         }
 
-        var count = selectedCustomers.length;
+        settings.kintone.nameField =
+            get('kt-name-field')
+                ? get('kt-name-field').value
+                : '';
 
-        closeModal();
+        settings.kintone.emailField =
+            get('kt-email-field')
+                ? get('kt-email-field').value
+                : '';
 
-        survey.target = Math.max(survey.target || 0, count);
-        survey.sent = (survey.sent || 0) + count;
-        survey.updated = '2026-09-24';
+        settings.kintone.companyField =
+            get('kt-company-field')
+                ? get('kt-company-field').value
+                : '';
 
-        var html = '<div class="notice success">メール送信が完了しました。</div>';
-        html += '<div class="card">';
-        html += '<div class="card-title">送信結果</div>';
-        html += '<p>アンケート：' +
-            escapeHtml(survey.name) +
-            '</p>';
-        html += '<p>送信対象：' + count + '名</p>';
-        html += '<p style="color:#267348">送信成功：' +
-            count +
-            '名</p>';
-        html += '<p style="color:#718096">送信失敗：0名</p>';
-        html += '<div class="progress"><span style="width:100%"></span></div>';
-        html += '</div>';
+        settings.kintone.codeField =
+            get('kt-code-field')
+                ? get('kt-code-field').value
+                : '';
 
-        var target = $('detail-content');
-
-        if (target) {
-            target.innerHTML = html;
-        }
-
-        showToast('メールを送信しました');
-    }
-
-    function renderStatus(survey) {
-        var target = $('detail-content');
-
-        if (!target) {
-            return;
-        }
-
-        var targetCount = survey.target || 0;
-        var answers = survey.answers || 0;
-        var rate = targetCount
-            ? Math.round(answers / targetCount * 100)
-            : 0;
-
-        var unanswered = Math.max(
-            targetCount - answers,
-            0
-        );
-
-        var html = '<div class="detail-summary">';
-        html += statCard('回答数', answers + '件', '');
-        html += statCard('回答率', rate + '%', '');
-        html += statCard('未回答数', unanswered + '名', '');
-        html += statCard('送信済み', (survey.sent || 0) + '名', '');
-        html += '</div>';
-
-        html += '<div class="card">';
-        html += '<div class="card-title">公開・回答状況</div>';
-        html += '<p>公開期間：' +
-            escapeHtml(survey.start || '未設定') +
-            ' ～ ' +
-            escapeHtml(survey.end || '未設定') +
-            '</p>';
-        html += '<p>メール送信対象者：' +
-            targetCount +
-            '名</p>';
-        html += '<p>メール送信済み：' +
-            (survey.sent || 0) +
-            '名</p>';
-        html += '<p>未回答者：' +
-            unanswered +
-            '名</p>';
-        html += '<div>回答率</div>';
-        html += '<div class="progress"><span style="width:' +
-            Math.min(rate, 100) +
-            '%"></span></div>';
-        html += '<div style="text-align:right">' +
-            rate +
-            '%</div>';
-        html += '</div>';
-
-        target.innerHTML = html;
-    }
-
-    function statCard(label, value, note) {
-        return '<div class="stat-card">' +
-            '<div class="stat-label">' +
-            escapeHtml(label) +
-            '</div>' +
-            '<div class="stat-value">' +
-            escapeHtml(value) +
-            '</div>' +
-            '<div class="stat-note">' +
-            escapeHtml(note) +
-            '</div>' +
-            '</div>';
-    }
-
-    function renderResult(survey) {
-        var target = $('detail-content');
-
-        if (!target) {
-            return;
-        }
-
-        var html = '<div class="detail-summary">';
-        html += statCard('総回答数', survey.answers + '件', '');
-        html += statCard('回答者数', survey.answers + '名', '');
-        html += statCard('質問数', countQuestions(survey) + '問', '');
-        html += statCard('集計対象', survey.answers + '件', '');
-        html += '</div>';
-
-        html += '<div class="card">';
-        html += '<div class="card-title">質問ごとの回答結果</div>';
-
-        survey.groups.forEach(function (group, gi) {
-            html += '<h3>' +
-                escapeHtml(group.name) +
-                '</h3>';
-
-            group.questions.forEach(function (question, qi) {
-                html += '<div class="result-item">';
-                html += '<div style="font-weight:bold">' +
-                    escapeHtml(questionNumber(survey, gi, qi)) +
-                    '　' +
-                    escapeHtml(question.text) +
-                    '</div>';
-
-                if (question.type === 'single' ||
-                    question.type === 'multiple') {
-
-                    question.options.forEach(function (option, oi) {
-                        var count = survey.answers
-                            ? Math.max(
-                                0,
-                                Math.round(
-                                    survey.answers *
-                                    (0.52 - oi * 0.12)
-                                )
-                            )
-                            : 0;
-
-                        var percent = survey.answers
-                            ? Math.min(
-                                100,
-                                Math.round(
-                                    count / survey.answers * 100
-                                )
-                            )
-                            : 0;
-
-                        html += '<div style="margin-top:13px">';
-                        html += '<div style="display:flex;justify-content:space-between">';
-                        html += '<span>' +
-                            escapeHtml(option.text) +
-                            '</span>';
-                        html += '<span>' +
-                            count +
-                            '件（' +
-                            percent +
-                            '%）</span>';
-                        html += '</div>';
-                        html += '<div class="bar"><span style="width:' +
-                            percent +
-                            '%"></span></div>';
-                        html += '</div>';
-                    });
-                } else {
-                    html += '<div class="result-answer">「とても参考になりました。今後も利用したいです。」</div>';
-                    html += '<div class="result-answer">「もう少し選択肢があると回答しやすいと思います。」</div>';
-                    html += '<div class="result-answer">「商品の説明が分かりやすかったです。」</div>';
+        postJson(
+            'save_kintone_settings',
+            {
+                kintone: {
+                    domain: settings.kintone.domain,
+                    appId: settings.kintone.appId,
+                    loginName: settings.kintone.loginName,
+                    password: '',
+                    proxy: settings.kintone.proxy,
+                    nameField: settings.kintone.nameField,
+                    emailField: settings.kintone.emailField,
+                    companyField: settings.kintone.companyField,
+                    codeField: settings.kintone.codeField
                 }
-
-                html += '</div>';
-            });
+            },
+            button
+        )
+        .then(function () {
+            showToast('顧客項目設定を保存しました。');
+        })
+        .catch(function (error) {
+            showModal(
+                '保存できませんでした',
+                error.message
+            );
         });
-
-        html += '</div>';
-
-        target.innerHTML = html;
     }
 
-    function publishSurvey(id, button) {
-        var survey = getSurvey(id);
+    function showSettings(tab) {
+        currentSettingsTab = tab || 'mail';
 
-        if (!survey) {
-            return;
+        var mailTab = get('tab-mail');
+        var ktTab = get('tab-kintone');
+
+        if (mailTab) {
+            mailTab.classList.toggle(
+                'active',
+                currentSettingsTab === 'mail'
+            );
         }
 
-        if (!survey.name || !countQuestions(survey)) {
-            alert('公開するにはアンケート内容を設定してください。');
-            return;
+        if (ktTab) {
+            ktTab.classList.toggle(
+                'active',
+                currentSettingsTab === 'kintone'
+            );
         }
 
-        if (!confirm('「' + survey.name + '」を公開しますか？')) {
-            return;
+        showPage('page-settings');
+
+        if (currentSettingsTab === 'kintone') {
+            renderKintoneSettings();
+        } else {
+            renderMailSettings();
         }
-
-        setLoading(button, true);
-
-        setTimeout(function () {
-            survey.status = 'open';
-            survey.updated = '2026-09-24';
-
-            setLoading(button, false);
-            renderList();
-            showToast('アンケートを公開しました');
-        }, 200);
-    }
-
-    function endSurvey(id, button) {
-        var survey = getSurvey(id);
-
-        if (!survey) {
-            return;
-        }
-
-        if (!confirm('「' + survey.name + '」の回答受付を終了しますか？')) {
-            return;
-        }
-
-        setLoading(button, true);
-
-        setTimeout(function () {
-            survey.status = 'end';
-            survey.updated = '2026-09-24';
-
-            setLoading(button, false);
-            renderList();
-            showToast('アンケートを終了しました');
-        }, 200);
-    }
-
-    function deleteSurvey(id, button) {
-        var survey = getSurvey(id);
-
-        if (!survey) {
-            return;
-        }
-
-        if (!confirm('下書き「' + survey.name + '」を削除しますか？')) {
-            return;
-        }
-
-        setLoading(button, true);
-
-        setTimeout(function () {
-            surveys = surveys.filter(function (item) {
-                return item.id !== id;
-            });
-
-            setLoading(button, false);
-            renderList();
-            showToast('アンケートを削除しました');
-        }, 200);
     }
 
     function showCustomers() {
         showPage('page-customers');
+
+        var status = get('customer-status');
+
+        if (status) {
+            status.textContent = '';
+        }
+
         renderCustomers();
-        renderCustomerStatus();
-    }
-
-    function renderCustomerStatus() {
-        var target = $('customer-status');
-
-        if (!target) {
-            return;
-        }
-
-        target.textContent = '';
-
-        var notice = document.createElement('div');
-        notice.className = 'notice';
-
-        if (kintoneSettings.ready) {
-            notice.classList.add('success');
-            notice.textContent =
-                'キントーンから顧客一覧を取得できる状態です。現在 ' +
-                customers.length +
-                ' 件の顧客を表示しています。';
-        } else {
-            notice.classList.add('warning');
-            notice.textContent =
-                'キントーン設定が未完了です。設定画面から設定してください。';
-        }
-
-        target.appendChild(notice);
     }
 
     function renderCustomers() {
-        var searchInput = $('customer-search');
-        var body = $('customer-body');
+        var body = get('customer-body');
+        var searchInput = get('customer-search');
 
         if (!body) {
             return;
         }
 
         var search = searchInput
-            ? searchInput.value.toLowerCase()
+            ? searchInput.value.trim().toLowerCase()
             : '';
 
-        var filtered = customers.filter(function (customer) {
-            return !search ||
-                customer.name.toLowerCase().indexOf(search) >= 0 ||
-                customer.email.toLowerCase().indexOf(search) >= 0 ||
-                customer.company.toLowerCase().indexOf(search) >= 0 ||
-                customer.code.toLowerCase().indexOf(search) >= 0;
-        });
-
         body.textContent = '';
+
+        var filtered = customers.filter(function (customer) {
+            var text =
+                String(customer.name || '') +
+                ' ' +
+                String(customer.email || '') +
+                ' ' +
+                String(customer.company || '') +
+                ' ' +
+                String(customer.code || '');
+
+            return text.toLowerCase().indexOf(search) >= 0;
+        });
 
         if (!filtered.length) {
             var row = document.createElement('tr');
             var cell = document.createElement('td');
+
             cell.colSpan = 4;
             cell.className = 'empty';
-            cell.textContent = '該当する顧客がありません。';
+            cell.textContent =
+                customers.length
+                    ? '検索条件に一致する顧客がありません。'
+                    : '顧客一覧を取得してください。';
+
             row.appendChild(cell);
             body.appendChild(row);
             return;
@@ -2295,7 +3579,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 customer.code
             ].forEach(function (value) {
                 var cell = document.createElement('td');
-                cell.textContent = value;
+                cell.textContent = value || '';
                 row.appendChild(cell);
             });
 
@@ -2303,629 +3587,415 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    function refreshCustomers(button) {
-        if (!kintoneSettings.ready) {
-            alert('先にキントーン設定を保存してください。');
-            return;
-        }
-
-        setLoading(button, true);
-
-        setTimeout(function () {
-            setLoading(button, false);
-            renderCustomerStatus();
-            renderCustomers();
-            showToast('顧客一覧を更新しました');
-        }, 300);
-    }
-
-    function showSettings(tab) {
-        currentSettingsTab = tab || currentSettingsTab || 'mail';
-        showPage('page-settings');
-        renderSettings();
-    }
-
-    function renderSettings() {
-        var mailTab = $('settings-tab-mail');
-        var kintoneTab = $('settings-tab-kintone');
-
-        if (mailTab) {
-            mailTab.classList.toggle(
-                'active',
-                currentSettingsTab === 'mail'
-            );
-        }
-
-        if (kintoneTab) {
-            kintoneTab.classList.toggle(
-                'active',
-                currentSettingsTab === 'kintone'
-            );
-        }
-
-        if (currentSettingsTab === 'mail') {
-            renderMailSettings();
-        } else {
-            renderKintoneSettings();
-        }
-    }
-
-    function renderMailSettings() {
-        var target = $('settings-content');
-
-        if (!target) {
-            return;
-        }
-
-        var html = '<div class="card">';
-        html += '<div class="card-title">メール送信設定</div>';
-
-        html += '<div class="status-line">';
-        html += '<span class="status-dot ' +
-            (mailSettings.ready ? 'ok' : 'warn') +
-            '"></span>';
-        html += '<span>' +
-            (mailSettings.ready
-                ? 'メール送信可能な設定が保存されています。'
-                : 'メール送信設定が未完了です。') +
-            '</span>';
-        html += '</div>';
-
-        html += '<div class="form-grid">';
-        html += '<div class="field">';
-        html += '<label>SMTPサーバ *</label>';
-        html += '<input id="smtp-server">';
-        html += '</div>';
-
-        html += '<div class="field">';
-        html += '<label>ポート番号 *</label>';
-        html += '<input id="smtp-port">';
-        html += '</div>';
-        html += '</div>';
-
-        html += '<div class="field">';
-        html += '<label>接続方式</label>';
-        html += '<select id="smtp-security">';
-        html += '<option value="なし">なし</option>';
-        html += '<option value="STARTTLS">STARTTLS</option>';
-        html += '<option value="SSL/TLS">SSL/TLS</option>';
-        html += '</select>';
-        html += '</div>';
-
-        html += '<div class="form-grid">';
-        html += '<div class="field">';
-        html += '<label>認証ユーザー名</label>';
-        html += '<input id="smtp-user">';
-        html += '</div>';
-
-        html += '<div class="field">';
-        html += '<label>認証パスワード</label>';
-        html += '<input id="smtp-password" type="password">';
-        html += '</div>';
-        html += '</div>';
-
-        html += '<div class="form-grid">';
-        html += '<div class="field">';
-        html += '<label>送信元メールアドレス *</label>';
-        html += '<input id="smtp-from">';
-        html += '</div>';
-
-        html += '<div class="field">';
-        html += '<label>送信元名</label>';
-        html += '<input id="smtp-from-name">';
-        html += '</div>';
-        html += '</div>';
-
-        html += '<button id="btn-save-mail" class="btn btn-primary">設定を保存</button> ';
-        html += '<button id="btn-test-mail" class="btn">送信設定を確認</button>';
-
-        html += '</div>';
-
-        target.innerHTML = html;
-
-        var smtp = $('smtp-server');
-        var port = $('smtp-port');
-        var security = $('smtp-security');
-        var user = $('smtp-user');
-        var password = $('smtp-password');
-        var from = $('smtp-from');
-        var fromName = $('smtp-from-name');
-
-        if (smtp) smtp.value = mailSettings.smtp;
-        if (port) port.value = mailSettings.port;
-        if (security) security.value = mailSettings.security;
-        if (user) user.value = mailSettings.username;
-        if (password) password.value = '';
-        if (from) from.value = mailSettings.from;
-        if (fromName) fromName.value = mailSettings.fromName;
-
-        var save = $('btn-save-mail');
-
-        if (save) {
-            save.addEventListener('click', function () {
-                setLoading(this, true);
-
-                setTimeout(function () {
-                    saveMailSettings(save);
-                    setLoading(save, false);
-                }, 150);
-            });
-        }
-
-        var test = $('btn-test-mail');
-
-        if (test) {
-            test.addEventListener('click', function () {
-                setLoading(this, true);
-
-                setTimeout(function () {
-                    setLoading(test, false);
-                    testMailSettings();
-                }, 150);
-            });
-        }
-    }
-
-    function saveMailSettings() {
-        var smtp = $('smtp-server');
-        var port = $('smtp-port');
-        var security = $('smtp-security');
-        var user = $('smtp-user');
-        var password = $('smtp-password');
-        var from = $('smtp-from');
-        var fromName = $('smtp-from-name');
-
-        mailSettings.smtp = smtp ? smtp.value.trim() : '';
-        mailSettings.port = port ? port.value.trim() : '';
-        mailSettings.security = security ? security.value : 'STARTTLS';
-        mailSettings.username = user ? user.value.trim() : '';
-
-        if (password && password.value !== '') {
-            mailSettings.password = password.value;
-        }
-
-        mailSettings.from = from ? from.value.trim() : '';
-        mailSettings.fromName = fromName ? fromName.value.trim() : '';
-
-        if (
-            !mailSettings.smtp ||
-            !mailSettings.port ||
-            !mailSettings.from
-        ) {
-            alert('SMTPサーバ、ポート番号、送信元メールアドレスを入力してください。');
-            return;
-        }
-
-        mailSettings.ready = true;
-        renderMailSettings();
-        showToast('メール送信設定を保存しました');
-    }
-
-    function testMailSettings() {
-        if (!mailSettings.ready) {
-            alert('先に設定を保存してください。');
-            return;
-        }
-
-        openModal(
-            'メール送信設定の確認',
-            '<div class="notice success">メール送信設定を確認しました。</div>' +
-            '<p><strong>SMTPサーバ：</strong>' +
-            escapeHtml(mailSettings.smtp) +
-            '</p>' +
-            '<p><strong>ポート：</strong>' +
-            escapeHtml(mailSettings.port) +
-            '</p>' +
-            '<p><strong>接続方式：</strong>' +
-            escapeHtml(mailSettings.security) +
-            '</p>' +
-            '<p><strong>送信元：</strong>' +
-            escapeHtml(mailSettings.fromName) +
-            ' &lt;' +
-            escapeHtml(mailSettings.from) +
-            '&gt;</p>',
-            '<button class="btn" id="mail-test-close">閉じる</button>'
-        );
-
-        var close = $('mail-test-close');
-
-        if (close) {
-            close.addEventListener('click', closeModal);
-        }
-    }
-
-    function renderKintoneSettings() {
-        var target = $('settings-content');
-
-        if (!target) {
-            return;
-        }
-
-        var html = '<div class="card">';
-        html += '<div class="card-title">キントーン設定</div>';
-
-        html += '<div class="status-line">';
-        html += '<span class="status-dot ' +
-            (kintoneSettings.ready ? 'ok' : 'warn') +
-            '"></span>';
-        html += '<span>' +
-            (kintoneSettings.ready
-                ? '顧客一覧を取得できる設定が保存されています。'
-                : 'キントーン設定が未完了です。') +
-            '</span>';
-        html += '</div>';
-
-        html += '<div class="notice">';
-        html += '顧客一覧の取得には、キントーンのログイン名・パスワードを使用します。';
-        html += '</div>';
-
-        html += '<div class="field">';
-        html += '<label>キントーンの利用先 *</label>';
-        html += '<input id="kt-domain">';
-        html += '</div>';
-
-        html += '<div class="field">';
-        html += '<label>顧客管理アプリID *</label>';
-        html += '<input id="kt-appid">';
-        html += '</div>';
-
-        html += '<div class="form-grid">';
-        html += '<div class="field">';
-        html += '<label>ログイン名 *</label>';
-        html += '<input id="kt-user">';
-        html += '</div>';
-
-        html += '<div class="field">';
-        html += '<label>パスワード *</label>';
-        html += '<input id="kt-password" type="password">';
-        html += '</div>';
-        html += '</div>';
-
-        html += '<div class="card" style="background:#fafbfc">';
-        html += '<div class="card-title">接続経路</div>';
-
-        html += '<div class="field">';
-        html += '<label>プロキシ ホスト名</label>';
-        html += '<input id="kt-proxy-host">';
-        html += '</div>';
-
-        html += '<div class="field">';
-        html += '<label>プロキシ ポート番号</label>';
-        html += '<input id="kt-proxy-port">';
-        html += '</div>';
-
-        html += '<p>SSL証明書の検証：無効</p>';
-        html += '</div>';
-
-        html += '<button id="btn-save-kintone" class="btn btn-primary">設定を保存</button> ';
-        html += '<button id="btn-test-kintone" class="btn">接続設定を確認</button>';
-
-        html += '</div>';
-
-        target.innerHTML = html;
-
-        var domain = $('kt-domain');
-        var appId = $('kt-appid');
-        var user = $('kt-user');
-        var password = $('kt-password');
-        var proxyHost = $('kt-proxy-host');
-        var proxyPort = $('kt-proxy-port');
-
-        if (domain) domain.value = kintoneSettings.domain;
-        if (appId) appId.value = kintoneSettings.appId;
-        if (user) user.value = kintoneSettings.loginName;
-        if (password) password.value = '';
-        if (proxyHost) proxyHost.value = kintoneSettings.proxyHost;
-        if (proxyPort) proxyPort.value = kintoneSettings.proxyPort;
-
-        var save = $('btn-save-kintone');
-
-        if (save) {
-            save.addEventListener('click', function () {
-                setLoading(this, true);
-
-                setTimeout(function () {
-                    saveKintoneSettings();
-                    setLoading(save, false);
-                }, 150);
-            });
-        }
-
-        var test = $('btn-test-kintone');
-
-        if (test) {
-            test.addEventListener('click', function () {
-                setLoading(this, true);
-
-                setTimeout(function () {
-                    setLoading(test, false);
-                    testKintoneSettings();
-                }, 150);
-            });
-        }
-    }
-
-    function saveKintoneSettings() {
-        var domain = $('kt-domain');
-        var appId = $('kt-appid');
-        var user = $('kt-user');
-        var password = $('kt-password');
-        var proxyHost = $('kt-proxy-host');
-        var proxyPort = $('kt-proxy-port');
-
-        kintoneSettings.domain = domain ? domain.value.trim() : '';
-        kintoneSettings.appId = appId ? appId.value.trim() : '';
-        kintoneSettings.loginName = user ? user.value.trim() : '';
-
-        if (password && password.value !== '') {
-            kintoneSettings.password = password.value;
-        }
-
-        kintoneSettings.proxyHost =
-            proxyHost ? proxyHost.value.trim() : '';
-
-        kintoneSettings.proxyPort =
-            proxyPort ? proxyPort.value.trim() : '';
-
-        if (
-            !kintoneSettings.domain ||
-            !kintoneSettings.appId ||
-            !kintoneSettings.loginName ||
-            !kintoneSettings.password
-        ) {
-            alert('利用先、顧客管理アプリID、ログイン名、パスワードを入力してください。');
-            return;
-        }
-
-        if (
-            kintoneSettings.proxyHost &&
-            !kintoneSettings.proxyPort
-        ) {
-            alert('プロキシのホスト名を入力した場合は、ポート番号も入力してください。');
-            return;
-        }
-
-        kintoneSettings.proxyAuth = false;
-        kintoneSettings.sslVerify = false;
-        kintoneSettings.ready = true;
-
-        renderKintoneSettings();
-        showToast('キントーン設定を保存しました');
-    }
-
-    function testKintoneSettings() {
-        if (!kintoneSettings.ready) {
-            alert('先に設定を保存してください。');
-            return;
-        }
-
-        var proxy = kintoneSettings.proxyHost
-            ? kintoneSettings.proxyHost + ':' +
-              kintoneSettings.proxyPort
-            : '使用しない';
-
-        openModal(
-            'キントーン接続設定の確認',
-            '<div class="notice success">キントーン接続設定を確認しました。</div>' +
-            '<p><strong>利用先：</strong>' +
-            escapeHtml(kintoneSettings.domain) +
-            '</p>' +
-            '<p><strong>顧客管理アプリ：</strong>' +
-            escapeHtml(kintoneSettings.appId) +
-            '</p>' +
-            '<p><strong>ログイン名：</strong>' +
-            escapeHtml(kintoneSettings.loginName) +
-            '</p>' +
-            '<p><strong>プロキシ：</strong>' +
-            escapeHtml(proxy) +
-            '</p>' +
-            '<p><strong>SSL証明書検証：</strong>無効</p>',
-            '<button class="btn" id="kintone-test-close">閉じる</button>'
-        );
-
-        var close = $('kintone-test-close');
-
-        if (close) {
-            close.addEventListener('click', closeModal);
-        }
-    }
-
-    function openModal(title, body, footer) {
-        var modal = $('modal');
-        var modalTitle = $('modal-title');
-        var modalBody = $('modal-body');
-        var modalFooter = $('modal-footer');
-
-        if (!modal || !modalTitle || !modalBody || !modalFooter) {
-            return;
-        }
-
-        modalTitle.textContent = title;
-        modalBody.innerHTML = body;
-        modalFooter.innerHTML = footer || '';
-        modal.classList.remove('hidden');
-    }
-
-    function closeModal() {
-        var modal = $('modal');
-
-        if (modal) {
-            modal.classList.add('hidden');
-        }
-    }
-
-    function showToast(message) {
-        var toast = $('toast');
-
-        if (!toast) {
-            return;
-        }
-
-        toast.textContent = message;
-        toast.classList.add('show');
-
-        setTimeout(function () {
-            if (toast) {
-                toast.classList.remove('show');
-            }
-        }, 2200);
-    }
-
-    var navList = $('nav-list');
-    if (navList) {
-        navList.addEventListener('click', function () {
-            renderList();
-            showPage('page-list');
-        });
-    }
-
-    var navCreate = $('nav-create');
-    if (navCreate) {
-        navCreate.addEventListener('click', openCreate);
-    }
-
-    var navCustomers = $('nav-customers');
-    if (navCustomers) {
-        navCustomers.addEventListener('click', showCustomers);
-    }
-
-    var navSettings = $('nav-settings');
-    if (navSettings) {
-        navSettings.addEventListener('click', function () {
-            showSettings('mail');
-        });
-    }
-
-    var createButton = $('btn-create');
-    if (createButton) {
-        createButton.addEventListener('click', openCreate);
-    }
-
-    var addGroupButton = $('btn-add-group');
-    if (addGroupButton) {
-        addGroupButton.addEventListener('click', addGroup);
-    }
-
-    var editorBack = $('btn-editor-back');
-    if (editorBack) {
-        editorBack.addEventListener('click', function () {
-            renderList();
-            showPage('page-list');
-        });
-    }
-
-    var previewButton = $('btn-preview');
-    if (previewButton) {
-        previewButton.addEventListener('click', previewEditor);
-    }
-
-    var saveButton = $('btn-save');
-    if (saveButton) {
-        saveButton.addEventListener('click', function () {
-            saveSurvey(saveButton);
-        });
-    }
-
-    ['survey-name','survey-description','survey-status',
-     'survey-start','survey-end'].forEach(function (id) {
-        var element = $(id);
-
-        if (element) {
-            element.addEventListener('input', syncEditorHeader);
-            element.addEventListener('change', syncEditorHeader);
-        }
-    });
-
-    document.querySelectorAll('input[name="numbering"]').forEach(function (radio) {
-        if (radio) {
-            radio.addEventListener('change', function () {
-                var s = syncEditorHeader();
-                renderEditorGroups(s);
-            });
-        }
-    });
-
-    var detailEdit = $('btn-detail-edit');
-    if (detailEdit) {
-        detailEdit.addEventListener('click', editCurrentSurvey);
-    }
-
-    var detailSend = $('btn-detail-send');
-    if (detailSend) {
-        detailSend.addEventListener('click', function () {
-            showDetailTab('send');
-        });
-    }
-
-    var detailBack = $('btn-detail-back');
-    if (detailBack) {
-        detailBack.addEventListener('click', function () {
-            renderList();
-            showPage('page-list');
-        });
-    }
-
-    ['tab-content','tab-send','tab-status','tab-result'].forEach(function (id) {
-        var button = $(id);
+    function refreshCustomers() {
+        var button = get('refresh-customers');
 
         if (button) {
-            button.addEventListener('click', function () {
-                var tab = id.replace('tab-', '');
-                showDetailTab(tab);
+            button.disabled = true;
+            button.classList.add('loading');
+        }
+
+        postJson(
+            'get_customers',
+            {},
+            button
+        )
+        .then(function (result) {
+            customers =
+                Array.isArray(result.customers)
+                    ? result.customers
+                    : [];
+
+            var status = get('customer-status');
+
+            if (status) {
+                status.textContent =
+                    'kintoneから' +
+                    String(result.count || 0) +
+                    '件の顧客を取得しました。';
+                status.className = 'notice success';
+            }
+
+            renderCustomers();
+            showToast('顧客一覧を更新しました。');
+        })
+        .catch(function (error) {
+            var status = get('customer-status');
+
+            if (status) {
+                status.textContent =
+                    '顧客一覧を取得できませんでした：' +
+                    error.message;
+                status.className = 'notice error';
+            }
+
+            renderCustomers();
+        });
+    }
+
+    function bindEvents() {
+        var navButtons =
+            document.querySelectorAll('[data-page]');
+
+        Array.prototype.forEach.call(
+            navButtons,
+            function (button) {
+                if (!button) {
+                    return;
+                }
+
+                button.addEventListener('click', function () {
+                    var page =
+                        button.getAttribute('data-page');
+
+                    if (page === 'page-list') {
+                        renderList();
+                    }
+
+                    if (page === 'page-editor') {
+                        openCreate();
+                        return;
+                    }
+
+                    if (page === 'page-customers') {
+                        showCustomers();
+                        return;
+                    }
+
+                    if (page === 'page-settings') {
+                        showSettings(currentSettingsTab);
+                        return;
+                    }
+
+                    showPage(page);
+                });
+            }
+        );
+
+        var createButton = get('create-survey');
+
+        if (createButton) {
+            createButton.addEventListener(
+                'click',
+                openCreate
+            );
+        }
+
+        var list = get('survey-list');
+
+        if (list) {
+            list.addEventListener('click', function (event) {
+                var target = event.target;
+
+                if (!target) {
+                    return;
+                }
+
+                var openId =
+                    target.getAttribute('data-survey-open');
+
+                if (openId) {
+                    openDetail(openId);
+                    return;
+                }
+
+                var editId =
+                    target.getAttribute('data-survey-edit');
+
+                if (editId) {
+                    openEdit(editId);
+                    return;
+                }
+
+                var publishId =
+                    target.getAttribute('data-survey-publish');
+
+                if (publishId) {
+                    publishSurvey(publishId);
+                    return;
+                }
+
+                var endId =
+                    target.getAttribute('data-survey-end');
+
+                if (endId) {
+                    endSurvey(endId);
+                    return;
+                }
+
+                var deleteId =
+                    target.getAttribute('data-survey-delete');
+
+                if (deleteId) {
+                    deleteSurvey(deleteId);
+                }
             });
         }
-    });
 
-    var customerSettings = $('btn-customer-settings');
-    if (customerSettings) {
-        customerSettings.addEventListener('click', function () {
-            showSettings('kintone');
-        });
-    }
+        var addGroupButton = get('add-group');
 
-    var customerSearch = $('customer-search');
-    if (customerSearch) {
-        customerSearch.addEventListener('input', renderCustomers);
-    }
+        if (addGroupButton) {
+            addGroupButton.addEventListener(
+                'click',
+                addGroup
+            );
+        }
 
-    var refreshCustomersButton = $('btn-refresh-customers');
-    if (refreshCustomersButton) {
-        refreshCustomersButton.addEventListener('click', function () {
-            refreshCustomers(refreshCustomersButton);
-        });
-    }
+        var saveSurveyButton = get('save-survey');
 
-    var mailSettingsTab = $('settings-tab-mail');
-    if (mailSettingsTab) {
-        mailSettingsTab.addEventListener('click', function () {
-            showSettings('mail');
-        });
-    }
+        if (saveSurveyButton) {
+            saveSurveyButton.addEventListener(
+                'click',
+                saveSurvey
+            );
+        }
 
-    var kintoneSettingsTab = $('settings-tab-kintone');
-    if (kintoneSettingsTab) {
-        kintoneSettingsTab.addEventListener('click', function () {
-            showSettings('kintone');
-        });
-    }
+        var editorBack = get('editor-back');
 
-    var modalClose = $('modal-close');
-    if (modalClose) {
-        modalClose.addEventListener('click', closeModal);
-    }
+        if (editorBack) {
+            editorBack.addEventListener(
+                'click',
+                function () {
+                    renderList();
+                    showPage('page-list');
+                }
+            );
+        }
 
-    var modal = $('modal');
-    if (modal) {
-        modal.addEventListener('click', function (event) {
-            if (event.target === modal) {
-                closeModal();
+        var detailEdit = get('detail-edit');
+
+        if (detailEdit) {
+            detailEdit.addEventListener(
+                'click',
+                function () {
+                    if (currentSurveyId !== null) {
+                        openEdit(currentSurveyId);
+                    }
+                }
+            );
+        }
+
+        var detailSend = get('detail-send');
+
+        if (detailSend) {
+            detailSend.addEventListener(
+                'click',
+                function () {
+                    showModal(
+                        '送信',
+                        '顧客一覧から送信対象者を選択してメール送信を行います。'
+                    );
+                }
+            );
+        }
+
+        var detailBack = get('detail-back');
+
+        if (detailBack) {
+            detailBack.addEventListener(
+                'click',
+                function () {
+                    renderList();
+                    showPage('page-list');
+                }
+            );
+        }
+
+        var customersSettings = get('customers-settings');
+
+        if (customersSettings) {
+            customersSettings.addEventListener(
+                'click',
+                function () {
+                    showSettings('kintone');
+                }
+            );
+        }
+
+        var refresh = get('refresh-customers');
+
+        if (refresh) {
+            refresh.addEventListener(
+                'click',
+                refreshCustomers
+            );
+        }
+
+        var search = get('customer-search');
+
+        if (search) {
+            search.addEventListener(
+                'input',
+                renderCustomers
+            );
+        }
+
+        var mailTab = get('tab-mail');
+
+        if (mailTab) {
+            mailTab.addEventListener(
+                'click',
+                function () {
+                    showSettings('mail');
+                }
+            );
+        }
+
+        var ktTab = get('tab-kintone');
+
+        if (ktTab) {
+            ktTab.addEventListener(
+                'click',
+                function () {
+                    showSettings('kintone');
+                }
+            );
+        }
+
+        var modalClose = get('modal-close');
+
+        if (modalClose) {
+            modalClose.addEventListener(
+                'click',
+                closeModal
+            );
+        }
+
+        var numbering = get('survey-numbering');
+
+        if (numbering) {
+            numbering.addEventListener(
+                'change',
+                function () {
+                    var data = collectEditorData();
+                    renderEditorGroups(data.groups);
+                }
+            );
+        }
+
+        var editorGroups = get('editor-groups');
+
+        if (editorGroups) {
+            editorGroups.addEventListener(
+                'click',
+                function (event) {
+                    var target = event.target;
+
+                    if (!target) {
+                        return;
+                    }
+
+                    var addQuestionId =
+                        target.getAttribute('data-add-question');
+
+                    if (addQuestionId) {
+                        addQuestion(addQuestionId);
+                        return;
+                    }
+
+                    var addOptionId =
+                        target.getAttribute('data-add-option');
+
+                    if (addOptionId) {
+                        addOption(addOptionId);
+                        return;
+                    }
+
+                    var removeQuestionId =
+                        target.getAttribute('data-remove-question');
+
+                    if (removeQuestionId) {
+                        removeQuestion(removeQuestionId);
+                        return;
+                    }
+
+                    var removeGroupId =
+                        target.getAttribute('data-remove-group');
+
+                    if (removeGroupId) {
+                        removeGroup(removeGroupId);
+                    }
+                }
+            );
+
+            editorGroups.addEventListener(
+                'change',
+                function (event) {
+                    var target = event.target;
+
+                    if (!target) {
+                        return;
+                    }
+
+                    if (
+                        target.classList.contains(
+                            'question-type'
+                        )
+                    ) {
+                        var data = collectEditorData();
+
+                        renderEditorGroups(data.groups);
+                    }
+                }
+            );
+        }
+
+        document.addEventListener(
+            'click',
+            function (event) {
+                var target = event.target;
+
+                if (!target) {
+                    return;
+                }
+
+                if (
+                    target.id === 'save-mail-settings'
+                ) {
+                    saveMailSettings();
+                    return;
+                }
+
+                if (
+                    target.id === 'test-mail-settings'
+                ) {
+                    testMailSettings();
+                    return;
+                }
+
+                if (
+                    target.id === 'save-kt-settings'
+                ) {
+                    saveKintoneSettings();
+                    return;
+                }
+
+                if (
+                    target.id === 'test-kt-settings'
+                ) {
+                    testKintoneSettings();
+                    return;
+                }
+
+                if (
+                    target.id === 'save-kt-fields'
+                ) {
+                    saveKintoneFields();
+                }
             }
-        });
+        );
     }
 
+    /*
+     * 設定画面は動的に生成されるため、
+     * 保存・確認ボタンは上記documentクリックで処理する。
+     */
+
+    bindEvents();
     renderList();
     showPage('page-list');
 });
 </script>
+
 </body>
 </html>
