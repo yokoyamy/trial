@@ -7254,3 +7254,1883 @@ document.addEventListener('DOMContentLoaded', function () {
 
         return normalized;
     }
+            if (survey.status === 'open') {
+                const closeButton =
+                    document.createElement('button');
+
+                closeButton.type = 'button';
+                closeButton.className =
+                    'btn btn-small btn-danger';
+                closeButton.textContent = '終了';
+                closeButton.addEventListener(
+                    'click',
+                    function () {
+                        closeSurvey(
+                            String(survey.id || ''),
+                            closeButton
+                        );
+                    }
+                );
+
+                actionTd.appendChild(
+                    document.createTextNode(' ')
+                );
+                actionTd.appendChild(closeButton);
+            }
+
+            tr.appendChild(nameTd);
+            tr.appendChild(statusTd);
+            tr.appendChild(createdTd);
+            tr.appendChild(periodTd);
+            tr.appendChild(answerTd);
+            tr.appendChild(updatedTd);
+            tr.appendChild(actionTd);
+
+            body.appendChild(tr);
+        });
+    }
+
+    function createEmptySurvey() {
+        const survey = {
+            id: 'survey_' + Date.now(),
+            name: '',
+            description: '',
+            status: 'draft',
+            created: '',
+            start: '',
+            end: '',
+            answers: 0,
+            target: 0,
+            sent: 0,
+            updated: '',
+            numbering: 'global',
+            groups: []
+        };
+
+        survey.groups.push(createGroup());
+
+        return survey;
+    }
+
+    function createGroup() {
+        const group = {
+            id: 'group_' + Date.now() + '_' + nextGroupNo++,
+            name: 'グループ' + nextGroupNo,
+            questions: []
+        };
+
+        group.questions.push(createQuestion());
+
+        return group;
+    }
+
+    function createQuestion() {
+        return {
+            id: 'question_' +
+                Date.now() +
+                '_' +
+                nextQuestionNo++,
+            text: '',
+            type: 'free',
+            required: false,
+            options: []
+        };
+    }
+
+    function openCreate() {
+        editingSurvey = createEmptySurvey();
+
+        const title = $('editor-page-title');
+
+        if (title) {
+            title.textContent = 'アンケート作成';
+        }
+
+        loadEditor();
+        showPage('page-editor');
+    }
+
+    async function editSurvey(id) {
+        if (!id) {
+            return;
+        }
+
+        try {
+            const result = await apiGet(
+                'load_survey',
+                {id: id}
+            );
+
+            editingSurvey =
+                JSON.parse(
+                    JSON.stringify(
+                        result.data?.survey || null
+                    )
+                );
+
+            if (!editingSurvey) {
+                throw new Error(
+                    'アンケートを取得できません。'
+                );
+            }
+
+            const title = $('editor-page-title');
+
+            if (title) {
+                title.textContent = 'アンケート編集';
+            }
+
+            loadEditor();
+            showPage('page-editor');
+        } catch (error) {
+            showToast(
+                error instanceof Error
+                    ? error.message
+                    : 'アンケートを開けません。'
+            );
+        }
+    }
+
+    function loadEditor() {
+        if (!editingSurvey) {
+            return;
+        }
+
+        const name = $('survey-name');
+        const description = $('survey-description');
+        const status = $('survey-status');
+        const start = $('survey-start');
+        const end = $('survey-end');
+
+        if (name) {
+            name.value = String(
+                editingSurvey.name || ''
+            );
+        }
+
+        if (description) {
+            description.value = String(
+                editingSurvey.description || ''
+            );
+        }
+
+        if (status) {
+            status.value =
+                String(
+                    editingSurvey.status || 'draft'
+                );
+        }
+
+        if (start) {
+            start.value =
+                String(editingSurvey.start || '');
+        }
+
+        if (end) {
+            end.value =
+                String(editingSurvey.end || '');
+        }
+
+        document
+            .querySelectorAll('input[name="numbering"]')
+            .forEach(function (radio) {
+                if (
+                    radio instanceof HTMLInputElement
+                ) {
+                    radio.checked =
+                        radio.value ===
+                        String(
+                            editingSurvey.numbering ||
+                            'global'
+                        );
+                }
+            });
+
+        renderEditor();
+    }
+
+    function questionNumber(
+        groupIndex,
+        questionIndex
+    ) {
+        if (
+            editingSurvey &&
+            editingSurvey.numbering === 'group'
+        ) {
+            return 'Q' +
+                String(groupIndex + 1) +
+                '-' +
+                String(questionIndex + 1);
+        }
+
+        let count = 0;
+
+        for (
+            let i = 0;
+            i < groupIndex;
+            i++
+        ) {
+            count +=
+                Array.isArray(
+                    editingSurvey.groups[i].questions
+                )
+                    ? editingSurvey.groups[i].questions.length
+                    : 0;
+        }
+
+        return 'Q' +
+            String(
+                count +
+                questionIndex +
+                1
+            );
+    }
+
+    function renderEditor() {
+        const groupsElement = $('groups');
+
+        if (!groupsElement || !editingSurvey) {
+            return;
+        }
+
+        groupsElement.textContent = '';
+
+        const groups =
+            Array.isArray(editingSurvey.groups)
+                ? editingSurvey.groups
+                : [];
+
+        groups.forEach(function (group, groupIndex) {
+            const groupCard =
+                document.createElement('div');
+
+            groupCard.className = 'group-card';
+            groupCard.draggable = true;
+            groupCard.dataset.groupId =
+                String(group.id || '');
+
+            groupCard.addEventListener(
+                'dragstart',
+                function () {
+                    draggedGroupId =
+                        String(group.id || '');
+
+                    groupCard.classList.add(
+                        'dragging'
+                    );
+                }
+            );
+
+            groupCard.addEventListener(
+                'dragend',
+                function () {
+                    draggedGroupId = '';
+
+                    groupCard.classList.remove(
+                        'dragging'
+                    );
+                }
+            );
+
+            groupCard.addEventListener(
+                'dragover',
+                function (event) {
+                    event.preventDefault();
+
+                    groupCard.classList.add(
+                        'drag-over'
+                    );
+                }
+            );
+
+            groupCard.addEventListener(
+                'dragleave',
+                function () {
+                    groupCard.classList.remove(
+                        'drag-over'
+                    );
+                }
+            );
+
+            groupCard.addEventListener(
+                'drop',
+                function (event) {
+                    event.preventDefault();
+
+                    groupCard.classList.remove(
+                        'drag-over'
+                    );
+
+                    if (
+                        draggedGroupId &&
+                        draggedGroupId !==
+                        String(group.id || '')
+                    ) {
+                        moveGroup(
+                            draggedGroupId,
+                            String(group.id || '')
+                        );
+                    }
+                }
+            );
+
+            const header =
+                document.createElement('div');
+
+            header.className = 'group-header';
+
+            const handle =
+                document.createElement('span');
+
+            handle.className = 'drag-handle';
+            handle.textContent = '☷';
+
+            const title =
+                document.createElement('div');
+
+            title.className = 'group-title';
+
+            const groupInput =
+                document.createElement('input');
+
+            groupInput.type = 'text';
+            groupInput.value =
+                String(group.name || '');
+
+            groupInput.addEventListener(
+                'input',
+                function () {
+                    group.name =
+                        groupInput.value;
+                }
+            );
+
+            title.appendChild(groupInput);
+
+            const actions =
+                document.createElement('div');
+
+            actions.className = 'group-actions';
+
+            const deleteGroupButton =
+                document.createElement('button');
+
+            deleteGroupButton.type = 'button';
+            deleteGroupButton.className =
+                'btn btn-small btn-danger';
+
+            deleteGroupButton.textContent =
+                'グループ削除';
+
+            deleteGroupButton.addEventListener(
+                'click',
+                function () {
+                    deleteGroup(
+                        String(group.id || '')
+                    );
+                }
+            );
+
+            actions.appendChild(
+                deleteGroupButton
+            );
+
+            header.appendChild(handle);
+            header.appendChild(title);
+            header.appendChild(actions);
+
+            groupCard.appendChild(header);
+
+            const questions =
+                document.createElement('div');
+
+            questions.className =
+                'group-questions';
+
+            const questionList =
+                Array.isArray(group.questions)
+                    ? group.questions
+                    : [];
+
+            questionList.forEach(
+                function (question, questionIndex) {
+                    questions.appendChild(
+                        renderQuestion(
+                            group,
+                            question,
+                            groupIndex,
+                            questionIndex
+                        )
+                    );
+                }
+            );
+
+            groupCard.appendChild(questions);
+
+            const addArea =
+                document.createElement('div');
+
+            addArea.className =
+                'add-question-area';
+
+            const addButton =
+                document.createElement('button');
+
+            addButton.type = 'button';
+            addButton.className =
+                'btn btn-small btn-primary';
+
+            addButton.textContent =
+                '＋ 質問追加';
+
+            addButton.addEventListener(
+                'click',
+                function () {
+                    addQuestion(
+                        String(group.id || '')
+                    );
+                }
+            );
+
+            addArea.appendChild(addButton);
+            groupCard.appendChild(addArea);
+
+            groupsElement.appendChild(groupCard);
+        });
+    }
+
+    function renderQuestion(
+        group,
+        question,
+        groupIndex,
+        questionIndex
+    ) {
+        const card =
+            document.createElement('div');
+
+        card.className = 'question-card';
+        card.draggable = true;
+
+        card.dataset.questionId =
+            String(question.id || '');
+
+        card.addEventListener(
+            'dragstart',
+            function () {
+                draggedQuestion =
+                    String(question.id || '');
+
+                card.classList.add(
+                    'dragging'
+                );
+            }
+        );
+
+        card.addEventListener(
+            'dragend',
+            function () {
+                draggedQuestion = '';
+
+                card.classList.remove(
+                    'dragging'
+                );
+            }
+        );
+
+        card.addEventListener(
+            'dragover',
+            function (event) {
+                event.preventDefault();
+
+                card.classList.add(
+                    'drag-over'
+                );
+            }
+        );
+
+        card.addEventListener(
+            'dragleave',
+            function () {
+                card.classList.remove(
+                    'drag-over'
+                );
+            }
+        );
+
+        card.addEventListener(
+            'drop',
+            function (event) {
+                event.preventDefault();
+
+                card.classList.remove(
+                    'drag-over'
+                );
+
+                if (
+                    draggedQuestion &&
+                    draggedQuestion !==
+                    String(question.id || '')
+                ) {
+                    moveQuestion(
+                        draggedQuestion,
+                        String(question.id || '')
+                    );
+                }
+            }
+        );
+
+        const head =
+            document.createElement('div');
+
+        head.className = 'question-head';
+
+        const number =
+            document.createElement('div');
+
+        number.className = 'question-number';
+
+        number.textContent =
+            questionNumber(
+                groupIndex,
+                questionIndex
+            );
+
+        const title =
+            document.createElement('div');
+
+        title.className = 'question-title';
+
+        const input =
+            document.createElement('input');
+
+        input.type = 'text';
+
+        input.value =
+            String(question.text || '');
+
+        input.placeholder =
+            '質問文を入力してください';
+
+        input.addEventListener(
+            'input',
+            function () {
+                question.text =
+                    input.value;
+            }
+        );
+
+        title.appendChild(input);
+
+        const tools =
+            document.createElement('div');
+
+        tools.className = 'question-tools';
+
+        const type =
+            document.createElement('select');
+
+        [
+            ['free', '自由記述'],
+            ['single', '単一選択'],
+            ['multiple', '複数選択']
+        ].forEach(function (item) {
+            const option =
+                document.createElement('option');
+
+            option.value = item[0];
+            option.textContent = item[1];
+
+            type.appendChild(option);
+        });
+
+        type.value =
+            String(question.type || 'free');
+
+        type.addEventListener(
+            'change',
+            function () {
+                question.type =
+                    type.value;
+
+                if (
+                    type.value === 'free'
+                ) {
+                    question.options = [];
+                } else if (
+                    !Array.isArray(
+                        question.options
+                    ) ||
+                    question.options.length === 0
+                ) {
+                    question.options = [
+                        {
+                            text: '',
+                            branch: ''
+                        },
+                        {
+                            text: '',
+                            branch: ''
+                        }
+                    ];
+                }
+
+                renderEditor();
+            }
+        );
+
+        tools.appendChild(type);
+
+        const deleteButton =
+            document.createElement('button');
+
+        deleteButton.type = 'button';
+        deleteButton.className =
+            'btn btn-small btn-danger';
+
+        deleteButton.textContent = '削除';
+
+        deleteButton.addEventListener(
+            'click',
+            function () {
+                deleteQuestion(
+                    String(question.id || '')
+                );
+            }
+        );
+
+        tools.appendChild(deleteButton);
+
+        head.appendChild(number);
+        head.appendChild(title);
+        head.appendChild(tools);
+
+        card.appendChild(head);
+
+        const meta =
+            document.createElement('div');
+
+        meta.className = 'question-meta';
+
+        const requiredLabel =
+            document.createElement('label');
+
+        const required =
+            document.createElement('input');
+
+        required.type = 'checkbox';
+
+        required.checked =
+            Boolean(question.required);
+
+        required.addEventListener(
+            'change',
+            function () {
+                question.required =
+                    required.checked;
+            }
+        );
+
+        requiredLabel.appendChild(required);
+
+        requiredLabel.appendChild(
+            document.createTextNode(' 必須')
+        );
+
+        meta.appendChild(requiredLabel);
+        card.appendChild(meta);
+
+        if (
+            question.type === 'single' ||
+            question.type === 'multiple'
+        ) {
+            const options =
+                document.createElement('div');
+
+            options.className =
+                'question-options';
+
+            const optionList =
+                Array.isArray(question.options)
+                    ? question.options
+                    : [];
+
+            optionList.forEach(
+                function (item, optionIndex) {
+                    const row =
+                        document.createElement('div');
+
+                    row.className =
+                        'option-row';
+
+                    const optionInput =
+                        document.createElement(
+                            'input'
+                        );
+
+                    optionInput.type = 'text';
+
+                    optionInput.value =
+                        String(item.text || '');
+
+                    optionInput.placeholder =
+                        '選択肢';
+
+                    optionInput.addEventListener(
+                        'input',
+                        function () {
+                            item.text =
+                                optionInput.value;
+                        }
+                    );
+
+                    row.appendChild(optionInput);
+
+                    if (
+                        question.type === 'single'
+                    ) {
+                        const branch =
+                            document.createElement(
+                                'select'
+                            );
+
+                        const emptyOption =
+                            document.createElement(
+                                'option'
+                            );
+
+                        emptyOption.value = '';
+
+                        emptyOption.textContent =
+                            '分岐なし';
+
+                        branch.appendChild(
+                            emptyOption
+                        );
+
+                        const groups =
+                            Array.isArray(
+                                editingSurvey.groups
+                            )
+                                ? editingSurvey.groups
+                                : [];
+
+                        groups.forEach(
+                            function (
+                                branchGroup
+                            ) {
+                                if (
+                                    String(
+                                        branchGroup.id
+                                    ) ===
+                                    String(group.id)
+                                ) {
+                                    return;
+                                }
+
+                                const branchOption =
+                                    document.createElement(
+                                        'option'
+                                    );
+
+                                branchOption.value =
+                                    String(
+                                        branchGroup.id ||
+                                        ''
+                                    );
+
+                                branchOption.textContent =
+                                    String(
+                                        branchGroup.name ||
+                                        ''
+                                    );
+
+                                branch.appendChild(
+                                    branchOption
+                                );
+                            }
+                        );
+
+                        branch.value =
+                            String(
+                                item.branch || ''
+                            );
+
+                        branch.addEventListener(
+                            'change',
+                            function () {
+                                item.branch =
+                                    branch.value;
+                            }
+                        );
+
+                        row.appendChild(branch);
+                    }
+
+                    const removeOptionButton =
+                        document.createElement(
+                            'button'
+                        );
+
+                    removeOptionButton.type =
+                        'button';
+
+                    removeOptionButton.className =
+                        'btn btn-small';
+
+                    removeOptionButton.textContent =
+                        '削除';
+
+                    removeOptionButton.addEventListener(
+                        'click',
+                        function () {
+                            if (
+                                question.options
+                                    .length <= 2
+                            ) {
+                                showToast(
+                                    '選択肢は2つ以上残してください。'
+                                );
+                                return;
+                            }
+
+                            question.options.splice(
+                                optionIndex,
+                                1
+                            );
+
+                            renderEditor();
+                        }
+                    );
+
+                    row.appendChild(
+                        removeOptionButton
+                    );
+
+                    options.appendChild(row);
+                }
+            );
+
+            const addOptionButton =
+                document.createElement('button');
+
+            addOptionButton.type = 'button';
+            addOptionButton.className =
+                'btn btn-small';
+
+            addOptionButton.textContent =
+                '＋ 選択肢追加';
+
+            addOptionButton.addEventListener(
+                'click',
+                function () {
+                    question.options.push({
+                        text: '',
+                        branch: ''
+                    });
+
+                    renderEditor();
+                }
+            );
+
+            options.appendChild(
+                addOptionButton
+            );
+
+            card.appendChild(options);
+        }
+
+        return card;
+    }
+
+    function addGroup() {
+        if (!editingSurvey) {
+            return;
+        }
+
+        if (
+            !Array.isArray(
+                editingSurvey.groups
+            )
+        ) {
+            editingSurvey.groups = [];
+        }
+
+        editingSurvey.groups.push(
+            createGroup()
+        );
+
+        renderEditor();
+    }
+
+    function deleteGroup(id) {
+        if (!editingSurvey) {
+            return;
+        }
+
+        if (
+            editingSurvey.groups.length <= 1
+        ) {
+            showToast(
+                'グループは1つ以上残してください。'
+            );
+            return;
+        }
+
+        const index =
+            editingSurvey.groups.findIndex(
+                function (group) {
+                    return String(group.id) ===
+                        String(id);
+                }
+            );
+
+        if (index < 0) {
+            return;
+        }
+
+        editingSurvey.groups.splice(
+            index,
+            1
+        );
+
+        renderEditor();
+    }
+
+    function addQuestion(groupId) {
+        if (!editingSurvey) {
+            return;
+        }
+
+        const group =
+            editingSurvey.groups.find(
+                function (item) {
+                    return String(item.id) ===
+                        String(groupId);
+                }
+            );
+
+        if (!group) {
+            return;
+        }
+
+        if (
+            !Array.isArray(group.questions)
+        ) {
+            group.questions = [];
+        }
+
+        group.questions.push(
+            createQuestion()
+        );
+
+        renderEditor();
+    }
+
+    function deleteQuestion(id) {
+        if (!editingSurvey) {
+            return;
+        }
+
+        for (
+            let groupIndex = 0;
+            groupIndex <
+            editingSurvey.groups.length;
+            groupIndex++
+        ) {
+            const group =
+                editingSurvey.groups[groupIndex];
+
+            const index =
+                group.questions.findIndex(
+                    function (question) {
+                        return String(
+                            question.id
+                        ) === String(id);
+                    }
+                );
+
+            if (index >= 0) {
+                if (
+                    group.questions.length <= 1
+                ) {
+                    showToast(
+                        'グループには質問を1つ以上残してください。'
+                    );
+                    return;
+                }
+
+                group.questions.splice(
+                    index,
+                    1
+                );
+
+                renderEditor();
+
+                return;
+            }
+        }
+    }
+
+    function moveGroup(
+        sourceId,
+        targetId
+    ) {
+        if (!editingSurvey) {
+            return;
+        }
+
+        const sourceIndex =
+            editingSurvey.groups.findIndex(
+                function (group) {
+                    return String(group.id) ===
+                        String(sourceId);
+                }
+            );
+
+        const targetIndex =
+            editingSurvey.groups.findIndex(
+                function (group) {
+                    return String(group.id) ===
+                        String(targetId);
+                }
+            );
+
+        if (
+            sourceIndex < 0 ||
+            targetIndex < 0 ||
+            sourceIndex === targetIndex
+        ) {
+            return;
+        }
+
+        const moved =
+            editingSurvey.groups.splice(
+                sourceIndex,
+                1
+            )[0];
+
+        editingSurvey.groups.splice(
+            targetIndex,
+            0,
+            moved
+        );
+
+        renderEditor();
+    }
+
+    function moveQuestion(
+        sourceId,
+        targetId
+    ) {
+        if (!editingSurvey) {
+            return;
+        }
+
+        let sourceGroup = null;
+        let sourceIndex = -1;
+
+        editingSurvey.groups.forEach(
+            function (group) {
+                group.questions.forEach(
+                    function (
+                        question,
+                        index
+                    ) {
+                        if (
+                            String(
+                                question.id
+                            ) ===
+                            String(sourceId)
+                        ) {
+                            sourceGroup = group;
+                            sourceIndex = index;
+                        }
+                    }
+                );
+            }
+        );
+
+        let targetGroup = null;
+        let targetIndex = -1;
+
+        editingSurvey.groups.forEach(
+            function (group) {
+                group.questions.forEach(
+                    function (
+                        question,
+                        index
+                    ) {
+                        if (
+                            String(
+                                question.id
+                            ) ===
+                            String(targetId)
+                        ) {
+                            targetGroup = group;
+                            targetIndex = index;
+                        }
+                    }
+                );
+            }
+        );
+
+        if (
+            !sourceGroup ||
+            !targetGroup ||
+            sourceIndex < 0 ||
+            targetIndex < 0
+        ) {
+            return;
+        }
+
+        const moved =
+            sourceGroup.questions.splice(
+                sourceIndex,
+                1
+            )[0];
+
+        if (
+            sourceGroup === targetGroup
+        ) {
+            if (
+                sourceIndex < targetIndex
+            ) {
+                targetIndex--;
+            }
+        }
+
+        targetGroup.questions.splice(
+            targetIndex,
+            0,
+            moved
+        );
+
+        renderEditor();
+    }
+    function collectEditorValues() {
+        if (!editingSurvey) {
+            return null;
+        }
+
+        const name = $('survey-name');
+        const description = $('survey-description');
+        const status = $('survey-status');
+        const start = $('survey-start');
+        const end = $('survey-end');
+
+        if (name) {
+            editingSurvey.name =
+                name.value.trim();
+        }
+
+        if (description) {
+            editingSurvey.description =
+                description.value.trim();
+        }
+
+        if (status) {
+            editingSurvey.status =
+                status.value;
+        }
+
+        if (start) {
+            editingSurvey.start =
+                start.value;
+        }
+
+        if (end) {
+            editingSurvey.end =
+                end.value;
+        }
+
+        const numbering =
+            document.querySelector(
+                'input[name="numbering"]:checked'
+            );
+
+        if (
+            numbering instanceof HTMLInputElement
+        ) {
+            editingSurvey.numbering =
+                numbering.value;
+        }
+
+        return editingSurvey;
+    }
+
+    function validateSurvey() {
+        if (!editingSurvey) {
+            return 'アンケート情報がありません。';
+        }
+
+        if (!editingSurvey.name.trim()) {
+            return 'アンケート名を入力してください。';
+        }
+
+        if (
+            !Array.isArray(
+                editingSurvey.groups
+            ) ||
+            editingSurvey.groups.length === 0
+        ) {
+            return 'グループを1つ以上登録してください。';
+        }
+
+        for (
+            let groupIndex = 0;
+            groupIndex <
+            editingSurvey.groups.length;
+            groupIndex++
+        ) {
+            const group =
+                editingSurvey.groups[groupIndex];
+
+            if (!String(group.name || '').trim()) {
+                return (
+                    'グループ' +
+                    String(groupIndex + 1) +
+                    'の名称を入力してください。'
+                );
+            }
+
+            if (
+                !Array.isArray(group.questions) ||
+                group.questions.length === 0
+            ) {
+                return (
+                    'グループ「' +
+                    String(group.name || '') +
+                    '」に質問を1つ以上登録してください。'
+                );
+            }
+
+            for (
+                let questionIndex = 0;
+                questionIndex <
+                group.questions.length;
+                questionIndex++
+            ) {
+                const question =
+                    group.questions[questionIndex];
+
+                if (
+                    !String(
+                        question.text || ''
+                    ).trim()
+                ) {
+                    return (
+                        'グループ「' +
+                        String(group.name || '') +
+                        '」の質問' +
+                        String(questionIndex + 1) +
+                        'を入力してください。'
+                    );
+                }
+
+                if (
+                    question.type === 'single' ||
+                    question.type === 'multiple'
+                ) {
+                    if (
+                        !Array.isArray(
+                            question.options
+                        ) ||
+                        question.options.length < 2
+                    ) {
+                        return (
+                            '質問「' +
+                            String(question.text || '') +
+                            '」には選択肢を2つ以上登録してください。'
+                        );
+                    }
+
+                    for (
+                        let optionIndex = 0;
+                        optionIndex <
+                        question.options.length;
+                        optionIndex++
+                    ) {
+                        if (
+                            !String(
+                                question.options[
+                                    optionIndex
+                                ].text || ''
+                            ).trim()
+                        ) {
+                            return (
+                                '質問「' +
+                                String(question.text || '') +
+                                '」の選択肢' +
+                                String(optionIndex + 1) +
+                                'を入力してください。'
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if (
+            editingSurvey.start &&
+            editingSurvey.end &&
+            editingSurvey.start >
+            editingSurvey.end
+        ) {
+            return '開始日時は終了日時より前にしてください。';
+        }
+
+        return '';
+    }
+
+    async function saveSurvey(button) {
+        if (!button) {
+            return;
+        }
+
+        button.disabled = true;
+        button.classList.add('loading');
+
+        try {
+            collectEditorValues();
+
+            const validation =
+                validateSurvey();
+
+            if (validation) {
+                showToast(validation);
+                return;
+            }
+
+            const result =
+                await apiPost(
+                    'save_survey',
+                    {
+                        survey: editingSurvey
+                    }
+                );
+
+            if (
+                result.data &&
+                result.data.survey
+            ) {
+                editingSurvey =
+                    JSON.parse(
+                        JSON.stringify(
+                            result.data.survey
+                        )
+                    );
+            }
+
+            showToast(
+                'アンケートを保存しました。'
+            );
+
+            await loadSurveys();
+
+            showPage('page-list');
+        } catch (error) {
+            showToast(
+                error instanceof Error
+                    ? error.message
+                    : '保存に失敗しました。'
+            );
+        } finally {
+            button.disabled = false;
+            button.classList.remove('loading');
+        }
+    }
+
+    async function deleteSurvey(
+        id,
+        button
+    ) {
+        if (!button || !id) {
+            return;
+        }
+
+        if (
+            !window.confirm(
+                'このアンケートを削除しますか？'
+            )
+        ) {
+            return;
+        }
+
+        button.disabled = true;
+        button.classList.add('loading');
+
+        try {
+            await apiPost(
+                'delete_survey',
+                {id: id}
+            );
+
+            showToast(
+                'アンケートを削除しました。'
+            );
+
+            await loadSurveys();
+        } catch (error) {
+            showToast(
+                error instanceof Error
+                    ? error.message
+                    : '削除に失敗しました。'
+            );
+        } finally {
+            button.disabled = false;
+            button.classList.remove('loading');
+        }
+    }
+
+    async function closeSurvey(
+        id,
+        button
+    ) {
+        if (!button || !id) {
+            return;
+        }
+
+        if (
+            !window.confirm(
+                'アンケートを終了しますか？'
+            )
+        ) {
+            return;
+        }
+
+        button.disabled = true;
+        button.classList.add('loading');
+
+        try {
+            await apiPost(
+                'close_survey',
+                {id: id}
+            );
+
+            showToast(
+                'アンケートを終了しました。'
+            );
+
+            await loadSurveys();
+        } catch (error) {
+            showToast(
+                error instanceof Error
+                    ? error.message
+                    : '終了処理に失敗しました。'
+            );
+        } finally {
+            button.disabled = false;
+            button.classList.remove('loading');
+        }
+    }
+
+    async function loadSettings() {
+        try {
+            const result =
+                await apiGet(
+                    'get_settings'
+                );
+
+            const settings =
+                result.data?.settings || {};
+
+            const domain =
+                $('kintone-domain');
+
+            const appId =
+                $('kintone-app-id');
+
+            const proxy =
+                $('proxy-host-port');
+
+            const loginName =
+                $('cybozu-login-name');
+
+            if (domain) {
+                domain.value =
+                    String(
+                        settings.domain || ''
+                    );
+            }
+
+            if (appId) {
+                appId.value =
+                    String(
+                        settings.app_id || ''
+                    );
+            }
+
+            if (proxy) {
+                proxy.value =
+                    String(
+                        settings.proxy_host_port || ''
+                    );
+            }
+
+            if (loginName) {
+                loginName.value =
+                    String(
+                        settings.login_name || ''
+                    );
+            }
+        } catch (error) {
+            showToast(
+                error instanceof Error
+                    ? error.message
+                    : '設定を取得できません。'
+            );
+        }
+    }
+
+    async function saveSettings(button) {
+        if (!button) {
+            return;
+        }
+
+        button.disabled = true;
+        button.classList.add('loading');
+
+        try {
+            const domain =
+                $('kintone-domain');
+
+            const appId =
+                $('kintone-app-id');
+
+            const proxy =
+                $('proxy-host-port');
+
+            const loginName =
+                $('cybozu-login-name');
+
+            const password =
+                $('cybozu-password');
+
+            const settings = {
+                domain:
+                    domain
+                        ? domain.value.trim()
+                        : '',
+                app_id:
+                    appId
+                        ? appId.value.trim()
+                        : '',
+                proxy_host_port:
+                    proxy
+                        ? proxy.value.trim()
+                        : '',
+                login_name:
+                    loginName
+                        ? loginName.value.trim()
+                        : ''
+            };
+
+            if (password) {
+                settings.password =
+                    password.value;
+            }
+
+            if (!settings.domain) {
+                showToast(
+                    'kintoneドメインを入力してください。'
+                );
+                return;
+            }
+
+            if (!settings.app_id) {
+                showToast(
+                    'アプリIDを入力してください。'
+                );
+                return;
+            }
+
+            const result =
+                await apiPost(
+                    'save_settings',
+                    settings
+                );
+
+            if (password) {
+                password.value = '';
+            }
+
+            showToast(
+                result.data?.message ||
+                '設定を保存しました。'
+            );
+        } catch (error) {
+            showToast(
+                error instanceof Error
+                    ? error.message
+                    : '設定の保存に失敗しました。'
+            );
+        } finally {
+            button.disabled = false;
+            button.classList.remove('loading');
+        }
+    }
+
+    async function testKintoneConnection(
+        button
+    ) {
+        if (!button) {
+            return;
+        }
+
+        button.disabled = true;
+        button.classList.add('loading');
+
+        try {
+            const domain =
+                $('kintone-domain');
+
+            const appId =
+                $('kintone-app-id');
+
+            const proxy =
+                $('proxy-host-port');
+
+            const loginName =
+                $('cybozu-login-name');
+
+            const password =
+                $('cybozu-password');
+
+            const payload = {
+                domain:
+                    domain
+                        ? domain.value.trim()
+                        : '',
+                app_id:
+                    appId
+                        ? appId.value.trim()
+                        : '',
+                proxy_host_port:
+                    proxy
+                        ? proxy.value.trim()
+                        : '',
+                login_name:
+                    loginName
+                        ? loginName.value.trim()
+                        : '',
+                password:
+                    password
+                        ? password.value
+                        : ''
+            };
+
+            const result =
+                await apiPost(
+                    'test_kintone',
+                    payload
+                );
+
+            showToast(
+                result.data?.message ||
+                'kintoneへの接続に成功しました。'
+            );
+        } catch (error) {
+            showToast(
+                error instanceof Error
+                    ? error.message
+                    : 'kintoneへの接続に失敗しました。'
+            );
+        } finally {
+            button.disabled = false;
+            button.classList.remove('loading');
+        }
+    }
+
+    function setupNavigation() {
+        document
+            .querySelectorAll(
+                '[data-page]'
+            )
+            .forEach(function (element) {
+                if (!element) {
+                    return;
+                }
+
+                element.addEventListener(
+                    'click',
+                    function () {
+                        const page =
+                            element.getAttribute(
+                                'data-page'
+                            );
+
+                        if (!page) {
+                            return;
+                        }
+
+                        showPage(page);
+
+                        if (
+                            page === 'page-list'
+                        ) {
+                            loadSurveys();
+                        }
+
+                        if (
+                            page === 'page-settings'
+                        ) {
+                            loadSettings();
+                        }
+                    }
+                );
+            });
+    }
+
+    function setupButtons() {
+        const createButton =
+            $('btn-create');
+
+        if (createButton) {
+            createButton.addEventListener(
+                'click',
+                function () {
+                    createButton.disabled =
+                        true;
+                    createButton.classList.add(
+                        'loading'
+                    );
+
+                    try {
+                        openCreate();
+                    } finally {
+                        createButton.disabled =
+                            false;
+                        createButton.classList.remove(
+                            'loading'
+                        );
+                    }
+                }
+            );
+        }
+
+        const addGroupButton =
+            $('btn-add-group');
+
+        if (addGroupButton) {
+            addGroupButton.addEventListener(
+                'click',
+                function () {
+                    addGroupButton.disabled =
+                        true;
+                    addGroupButton.classList.add(
+                        'loading'
+                    );
+
+                    try {
+                        addGroup();
+                    } finally {
+                        addGroupButton.disabled =
+                            false;
+                        addGroupButton.classList.remove(
+                            'loading'
+                        );
+                    }
+                }
+            );
+        }
+
+        const saveButton =
+            $('btn-save-survey');
+
+        if (saveButton) {
+            saveButton.addEventListener(
+                'click',
+                function () {
+                    saveSurvey(saveButton);
+                }
+            );
+        }
+
+        const settingsButton =
+            $('btn-save-settings');
+
+        if (settingsButton) {
+            settingsButton.addEventListener(
+                'click',
+                function () {
+                    saveSettings(
+                        settingsButton
+                    );
+                }
+            );
+        }
+
+        const testButton =
+            $('btn-test-kintone');
+
+        if (testButton) {
+            testButton.addEventListener(
+                'click',
+                function () {
+                    testKintoneConnection(
+                        testButton
+                    );
+                }
+            );
+        }
+
+        const backButton =
+            $('btn-back-list');
+
+        if (backButton) {
+            backButton.addEventListener(
+                'click',
+                function () {
+                    showPage('page-list');
+                    loadSurveys();
+                }
+            );
+        }
+    }
+
+    function setupEditorEvents() {
+        const numberingElements =
+            document.querySelectorAll(
+                'input[name="numbering"]'
+            );
+
+        numberingElements.forEach(
+            function (element) {
+                if (!element) {
+                    return;
+                }
+
+                element.addEventListener(
+                    'change',
+                    function () {
+                        if (
+                            editingSurvey &&
+                            element instanceof
+                                HTMLInputElement &&
+                            element.checked
+                        ) {
+                            editingSurvey.numbering =
+                                element.value;
+
+                            renderEditor();
+                        }
+                    }
+                );
+            }
+        );
+    }
+
+    function setupInitialState() {
+        showPage('page-list');
+        loadSurveys();
+    }
+
+    setupNavigation();
+    setupButtons();
+    setupEditorEvents();
+    setupInitialState();
+});
+</script>
+
+</body>
+</html>
