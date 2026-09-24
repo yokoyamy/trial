@@ -11,6 +11,8 @@ surveys.json
 
 ---
 
+index.phpを再作成するとき、
+
 localStorage に保存している旧版のアプリデータは引き継がない。
 
 新しい index.php を初回表示した際、旧版の保存データを検出したら破棄する。
