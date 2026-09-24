@@ -5449,4 +5449,849 @@ document.addEventListener('DOMContentLoaded', function () {
         return field;
 
     }
+    function renderKintoneSettings() {
+
+        const content =
+            $('settings-content');
+
+        if (!content) {
+            return;
+        }
+
+        content.textContent = '';
+
+        const card =
+            document.createElement('div');
+
+        card.className = 'card';
+
+        const title =
+            document.createElement('div');
+
+        title.className = 'card-title';
+        title.textContent = 'キントーン設定';
+
+        card.appendChild(title);
+
+        const notice =
+            document.createElement('div');
+
+        notice.className = 'notice';
+
+        notice.textContent =
+            'サイボウズへのログイン情報とプロキシサーバを設定します。';
+
+        card.appendChild(notice);
+
+        const domainField =
+            createField(
+                'サブドメイン *',
+                'kintone-domain',
+                'text',
+                kintoneSettings.domain || '',
+                'example'
+            );
+
+        card.appendChild(domainField);
+
+        const appField =
+            createField(
+                'アプリID *',
+                'kintone-app-id',
+                'number',
+                kintoneSettings.appId || '',
+                '123'
+            );
+
+        card.appendChild(appField);
+
+        const grid =
+            document.createElement('div');
+
+        grid.className = 'form-grid';
+
+        grid.appendChild(
+            createField(
+                'ログイン名 *',
+                'kintone-login',
+                'text',
+                kintoneSettings.login || '',
+                ''
+            )
+        );
+
+        const passwordField =
+            document.createElement('div');
+
+        passwordField.className = 'field';
+
+        const passwordLabel =
+            document.createElement('label');
+
+        passwordLabel.htmlFor =
+            'kintone-password';
+
+        passwordLabel.textContent =
+            'パスワード';
+
+        const password =
+            document.createElement('input');
+
+        password.id =
+            'kintone-password';
+
+        password.type =
+            'password';
+
+        password.autocomplete =
+            'new-password';
+
+        password.placeholder =
+            '変更する場合のみ入力';
+
+        passwordField.appendChild(
+            passwordLabel
+        );
+
+        passwordField.appendChild(
+            password
+        );
+
+        grid.appendChild(
+            passwordField
+        );
+
+        card.appendChild(grid);
+
+        card.appendChild(
+            createField(
+                'プロキシサーバ',
+                'kintone-proxy',
+                'text',
+                kintoneSettings.proxy || '',
+                'proxy.example.com:8080'
+            )
+        );
+
+        const proxyNotice =
+            document.createElement('div');
+
+        proxyNotice.className =
+            'form-help';
+
+        proxyNotice.textContent =
+            '使用する場合は host名:ポート番号 の形式で入力してください。';
+
+        card.appendChild(proxyNotice);
+
+        const status =
+            document.createElement('div');
+
+        status.className =
+            'status-line';
+
+        const dot =
+            document.createElement('span');
+
+        dot.className =
+            'status-dot ' +
+            (
+                kintoneSettings.ready
+                    ? 'ok'
+                    : 'warn'
+            );
+
+        const statusText =
+            document.createElement('span');
+
+        statusText.textContent =
+            kintoneSettings.ready
+                ? 'キントーン設定が保存されています。'
+                : 'キントーン設定が未完了です。';
+
+        status.appendChild(dot);
+        status.appendChild(statusText);
+
+        card.appendChild(status);
+
+        const actions =
+            document.createElement('div');
+
+        actions.className =
+            'actions';
+
+        const saveButton =
+            document.createElement('button');
+
+        saveButton.id =
+            'btn-save-kintone';
+
+        saveButton.type =
+            'button';
+
+        saveButton.className =
+            'btn btn-primary';
+
+        saveButton.textContent =
+            '設定を保存';
+
+        const testButton =
+            document.createElement('button');
+
+        testButton.id =
+            'btn-test-kintone';
+
+        testButton.type =
+            'button';
+
+        testButton.className =
+            'btn';
+
+        testButton.textContent =
+            '接続テスト';
+
+        actions.appendChild(
+            saveButton
+        );
+
+        actions.appendChild(
+            testButton
+        );
+
+        card.appendChild(actions);
+
+        content.appendChild(card);
+
+        if (saveButton) {
+
+            saveButton.addEventListener(
+                'click',
+                async function () {
+
+                    saveButton.disabled = true;
+
+                    saveButton.classList.add(
+                        'loading'
+                    );
+
+                    const originalText =
+                        saveButton.textContent;
+
+                    saveButton.textContent = '';
+
+                    const spinner =
+                        document.createElement(
+                            'span'
+                        );
+
+                    spinner.className =
+                        'spinner';
+
+                    saveButton.appendChild(
+                        spinner
+                    );
+
+                    saveButton.appendChild(
+                        document.createTextNode(
+                            '保存中...'
+                        )
+                    );
+
+                    renderMessage('', '');
+
+                    try {
+
+                        const payload = {
+                            domain:
+                                $('kintone-domain')?.value.trim() ||
+                                '',
+
+                            appId:
+                                $('kintone-app-id')?.value.trim() ||
+                                '',
+
+                            login:
+                                $('kintone-login')?.value.trim() ||
+                                '',
+
+                            password:
+                                $('kintone-password')?.value ||
+                                '',
+
+                            proxy:
+                                $('kintone-proxy')?.value.trim() ||
+                                ''
+                        };
+
+                        const result =
+                            await api(
+                                'save_kintone_settings',
+                                payload
+                            );
+
+                        if (result.kintone) {
+                            kintoneSettings =
+                                result.kintone;
+                        }
+
+                        renderMessage(
+                            result.message ||
+                            'キントーン設定を保存しました。',
+                            'success'
+                        );
+
+                        showToast(
+                            'キントーン設定を保存しました。'
+                        );
+
+                        renderKintoneSettings();
+
+                    } catch (error) {
+
+                        renderMessage(
+                            error instanceof Error
+                                ? error.message
+                                : 'キントーン設定の保存に失敗しました。',
+                            'error'
+                        );
+
+                    } finally {
+
+                        saveButton.disabled =
+                            false;
+
+                        saveButton.classList.remove(
+                            'loading'
+                        );
+
+                        saveButton.textContent =
+                            originalText;
+                    }
+                }
+            );
+        }
+
+        if (testButton) {
+
+            testButton.addEventListener(
+                'click',
+                async function () {
+
+                    testButton.disabled = true;
+
+                    testButton.classList.add(
+                        'loading'
+                    );
+
+                    const originalText =
+                        testButton.textContent;
+
+                    testButton.textContent = '';
+
+                    const spinner =
+                        document.createElement(
+                            'span'
+                        );
+
+                    spinner.className =
+                        'spinner';
+
+                    testButton.appendChild(
+                        spinner
+                    );
+
+                    testButton.appendChild(
+                        document.createTextNode(
+                            '接続中...'
+                        )
+                    );
+
+                    renderMessage('', '');
+
+                    try {
+
+                        const payload = {
+                            domain:
+                                $('kintone-domain')?.value.trim() ||
+                                kintoneSettings.domain ||
+                                '',
+
+                            appId:
+                                $('kintone-app-id')?.value.trim() ||
+                                kintoneSettings.appId ||
+                                '',
+
+                            login:
+                                $('kintone-login')?.value.trim() ||
+                                kintoneSettings.login ||
+                                '',
+
+                            password:
+                                $('kintone-password')?.value ||
+                                '',
+
+                            proxy:
+                                $('kintone-proxy')?.value.trim() ||
+                                kintoneSettings.proxy ||
+                                ''
+                        };
+
+                        const result =
+                            await api(
+                                'test_kintone',
+                                payload
+                            );
+
+                        renderMessage(
+                            result.message ||
+                            'キントーンへの接続に成功しました。',
+                            'success'
+                        );
+
+                        showToast(
+                            '接続テストに成功しました。'
+                        );
+
+                    } catch (error) {
+
+                        renderMessage(
+                            error instanceof Error
+                                ? error.message
+                                : 'キントーンへの接続に失敗しました。',
+                            'error'
+                        );
+
+                    } finally {
+
+                        testButton.disabled =
+                            false;
+
+                        testButton.classList.remove(
+                            'loading'
+                        );
+
+                        testButton.textContent =
+                            originalText;
+                    }
+                }
+            );
+        }
+    }
+
+
+    function openModal(
+        title,
+        message,
+        detail
+    ) {
+
+        const modal =
+            $('modal');
+
+        const modalTitle =
+            $('modal-title');
+
+        const modalBody =
+            $('modal-body');
+
+        const modalFooter =
+            $('modal-footer');
+
+        if (!modal) {
+            return;
+        }
+
+        if (modalTitle) {
+            modalTitle.textContent =
+                title || '';
+        }
+
+        if (modalBody) {
+
+            modalBody.textContent = '';
+
+            const messageElement =
+                document.createElement('p');
+
+            messageElement.textContent =
+                message || '';
+
+            modalBody.appendChild(
+                messageElement
+            );
+
+            if (detail) {
+
+                const detailElement =
+                    document.createElement('p');
+
+                detailElement.className =
+                    'modal-detail';
+
+                detailElement.textContent =
+                    detail;
+
+                modalBody.appendChild(
+                    detailElement
+                );
+            }
+        }
+
+        if (modalFooter) {
+
+            modalFooter.textContent = '';
+
+            const closeButton =
+                document.createElement('button');
+
+            closeButton.type =
+                'button';
+
+            closeButton.className =
+                'btn btn-primary';
+
+            closeButton.textContent =
+                '閉じる';
+
+            closeButton.addEventListener(
+                'click',
+                function () {
+                    closeModal();
+                }
+            );
+
+            modalFooter.appendChild(
+                closeButton
+            );
+        }
+
+        modal.classList.remove('hidden');
+    }
+
+
+    function closeModal() {
+
+        const modal =
+            $('modal');
+
+        if (modal) {
+            modal.classList.add('hidden');
+        }
+    }
+
+
+    const navList =
+        $('nav-list');
+
+    if (navList) {
+
+        navList.addEventListener(
+            'click',
+            function () {
+
+                showPage('list');
+
+                renderList();
+            }
+        );
+    }
+
+
+    const navCreate =
+        $('nav-create');
+
+    if (navCreate) {
+
+        navCreate.addEventListener(
+            'click',
+            function () {
+
+                openCreate();
+            }
+        );
+    }
+
+
+    const navCustomers =
+        $('nav-customers');
+
+    if (navCustomers) {
+
+        navCustomers.addEventListener(
+            'click',
+            function () {
+
+                showPage('customers');
+
+                renderCustomers();
+
+                renderCustomerStatus();
+            }
+        );
+    }
+
+
+    const navSettings =
+        $('nav-settings');
+
+    if (navSettings) {
+
+        navSettings.addEventListener(
+            'click',
+            function () {
+
+                showPage('settings');
+
+                currentSettingsTab =
+                    'mail';
+
+                renderSettings();
+            }
+        );
+    }
+
+
+    const btnCreate =
+        $('btn-create');
+
+    if (btnCreate) {
+
+        btnCreate.addEventListener(
+            'click',
+            function () {
+
+                openCreate();
+            }
+        );
+    }
+
+
+    const btnEditorBack =
+        $('btn-editor-back');
+
+    if (btnEditorBack) {
+
+        btnEditorBack.addEventListener(
+            'click',
+            function () {
+
+                showPage('list');
+
+                renderList();
+            }
+        );
+    }
+
+
+    const btnSaveSurvey =
+        $('btn-save-survey');
+
+    if (btnSaveSurvey) {
+
+        btnSaveSurvey.addEventListener(
+            'click',
+            async function () {
+
+                btnSaveSurvey.disabled = true;
+
+                btnSaveSurvey.classList.add(
+                    'loading'
+                );
+
+                const originalText =
+                    btnSaveSurvey.textContent;
+
+                btnSaveSurvey.textContent = '';
+
+                const spinner =
+                    document.createElement(
+                        'span'
+                    );
+
+                spinner.className =
+                    'spinner';
+
+                btnSaveSurvey.appendChild(
+                    spinner
+                );
+
+                btnSaveSurvey.appendChild(
+                    document.createTextNode(
+                        '保存中...'
+                    )
+                );
+
+                try {
+
+                    const name =
+                        $('survey-name')?.value.trim() ||
+                        '';
+
+                    if (!name) {
+
+                        throw new Error(
+                            'アンケート名を入力してください。'
+                        );
+                    }
+
+                    const payload = {
+
+                        name: name,
+
+                        description:
+                            $('survey-description')?.value.trim() ||
+                            '',
+
+                        status:
+                            $('survey-status')?.value ||
+                            'draft',
+
+                        start:
+                            $('survey-start')?.value ||
+                            '',
+
+                        end:
+                            $('survey-end')?.value ||
+                            '',
+
+                        question:
+                            $('question-text')?.value.trim() ||
+                            '',
+
+                        questionType:
+                            $('question-type')?.value ||
+                            'single'
+                    };
+
+                    const result =
+                        await api(
+                            'save_survey',
+                            payload
+                        );
+
+                    if (
+                        Array.isArray(
+                            result.surveys
+                        )
+                    ) {
+
+                        surveys =
+                            result.surveys;
+
+                    }
+
+                    showToast(
+                        result.message ||
+                        'アンケートを保存しました。'
+                    );
+
+                    showPage('list');
+
+                    renderList();
+
+                } catch (error) {
+
+                    openModal(
+                        '保存できませんでした',
+                        error instanceof Error
+                            ? error.message
+                            : 'アンケートの保存に失敗しました。',
+                        ''
+                    );
+
+                } finally {
+
+                    btnSaveSurvey.disabled =
+                        false;
+
+                    btnSaveSurvey.classList.remove(
+                        'loading'
+                    );
+
+                    btnSaveSurvey.textContent =
+                        originalText;
+                }
+            }
+        );
+    }
+
+
+    const mailTab =
+        $('settings-tab-mail');
+
+    if (mailTab) {
+
+        mailTab.addEventListener(
+            'click',
+            function () {
+
+                currentSettingsTab =
+                    'mail';
+
+                renderSettings();
+            }
+        );
+    }
+
+
+    const kintoneTab =
+        $('settings-tab-kintone');
+
+    if (kintoneTab) {
+
+        kintoneTab.addEventListener(
+            'click',
+            function () {
+
+                currentSettingsTab =
+                    'kintone';
+
+                renderSettings();
+            }
+        );
+    }
+
+
+    const modalClose =
+        $('modal-close');
+
+    if (modalClose) {
+
+        modalClose.addEventListener(
+            'click',
+            function () {
+
+                closeModal();
+            }
+        );
+    }
+
+
+    const modal =
+        $('modal');
+
+    if (modal) {
+
+        modal.addEventListener(
+            'click',
+            function (event) {
+
+                if (
+                    event.target === modal
+                ) {
+
+                    closeModal();
+                }
+            }
+        );
+    }
+
+
+    renderList();
+
+});
+</script>
+
+</body>
+</html>
 
