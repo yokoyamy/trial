@@ -1,26 +1,26 @@
 <?php
 declare(strict_types=1);
 
-namespace yokoyamy\trial\newapp;
+namespace Yokoyamy\NewApp\SurveyManagement;
 
 use RuntimeException;
 
 session_start([
     'cookie_httponly' => true,
-    'cookie_samesite' => 'Lax'
+    'cookie_samesite' => 'Lax',
 ]);
 
 header('X-Frame-Options: SAMEORIGIN');
 header('X-Content-Type-Options: nosniff');
 
-const APP_SESSION_KEY = 'yokoyamy_trial_newapp';
+const APP_SESSION_KEY = 'yokoyamy_newapp_survey_management';
 const DATA_DIR = __DIR__ . DIRECTORY_SEPARATOR . 'data';
 const SETTINGS_FILE = DATA_DIR . DIRECTORY_SEPARATOR . 'settings.json';
-const CUSTOMERS_FILE = DATA_DIR . DIRECTORY_SEPARATOR . 'customers.json';
 const SURVEYS_FILE = DATA_DIR . DIRECTORY_SEPARATOR . 'surveys.json';
+const CUSTOMERS_FILE = DATA_DIR . DIRECTORY_SEPARATOR . 'customers.json';
 
 /**
- * NULL安全HTMLエスケープ
+ * 安全な文字列エスケープ
  */
 function h(?string $str): string
 {
@@ -28,9 +28,9 @@ function h(?string $str): string
 }
 
 /**
- * アプリ固有セッション領域
+ * アプリ固有セッションを取得
  */
-function app_session(): array
+function get_app_session(): array
 {
     if (!isset($_SESSION[APP_SESSION_KEY]) || !is_array($_SESSION[APP_SESSION_KEY])) {
         $_SESSION[APP_SESSION_KEY] = [];
@@ -40,19 +40,35 @@ function app_session(): array
 }
 
 /**
- * CSRFトークン取得・発行
+ * アプリ固有セッションへ保存
  */
-function csrf_token(): string
+function set_app_session(string $key, mixed $value): void
 {
-    if (
-        !isset($_SESSION[APP_SESSION_KEY]['csrf_token']) ||
-        !is_string($_SESSION[APP_SESSION_KEY]['csrf_token']) ||
-        $_SESSION[APP_SESSION_KEY]['csrf_token'] === ''
-    ) {
-        $_SESSION[APP_SESSION_KEY]['csrf_token'] = bin2hex(random_bytes(32));
+    if (!isset($_SESSION[APP_SESSION_KEY]) || !is_array($_SESSION[APP_SESSION_KEY])) {
+        $_SESSION[APP_SESSION_KEY] = [];
     }
 
-    return $_SESSION[APP_SESSION_KEY]['csrf_token'];
+    $_SESSION[APP_SESSION_KEY][$key] = $value;
+}
+
+/**
+ * CSRFトークン取得・生成
+ */
+function get_csrf_token(): string
+{
+    $session = get_app_session();
+
+    if (
+        !isset($session['csrf_token']) ||
+        !is_string($session['csrf_token']) ||
+        strlen($session['csrf_token']) < 64
+    ) {
+        $token = bin2hex(random_bytes(32));
+        set_app_session('csrf_token', $token);
+        return $token;
+    }
+
+    return $session['csrf_token'];
 }
 
 /**
@@ -60,57 +76,95 @@ function csrf_token(): string
  */
 function verify_csrf(): void
 {
-    $sessionToken = $_SESSION[APP_SESSION_KEY]['csrf_token'] ?? '';
-    $requestToken = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+
+    if (!is_string($token) || $token === '') {
+        $input = file_get_contents('php://input');
+        $json = json_decode($input ?: '', true);
+
+        if (is_array($json) && isset($json['csrf_token']) && is_string($json['csrf_token'])) {
+            $token = $json['csrf_token'];
+        }
+    }
+
+    $session = get_app_session();
+    $expected = $session['csrf_token'] ?? '';
 
     if (
-        !is_string($sessionToken) ||
-        !is_string($requestToken) ||
-        $sessionToken === '' ||
-        $requestToken === '' ||
-        !hash_equals($sessionToken, $requestToken)
+        !is_string($expected) ||
+        $expected === '' ||
+        !is_string($token) ||
+        !hash_equals($expected, $token)
     ) {
         send_json([
             'success' => false,
-            'message' => '不正なリクエストです。画面を再読み込みしてから再度お試しください。'
+            'message' => '画面の有効期限が切れています。画面を再読み込みして再度お試しください。'
         ], 403);
     }
 }
 
 /**
- * JSONファイル読み込み
+ * JSONレスポンス
  */
-function read_json_file(string $file, array $default): array
+function send_json(array $response, int $status = 200): never
 {
-    if (!is_file($file)) {
-        return $default;
+    if (ob_get_level() > 0) {
+        ob_clean();
     }
 
-    $content = @file_get_contents($file);
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
 
-    if ($content === false || trim($content) === '') {
-        return $default;
-    }
+    echo json_encode(
+        $response,
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE
+    );
 
-    $data = json_decode($content, true);
-
-    if (!is_array($data)) {
-        return $default;
-    }
-
-    return $data;
+    exit;
 }
 
 /**
- * JSONファイル保存
+ * dataディレクトリを作成
  */
-function write_json_file(string $file, array $data): bool
+function ensure_data_directory(): void
 {
-    if (!is_dir(DATA_DIR)) {
-        if (!@mkdir(DATA_DIR, 0775, true) && !is_dir(DATA_DIR)) {
-            return false;
-        }
+    if (is_dir(DATA_DIR)) {
+        return;
     }
+
+    if (!mkdir(DATA_DIR, 0755, true) && !is_dir(DATA_DIR)) {
+        throw new RuntimeException('データ保存先を作成できませんでした。');
+    }
+}
+
+/**
+ * JSONファイルを安全に読み込む
+ */
+function read_json_file(string $file, array $default): array
+{
+    ensure_data_directory();
+
+    if (!file_exists($file)) {
+        return $default;
+    }
+
+    $contents = file_get_contents($file);
+
+    if ($contents === false || trim($contents) === '') {
+        return $default;
+    }
+
+    $data = json_decode($contents, true);
+
+    return is_array($data) ? $data : $default;
+}
+
+/**
+ * JSONファイルへ保存
+ */
+function write_json_file(string $file, array $data): void
+{
+    ensure_data_directory();
 
     $json = json_encode(
         $data,
@@ -121,420 +175,392 @@ function write_json_file(string $file, array $data): bool
     );
 
     if ($json === false) {
-        return false;
+        throw new RuntimeException('保存するデータを作成できませんでした。');
     }
 
-    $tmp = $file . '.tmp';
+    $temporary = $file . '.tmp';
 
-    if (@file_put_contents($tmp, $json, LOCK_EX) === false) {
-        return false;
+    if (file_put_contents($temporary, $json, LOCK_EX) === false) {
+        throw new RuntimeException('設定ファイルを書き込めませんでした。');
     }
 
-    if (!@rename($tmp, $file)) {
-        @unlink($tmp);
-        return false;
+    if (!rename($temporary, $file)) {
+        @unlink($temporary);
+        throw new RuntimeException('設定ファイルを更新できませんでした。');
     }
-
-    return true;
 }
 
 /**
- * 初期設定
+ * 初期メール設定
  */
-function default_settings(): array
+function default_mail_settings(): array
 {
     return [
-        'mail' => [
-            'smtp' => '',
-            'port' => '587',
-            'security' => 'STARTTLS',
-            'username' => '',
-            'password' => '',
-            'from' => '',
-            'fromName' => 'アンケート事務局',
-            'ready' => false
-        ],
-        'kintone' => [
-            'domain' => '',
-            'appId' => '',
-            'loginName' => '',
-            'password' => '',
-            'proxyHost' => '',
-            'proxyPort' => '',
-            'proxyAuth' => false,
-            'sslVerify' => false,
-            'ready' => false
-        ]
+        'smtp' => '',
+        'port' => '',
+        'security' => 'なし',
+        'username' => '',
+        'password' => '',
+        'from' => '',
+        'fromName' => '',
+        'ready' => false
     ];
 }
 
 /**
- * settings.jsonを必ず存在させる。
- *
- * 「なかったら作って」という要件への対応。
+ * 初期キントーン設定
+ */
+function default_kintone_settings(): array
+{
+    return [
+        'domain' => '',
+        'appId' => '',
+        'loginName' => '',
+        'password' => '',
+        'proxyHost' => '',
+        'proxyPort' => '',
+        'proxyAuth' => false,
+        'sslVerify' => false,
+        'ready' => false
+    ];
+}
+
+/**
+ * settings.jsonを読み込む
  */
 function load_settings(): array
 {
-    $defaults = default_settings();
+    $default = [
+        'mail' => default_mail_settings(),
+        'kintone' => default_kintone_settings()
+    ];
 
-    if (!is_file(SETTINGS_FILE)) {
-        write_json_file(SETTINGS_FILE, $defaults);
-        return $defaults;
+    $settings = read_json_file(SETTINGS_FILE, $default);
+
+    if (!isset($settings['mail']) || !is_array($settings['mail'])) {
+        $settings['mail'] = default_mail_settings();
     }
 
-    $settings = read_json_file(SETTINGS_FILE, $defaults);
+    if (!isset($settings['kintone']) || !is_array($settings['kintone'])) {
+        $settings['kintone'] = default_kintone_settings();
+    }
 
-    $mail = isset($settings['mail']) && is_array($settings['mail'])
-        ? $settings['mail']
-        : [];
+    $settings['mail'] = array_merge(
+        default_mail_settings(),
+        $settings['mail']
+    );
 
-    $kintone = isset($settings['kintone']) && is_array($settings['kintone'])
-        ? $settings['kintone']
-        : [];
-
-    $settings['mail'] = array_merge($defaults['mail'], $mail);
-    $settings['kintone'] = array_merge($defaults['kintone'], $kintone);
+    $settings['kintone'] = array_merge(
+        default_kintone_settings(),
+        $settings['kintone']
+    );
 
     return $settings;
 }
 
 /**
- * メール設定が利用可能か判定
+ * メール設定の保存
  */
-function is_mail_ready(array $mail): bool
+function save_mail_settings(array $input): void
 {
-    return trim((string)($mail['smtp'] ?? '')) !== ''
-        && trim((string)($mail['port'] ?? '')) !== ''
-        && trim((string)($mail['from'] ?? '')) !== '';
-}
+    $smtp = trim((string)($input['smtp'] ?? ''));
+    $port = trim((string)($input['port'] ?? ''));
+    $security = trim((string)($input['security'] ?? 'なし'));
+    $username = trim((string)($input['username'] ?? ''));
+    $password = (string)($input['password'] ?? '');
+    $from = trim((string)($input['from'] ?? ''));
+    $fromName = trim((string)($input['fromName'] ?? ''));
 
-/**
- * Kintone URL
- */
-function kintone_build_url(string $domain, string $endpoint): string
-{
-    $domain = trim($domain);
-    $domain = preg_replace('/^https?:\/\//i', '', $domain);
-    $domain = preg_replace('/\.cybozu\.com.*$/i', '', $domain);
-    $domain = rtrim((string)$domain, '/');
-
-    $endpoint = '/' . ltrim($endpoint, '/');
-
-    return 'https://' . $domain . '.cybozu.com' . $endpoint;
-}
-
-/**
- * 安全なレスポンスヘッダー取得
- */
-function get_safe_response_headers(): array
-{
-    if (function_exists('http_get_last_response_headers')) {
-        $headers = http_get_last_response_headers();
-        return is_array($headers) ? $headers : [];
+    if ($smtp === '') {
+        send_json([
+            'success' => false,
+            'message' => 'SMTPサーバを入力してください。'
+        ], 422);
     }
 
-    return [];
-}
-
-/**
- * kintone認証ヘッダー
- */
-function make_cybozu_auth_header(string $loginName, string $password): string
-{
-    $loginName = trim($loginName);
-    $password = trim($password);
-
-    return 'X-Cybozu-Authorization: ' .
-        base64_encode($loginName . ':' . $password);
-}
-
-/**
- * kintone API通信
- */
-function kintone_api_request(
-    string $method,
-    string $url,
-    array $headers,
-    mixed $payload,
-    array $config
-): array {
-    $method = strtoupper($method);
-
-    $httpOptions = [
-        'method' => $method,
-        'header' => implode("\r\n", $headers),
-        'ignore_errors' => true,
-        'timeout' => 15
-    ];
-
-    if ($method !== 'GET' && $payload !== null) {
-        $encoded = is_array($payload)
-            ? json_encode($payload, JSON_UNESCAPED_UNICODE)
-            : (string)$payload;
-
-        if ($encoded === false) {
-            return [
-                'success' => false,
-                'status' => 0,
-                'message' => '送信データを作成できませんでした。'
-            ];
-        }
-
-        $httpOptions['content'] = $encoded;
+    if ($port === '' || !ctype_digit($port)) {
+        send_json([
+            'success' => false,
+            'message' => 'ポート番号を正しく入力してください。'
+        ], 422);
     }
 
-    $contextOptions = [
-        'http' => $httpOptions,
-        'ssl' => [
-            'verify_peer' => false,
-            'verify_peer_name' => false
-        ]
-    ];
+    $portNumber = (int)$port;
 
-    $proxyHostPort = trim((string)($config['proxy_host_port'] ?? ''));
+    if ($portNumber < 1 || $portNumber > 65535) {
+        send_json([
+            'success' => false,
+            'message' => 'ポート番号は1～65535の範囲で入力してください。'
+        ], 422);
+    }
+
+    if ($from === '' || filter_var($from, FILTER_VALIDATE_EMAIL) === false) {
+        send_json([
+            'success' => false,
+            'message' => '送信元メールアドレスを正しく入力してください。'
+        ], 422);
+    }
+
+    if (!in_array($security, ['なし', 'STARTTLS', 'SSL/TLS'], true)) {
+        send_json([
+            'success' => false,
+            'message' => '接続方式が正しくありません。'
+        ], 422);
+    }
+
+    $settings = load_settings();
 
     /*
-     * プロキシ指定がある場合は必ずproxy/request_fulluriを設定。
+     * パスワードが空の場合は、既存のパスワードを維持する。
+     * これにより、設定画面を再表示した際に
+     * パスワードそのものを画面へ返す必要がない。
      */
-    if ($proxyHostPort !== '') {
-        $contextOptions['http']['proxy'] = 'tcp://' . $proxyHostPort;
-        $contextOptions['http']['request_fulluri'] = true;
+    $existingPassword = (string)($settings['mail']['password'] ?? '');
+
+    if ($password === '') {
+        $password = $existingPassword;
     }
 
-    $context = stream_context_create($contextOptions);
-
-    $responseBody = @file_get_contents($url, false, $context);
-    $responseHeaders = get_safe_response_headers();
-
-    $statusCode = 500;
-
-    foreach ($responseHeaders as $header) {
-        if (preg_match('/HTTP\/\d\.\d\s+(\d+)/i', $header, $matches)) {
-            $statusCode = (int)$matches[1];
-        }
-    }
-
-    $resultData = json_decode(
-        $responseBody === false ? '' : $responseBody,
-        true
-    );
-
-    if ($statusCode >= 200 && $statusCode < 300) {
-        return [
-            'success' => true,
-            'status' => $statusCode,
-            'data' => is_array($resultData) ? $resultData : []
-        ];
-    }
-
-    $message = 'kintone API 通信エラーが発生しました。';
-
-    if (is_array($resultData) && isset($resultData['message'])) {
-        $message = (string)$resultData['message'];
-    }
-
-    return [
-        'success' => false,
-        'status' => $statusCode,
-        'message' => $message
+    $settings['mail'] = [
+        'smtp' => $smtp,
+        'port' => (string)$portNumber,
+        'security' => $security,
+        'username' => $username,
+        'password' => $password,
+        'from' => $from,
+        'fromName' => $fromName,
+        'ready' => true
     ];
+
+    write_json_file(SETTINGS_FILE, $settings);
 }
 
 /**
- * JSONレスポンス
+ * キントーン設定保存
  */
-function send_json(array $response, int $statusCode = 200): never
+function save_kintone_settings(array $input): void
 {
-    while (ob_get_level() > 0) {
-        ob_end_clean();
-    }
+    $domain = trim((string)($input['domain'] ?? ''));
+    $appId = trim((string)($input['appId'] ?? ''));
+    $loginName = trim((string)($input['loginName'] ?? ''));
+    $password = (string)($input['password'] ?? '');
+    $proxyHost = trim((string)($input['proxyHost'] ?? ''));
+    $proxyPort = trim((string)($input['proxyPort'] ?? ''));
 
-    http_response_code($statusCode);
-    header('Content-Type: application/json; charset=utf-8');
-
-    echo json_encode(
-        $response,
-        JSON_UNESCAPED_UNICODE |
-        JSON_UNESCAPED_SLASHES |
-        JSON_INVALID_UTF8_SUBSTITUTE
-    );
-
-    exit;
-}
-
-/**
- * 設定保存API
- */
-function save_settings_request(): void
-{
-    verify_csrf();
-
-    $raw = file_get_contents('php://input');
-
-    if ($raw === false || trim($raw) === '') {
+    if ($domain === '' || $appId === '' || $loginName === '') {
         send_json([
             'success' => false,
-            'message' => '保存する設定がありません。'
-        ], 400);
-    }
-
-    $input = json_decode($raw, true);
-
-    if (!is_array($input)) {
-        send_json([
-            'success' => false,
-            'message' => '設定データが正しくありません。'
-        ], 400);
+            'message' => '利用先、顧客管理アプリID、ログイン名を入力してください。'
+        ], 422);
     }
 
     $settings = load_settings();
 
-    if (isset($input['mail']) && is_array($input['mail'])) {
-        $oldPassword = (string)($settings['mail']['password'] ?? '');
+    $existingPassword = (string)($settings['kintone']['password'] ?? '');
 
-        $settings['mail']['smtp'] =
-            trim((string)($input['mail']['smtp'] ?? ''));
+    if ($password === '') {
+        $password = $existingPassword;
+    }
 
-        $settings['mail']['port'] =
-            trim((string)($input['mail']['port'] ?? ''));
+    if ($password === '') {
+        send_json([
+            'success' => false,
+            'message' => 'パスワードを入力してください。'
+        ], 422);
+    }
 
-        $settings['mail']['security'] =
-            trim((string)($input['mail']['security'] ?? 'STARTTLS'));
+    if ($proxyHost !== '' && $proxyPort === '') {
+        send_json([
+            'success' => false,
+            'message' => 'プロキシのホスト名を入力した場合は、ポート番号も入力してください。'
+        ], 422);
+    }
 
-        $settings['mail']['username'] =
-            trim((string)($input['mail']['username'] ?? ''));
+    if ($proxyPort !== '' && (!ctype_digit($proxyPort) || (int)$proxyPort < 1 || (int)$proxyPort > 65535)) {
+        send_json([
+            'success' => false,
+            'message' => 'プロキシのポート番号を正しく入力してください。'
+        ], 422);
+    }
+
+    $settings['kintone'] = [
+        'domain' => $domain,
+        'appId' => $appId,
+        'loginName' => $loginName,
+        'password' => $password,
+        'proxyHost' => $proxyHost,
+        'proxyPort' => $proxyPort,
+        'proxyAuth' => false,
+        'sslVerify' => false,
+        'ready' => true
+    ];
+
+    write_json_file(SETTINGS_FILE, $settings);
+}
+
+/**
+ * API処理
+ */
+function handle_api(): never
+{
+    $action = $_GET['action'] ?? '';
+
+    if (!is_string($action)) {
+        send_json([
+            'success' => false,
+            'message' => '不正な要求です。'
+        ], 400);
+    }
+
+    if ($action === 'load_settings') {
+        $settings = load_settings();
 
         /*
-         * パスワード未入力の場合は既存値を維持。
+         * パスワードはブラウザへ返さない。
          */
-        $newPassword = (string)($input['mail']['password'] ?? '');
+        $mail = $settings['mail'];
+        $kintone = $settings['kintone'];
 
-        $settings['mail']['password'] =
-            $newPassword !== '' ? $newPassword : $oldPassword;
+        $mail['password'] = '';
+        $kintone['password'] = '';
 
-        $settings['mail']['from'] =
-            trim((string)($input['mail']['from'] ?? ''));
-
-        $settings['mail']['fromName'] =
-            trim((string)($input['mail']['fromName'] ?? 'アンケート事務局'));
-
-        $settings['mail']['ready'] =
-            is_mail_ready($settings['mail']);
+        send_json([
+            'success' => true,
+            'mail' => $mail,
+            'kintone' => $kintone
+        ]);
     }
 
-    if (isset($input['kintone']) && is_array($input['kintone'])) {
-        $oldPassword = (string)($settings['kintone']['password'] ?? '');
+    if ($action === 'save_mail_settings') {
+        verify_csrf();
 
-        $settings['kintone']['domain'] =
-            trim((string)($input['kintone']['domain'] ?? ''));
+        $input = json_decode(file_get_contents('php://input') ?: '', true);
 
-        $settings['kintone']['appId'] =
-            trim((string)($input['kintone']['appId'] ?? ''));
+        if (!is_array($input)) {
+            send_json([
+                'success' => false,
+                'message' => '送信内容を確認できませんでした。'
+            ], 400);
+        }
 
-        $settings['kintone']['loginName'] =
-            trim((string)($input['kintone']['loginName'] ?? ''));
+        save_mail_settings($input);
 
-        $newPassword = (string)($input['kintone']['password'] ?? '');
+        $settings = load_settings();
 
-        $settings['kintone']['password'] =
-            $newPassword !== '' ? $newPassword : $oldPassword;
-
-        $settings['kintone']['proxyHost'] =
-            trim((string)($input['kintone']['proxyHost'] ?? ''));
-
-        $settings['kintone']['proxyPort'] =
-            trim((string)($input['kintone']['proxyPort'] ?? ''));
-
-        $settings['kintone']['proxyAuth'] = false;
-        $settings['kintone']['sslVerify'] = false;
-
-        $settings['kintone']['ready'] =
-            $settings['kintone']['domain'] !== ''
-            && $settings['kintone']['appId'] !== ''
-            && $settings['kintone']['loginName'] !== ''
-            && $settings['kintone']['password'] !== '';
+        send_json([
+            'success' => true,
+            'message' => 'メール送信設定を保存しました。',
+            'mail' => [
+                'smtp' => $settings['mail']['smtp'],
+                'port' => $settings['mail']['port'],
+                'security' => $settings['mail']['security'],
+                'username' => $settings['mail']['username'],
+                'from' => $settings['mail']['from'],
+                'fromName' => $settings['mail']['fromName'],
+                'ready' => true
+            ]
+        ]);
     }
 
-    if (!write_json_file(SETTINGS_FILE, $settings)) {
+    if ($action === 'save_kintone_settings') {
+        verify_csrf();
+
+        $input = json_decode(file_get_contents('php://input') ?: '', true);
+
+        if (!is_array($input)) {
+            send_json([
+                'success' => false,
+                'message' => '送信内容を確認できませんでした。'
+            ], 400);
+        }
+
+        save_kintone_settings($input);
+
+        $settings = load_settings();
+
+        send_json([
+            'success' => true,
+            'message' => 'キントーン設定を保存しました。',
+            'kintone' => [
+                'domain' => $settings['kintone']['domain'],
+                'appId' => $settings['kintone']['appId'],
+                'loginName' => $settings['kintone']['loginName'],
+                'proxyHost' => $settings['kintone']['proxyHost'],
+                'proxyPort' => $settings['kintone']['proxyPort'],
+                'proxyAuth' => false,
+                'sslVerify' => false,
+                'ready' => true
+            ]
+        ]);
+    }
+
+    if ($action === 'load_surveys') {
+        $surveys = read_json_file(SURVEYS_FILE, []);
+
+        send_json([
+            'success' => true,
+            'surveys' => $surveys
+        ]);
+    }
+
+    if ($action === 'save_surveys') {
+        verify_csrf();
+
+        $input = json_decode(file_get_contents('php://input') ?: '', true);
+
+        if (!is_array($input) || !isset($input['surveys']) || !is_array($input['surveys'])) {
+            send_json([
+                'success' => false,
+                'message' => 'アンケートデータを確認できませんでした。'
+            ], 400);
+        }
+
+        write_json_file(SURVEYS_FILE, $input['surveys']);
+
+        send_json([
+            'success' => true,
+            'message' => 'アンケートを保存しました。'
+        ]);
+    }
+
+    send_json([
+        'success' => false,
+        'message' => '指定された処理はありません。'
+    ], 404);
+}
+
+if (isset($_GET['action'])) {
+    try {
+        handle_api();
+    } catch (\Throwable $e) {
+        error_log(
+            'NewApp error: ' .
+            get_class($e) .
+            ': ' .
+            $e->getMessage()
+        );
+
         send_json([
             'success' => false,
-            'message' => '設定ファイルを保存できませんでした。dataフォルダの書き込み権限を確認してください。'
+            'message' => 'サーバー側で処理に失敗しました。保存先の状態を確認してください。'
         ], 500);
     }
-
-    send_json([
-        'success' => true,
-        'message' => '設定を保存しました。'
-    ]);
 }
 
-/**
- * メール設定確認API
- *
- * 実際の送信を行わず、設定が存在するかをサーバー側で確認する。
- */
-function check_mail_settings_request(): void
-{
-    verify_csrf();
+$csrfToken = get_csrf_token();
 
-    $settings = load_settings();
-    $mail = $settings['mail'];
-
-    if (!is_mail_ready($mail)) {
-        send_json([
-            'success' => false,
-            'message' => 'メール送信設定が未完了です。'
-        ], 400);
-    }
-
-    send_json([
-        'success' => true,
-        'message' => 'メール送信設定を読み込みました。SMTP設定が登録されています。',
-        'mail' => [
-            'smtp' => (string)$mail['smtp'],
-            'port' => (string)$mail['port'],
-            'security' => (string)$mail['security'],
-            'from' => (string)$mail['from'],
-            'fromName' => (string)$mail['fromName']
-        ]
-    ]);
-}
-
-/**
- * 初期データ
- */
 $settings = load_settings();
 
-$customers = read_json_file(
-    CUSTOMERS_FILE,
-    [
-        [
-            'id' => 1,
-            'name' => '山田 太郎',
-            'email' => 'taro.yamada@example.com',
-            'company' => '株式会社サンプル',
-            'code' => 'C0001'
-        ],
-        [
-            'id' => 2,
-            'name' => '佐藤 花子',
-            'email' => 'hanako.sato@example.com',
-            'company' => '株式会社サンプル',
-            'code' => 'C0002'
-        ],
-        [
-            'id' => 3,
-            'name' => '鈴木 一郎',
-            'email' => 'ichiro.suzuki@example.com',
-            'company' => '株式会社テスト',
-            'code' => 'C0003'
-        ]
-    ]
-);
+$mailForJs = $settings['mail'];
+$mailForJs['password'] = '';
 
-$surveys = read_json_file(
-    SURVEYS_FILE,
-    [
+$kintoneForJs = $settings['kintone'];
+$kintoneForJs['password'] = '';
+
+$surveys = read_json_file(SURVEYS_FILE, []);
+
+if ($surveys === []) {
+    $surveys = [
         [
             'id' => 1,
             'name' => '新商品アンケート',
@@ -544,7 +570,7 @@ $surveys = read_json_file(
             'start' => date('Y-m-d'),
             'end' => date('Y-m-d', strtotime('+30 days')),
             'answers' => 0,
-            'target' => count($customers),
+            'target' => 0,
             'sent' => 0,
             'updated' => date('Y-m-d'),
             'numbering' => 'global',
@@ -567,65 +593,43 @@ $surveys = read_json_file(
                 ]
             ]
         ]
-    ]
-);
+    ];
 
-/**
- * API処理
- */
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? '';
-
-    if ($action === 'save_settings') {
-        save_settings_request();
-    }
-
-    if ($action === 'check_mail') {
-        check_mail_settings_request();
+    try {
+        write_json_file(SURVEYS_FILE, $surveys);
+    } catch (\Throwable $e) {
+        error_log('NewApp survey initialization error: ' . $e->getMessage());
     }
 }
 
-$mailForClient = [
-    'smtp' => (string)($settings['mail']['smtp'] ?? ''),
-    'port' => (string)($settings['mail']['port'] ?? '587'),
-    'security' => (string)($settings['mail']['security'] ?? 'STARTTLS'),
-    'username' => (string)($settings['mail']['username'] ?? ''),
-    'from' => (string)($settings['mail']['from'] ?? ''),
-    'fromName' => (string)($settings['mail']['fromName'] ?? 'アンケート事務局'),
-    'ready' => is_mail_ready($settings['mail'])
-];
-
-$kintoneForClient = [
-    'domain' => (string)($settings['kintone']['domain'] ?? ''),
-    'appId' => (string)($settings['kintone']['appId'] ?? ''),
-    'loginName' => (string)($settings['kintone']['loginName'] ?? ''),
-    'proxyHost' => (string)($settings['kintone']['proxyHost'] ?? ''),
-    'proxyPort' => (string)($settings['kintone']['proxyPort'] ?? ''),
-    'proxyAuth' => false,
-    'sslVerify' => false,
-    'ready' => !empty($settings['kintone']['ready'])
-];
-
-$csrf = csrf_token();
-
+$customers = read_json_file(CUSTOMERS_FILE, []);
 ?>
 <!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>アンケート業務運営</title>
+
 <style>
 *{box-sizing:border-box}
+
 body{
     margin:0;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Yu Gothic",Meiryo,sans-serif;
     color:#263238;
-    background:#f4f6f8
+    background:#f4f6f8;
 }
+
 button,input,textarea,select{font:inherit}
+
 button{cursor:pointer}
-button:disabled{cursor:not-allowed;opacity:.55}
+
+button:disabled{
+    cursor:not-allowed;
+    opacity:.55;
+}
+
 .topbar{
     height:60px;
     background:#1f3a5f;
@@ -633,90 +637,172 @@ button:disabled{cursor:not-allowed;opacity:.55}
     display:flex;
     align-items:center;
     padding:0 24px;
-    gap:30px
+    gap:30px;
 }
-.logo{font-size:18px;font-weight:bold;white-space:nowrap}
-.main-nav{display:flex;height:100%;align-items:center;gap:2px}
+
+.logo{
+    font-size:18px;
+    font-weight:bold;
+    white-space:nowrap;
+}
+
+.main-nav{
+    display:flex;
+    height:100%;
+    align-items:center;
+    gap:2px;
+}
+
 .main-nav button{
     height:100%;
     padding:0 17px;
     color:#dce7f3;
     background:transparent;
-    border:0
+    border:0;
 }
+
 .main-nav button:hover,
-.main-nav button.active{background:#31557f;color:#fff}
-.app{max-width:1440px;margin:0 auto;padding:24px}
-.hidden{display:none!important}
+.main-nav button.active{
+    background:#31557f;
+    color:#fff;
+}
+
+.app{
+    max-width:1440px;
+    margin:0 auto;
+    padding:24px;
+}
+
+.hidden{
+    display:none!important;
+}
+
 .page-header{
     display:flex;
     justify-content:space-between;
     align-items:center;
     gap:20px;
-    margin-bottom:20px
+    margin-bottom:20px;
 }
-.page-header h1{margin:0;font-size:25px}
-.subtext{color:#718096;font-size:13px;margin-top:5px}
+
+.page-header h1{
+    margin:0;
+    font-size:25px;
+}
+
+.subtext{
+    color:#718096;
+    font-size:13px;
+    margin-top:5px;
+}
+
 .btn{
     border:1px solid #cbd5e0;
     background:#fff;
     color:#34495e;
     border-radius:5px;
-    padding:8px 15px
+    padding:8px 15px;
 }
-.btn-primary{background:#2878c8;border-color:#2878c8;color:#fff}
-.btn-danger{border-color:#e05a5a;color:#c53f3f}
-.btn-success{background:#2f855a;border-color:#2f855a;color:#fff}
-.btn-small{padding:5px 10px;font-size:12px}
+
+.btn:hover{
+    background:#f7fafc;
+}
+
+.btn-primary{
+    background:#2878c8;
+    border-color:#2878c8;
+    color:#fff;
+}
+
+.btn-primary:hover{
+    background:#2068ad;
+}
+
+.btn-small{
+    padding:5px 10px;
+    font-size:12px;
+}
+
 .card{
     background:#fff;
     border:1px solid #dfe5eb;
     border-radius:7px;
     padding:20px;
-    margin-bottom:18px
+    margin-bottom:18px;
 }
-.card-title{font-size:17px;font-weight:bold;margin-bottom:15px}
-.table{width:100%;border-collapse:collapse}
-.table th,.table td{
+
+.card-title{
+    font-size:17px;
+    font-weight:bold;
+    margin-bottom:15px;
+}
+
+.table{
+    width:100%;
+    border-collapse:collapse;
+}
+
+.table th,
+.table td{
     padding:12px 10px;
     border-bottom:1px solid #e6ebef;
     text-align:left;
     vertical-align:middle;
-    font-size:13px
+    font-size:13px;
 }
-.table th{background:#f8fafc;color:#52606d}
-.empty{text-align:center!important;color:#8a98a5;padding:40px!important}
-.link-button{
-    border:0;
-    background:none;
-    padding:0;
-    color:#2878c8;
-    cursor:pointer;
-    text-align:left
+
+.table th{
+    background:#f8fafc;
+    color:#52606d;
 }
+
+.empty{
+    text-align:center!important;
+    color:#8a98a5;
+    padding:40px!important;
+}
+
 .badge{
     display:inline-block;
     padding:4px 9px;
     border-radius:12px;
     font-size:11px;
-    font-weight:bold
+    font-weight:bold;
 }
-.badge-open{background:#e6f6ed;color:#237a49}
-.badge-draft{background:#edf2f7;color:#66788a}
-.badge-end{background:#fdecec;color:#b43b3b}
+
+.badge-open{
+    background:#e6f6ed;
+    color:#237a49;
+}
+
+.badge-draft{
+    background:#edf2f7;
+    color:#66788a;
+}
+
+.badge-end{
+    background:#fdecec;
+    color:#b43b3b;
+}
+
 .form-grid{
     display:grid;
     grid-template-columns:1fr 1fr;
-    gap:16px
+    gap:16px;
 }
-.field{margin-bottom:15px}
+
+.field{
+    margin-bottom:15px;
+}
+
 .field label{
     display:block;
     font-size:13px;
     font-weight:bold;
     margin-bottom:6px;
-    color:#455563
+    color:#455563;
 }
+
 .field input,
 .field textarea,
 .field select{
@@ -724,9 +810,14 @@ button:disabled{cursor:not-allowed;opacity:.55}
     border:1px solid #cbd5e0;
     border-radius:5px;
     padding:9px 10px;
-    background:#fff
+    background:#fff;
 }
-.field textarea{min-height:100px;resize:vertical}
+
+.field textarea{
+    min-height:90px;
+    resize:vertical;
+}
+
 .notice{
     padding:11px 13px;
     border-radius:5px;
@@ -734,10 +825,27 @@ button:disabled{cursor:not-allowed;opacity:.55}
     border:1px solid #c9e2fa;
     color:#2b5f8a;
     font-size:13px;
-    margin-bottom:15px
+    margin-bottom:15px;
 }
-.notice.success{background:#edf9f1;border-color:#c9ead5;color:#267348}
-.notice.warning{background:#fff8e6;border-color:#f0dfae;color:#8a6408}
+
+.notice.success{
+    background:#edf9f1;
+    border-color:#c9ead5;
+    color:#267348;
+}
+
+.notice.warning{
+    background:#fff8e6;
+    border-color:#f0dfae;
+    color:#8a6408;
+}
+
+.notice.error{
+    background:#fff0f0;
+    border-color:#f0c5c5;
+    color:#a63232;
+}
+
 .status-line{
     display:flex;
     align-items:center;
@@ -745,124 +853,69 @@ button:disabled{cursor:not-allowed;opacity:.55}
     padding:10px 12px;
     background:#f7f9fb;
     border-radius:5px;
-    margin-bottom:15px
+    margin-bottom:15px;
 }
+
 .status-dot{
     width:9px;
     height:9px;
     border-radius:50%;
-    background:#9aa7b3
+    background:#9aa7b3;
 }
-.status-dot.ok{background:#2f9e61}
-.status-dot.warn{background:#d39b25}
-.detail-tabs,
+
+.status-dot.ok{
+    background:#2f9e61;
+}
+
+.status-dot.warn{
+    background:#d39b25;
+}
+
 .settings-tabs{
     display:flex;
     gap:5px;
     margin-bottom:18px;
-    border-bottom:1px solid #dfe5eb
 }
-.detail-tabs button,
+
 .settings-tabs button{
-    border:0;
+    border:1px solid #d6dee6;
     background:#fff;
-    padding:10px 16px
+    padding:9px 16px;
+    border-radius:5px;
 }
-.detail-tabs button.active,
+
 .settings-tabs button.active{
     background:#2878c8;
-    color:#fff
+    color:#fff;
+    border-color:#2878c8;
 }
-.detail-summary{
-    display:grid;
-    grid-template-columns:repeat(4,1fr);
-    gap:14px;
-    margin-bottom:18px
-}
-.stat-card{
-    background:#fff;
-    border:1px solid #dfe5eb;
-    border-radius:7px;
-    padding:17px
-}
-.stat-label{color:#718096;font-size:12px}
-.stat-value{font-size:27px;font-weight:bold;margin-top:5px}
-.progress{
-    height:10px;
-    background:#e8edf2;
-    border-radius:5px;
-    overflow:hidden;
-    margin-top:8px
-}
-.progress span{display:block;height:100%;background:#4285c5}
-.customer-toolbar{
+
+.actions{
     display:flex;
     gap:8px;
-    margin-bottom:12px
+    flex-wrap:wrap;
 }
-.customer-toolbar input{
-    flex:1;
-    border:1px solid #cbd5e0;
-    border-radius:5px;
-    padding:8px
+
+.spinner{
+    display:inline-block;
+    width:14px;
+    height:14px;
+    border:2px solid rgba(255,255,255,.45);
+    border-top-color:#fff;
+    border-radius:50%;
+    animation:spin .7s linear infinite;
+    vertical-align:-2px;
+    margin-right:6px;
 }
-.question{
-    padding:15px;
-    border-bottom:1px solid #e6ebef
+
+.btn.loading{
+    position:relative;
 }
-.question:last-child{border-bottom:0}
-.question-head{
-    display:flex;
-    gap:10px;
-    align-items:center
+
+@keyframes spin{
+    to{transform:rotate(360deg)}
 }
-.question-head input{
-    flex:1;
-    border:1px solid #cbd5e0;
-    border-radius:4px;
-    padding:8px
-}
-.option-row{
-    display:flex;
-    gap:8px;
-    margin-top:8px
-}
-.option-row input{
-    flex:1;
-    border:1px solid #cbd5e0;
-    border-radius:4px;
-    padding:7px
-}
-.modal-backdrop{
-    position:fixed;
-    inset:0;
-    background:rgba(20,35,50,.45);
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    z-index:1000
-}
-.modal{
-    width:min(760px,calc(100% - 30px));
-    max-height:90vh;
-    overflow:auto;
-    background:#fff;
-    border-radius:8px
-}
-.modal-header,
-.modal-footer{
-    padding:15px 20px;
-    display:flex;
-    justify-content:space-between;
-    border-bottom:1px solid #e3e8ed
-}
-.modal-footer{
-    border-top:1px solid #e3e8ed;
-    border-bottom:0;
-    justify-content:flex-end;
-    gap:8px
-}
-.modal-body{padding:20px}
+
 .toast{
     position:fixed;
     right:25px;
@@ -871,43 +924,93 @@ button:disabled{cursor:not-allowed;opacity:.55}
     color:#fff;
     padding:12px 18px;
     border-radius:5px;
+    box-shadow:0 5px 20px rgba(0,0,0,.2);
     opacity:0;
     transform:translateY(10px);
     transition:.2s;
-    z-index:2000
+    pointer-events:none;
+    z-index:2000;
 }
-.toast.show{opacity:1;transform:translateY(0)}
-.loading::before{
-    content:"";
-    display:inline-block;
-    width:13px;
-    height:13px;
-    margin-right:7px;
-    border:2px solid rgba(255,255,255,.45);
-    border-top-color:#fff;
-    border-radius:50%;
-    animation:spin .7s linear infinite;
-    vertical-align:-2px
+
+.toast.show{
+    opacity:1;
+    transform:translateY(0);
 }
-@keyframes spin{to{transform:rotate(360deg)}}
-@media(max-width:900px){
-    .form-grid,
-    .detail-summary{grid-template-columns:1fr}
-    .topbar{padding:0 10px;gap:8px}
-    .main-nav button{padding:0 8px;font-size:12px}
-    .app{padding:14px}
+
+.modal-backdrop{
+    position:fixed;
+    inset:0;
+    background:rgba(20,35,50,.45);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    z-index:1000;
+}
+
+.modal{
+    width:min(760px,calc(100% - 30px));
+    max-height:90vh;
+    overflow:auto;
+    background:#fff;
+    border-radius:8px;
+    box-shadow:0 15px 50px rgba(0,0,0,.25);
+}
+
+.modal-header{
+    padding:16px 20px;
+    border-bottom:1px solid #e3e8ed;
+    display:flex;
+    justify-content:space-between;
+}
+
+.modal-body{
+    padding:20px;
+}
+
+.modal-footer{
+    padding:13px 20px;
+    border-top:1px solid #e3e8ed;
+    display:flex;
+    justify-content:flex-end;
+    gap:8px;
+}
+
+@media(max-width:800px){
+    .topbar{
+        padding:0 10px;
+        gap:8px;
+    }
+
+    .logo{
+        font-size:15px;
+    }
+
+    .main-nav button{
+        padding:0 8px;
+        font-size:12px;
+    }
+
+    .app{
+        padding:14px;
+    }
+
+    .form-grid{
+        grid-template-columns:1fr;
+    }
 }
 </style>
 </head>
+
 <body>
 
 <header class="topbar">
     <div class="logo">アンケート業務運営</div>
+
     <nav class="main-nav">
-        <button type="button" id="nav-list">アンケート一覧</button>
-        <button type="button" id="nav-create">アンケート作成</button>
-        <button type="button" id="nav-customers">顧客一覧</button>
-        <button type="button" id="nav-settings">設定</button>
+        <button id="nav-list" type="button">アンケート一覧</button>
+        <button id="nav-create" type="button">アンケート作成</button>
+        <button id="nav-customers" type="button">顧客一覧</button>
+        <button id="nav-settings" type="button">設定</button>
     </nav>
 </header>
 
@@ -919,21 +1022,23 @@ button:disabled{cursor:not-allowed;opacity:.55}
             <h1>アンケート一覧</h1>
             <div class="subtext">作成済みのアンケートを管理します</div>
         </div>
-        <button type="button" class="btn btn-primary" id="btn-create">＋ アンケート作成</button>
+
+        <button id="btn-create" class="btn btn-primary" type="button">
+            ＋ アンケート作成
+        </button>
     </div>
 
     <div class="card">
         <table class="table">
             <thead>
-            <tr>
-                <th>アンケート名</th>
-                <th>状態</th>
-                <th>作成日</th>
-                <th>公開期間</th>
-                <th>回答数</th>
-                <th>最終更新日</th>
-                <th>操作</th>
-            </tr>
+                <tr>
+                    <th>アンケート名</th>
+                    <th>状態</th>
+                    <th>作成日</th>
+                    <th>公開期間</th>
+                    <th>回答数</th>
+                    <th>最終更新日</th>
+                </tr>
             </thead>
             <tbody id="survey-list-body"></tbody>
         </table>
@@ -941,132 +1046,179 @@ button:disabled{cursor:not-allowed;opacity:.55}
 </section>
 
 <section id="page-editor" class="hidden">
+
     <div class="page-header">
         <div>
-            <h1 id="editor-title">アンケート作成</h1>
-            <div class="subtext">アンケート全体を確認しながら編集できます</div>
+            <h1>アンケート作成</h1>
+            <div class="subtext">アンケートの基本情報を設定します</div>
         </div>
     </div>
 
     <div class="card">
+
         <div class="form-grid">
+
             <div class="field">
-                <label>アンケート名 *</label>
-                <input id="survey-name">
+                <label for="survey-name">アンケート名 *</label>
+                <input id="survey-name" type="text">
             </div>
+
             <div class="field">
-                <label>公開状態</label>
+                <label for="survey-status">公開状態</label>
                 <select id="survey-status">
                     <option value="draft">下書き</option>
                     <option value="open">公開中</option>
                     <option value="end">終了</option>
                 </select>
             </div>
+
         </div>
 
         <div class="field">
-            <label>説明</label>
+            <label for="survey-description">説明</label>
             <textarea id="survey-description"></textarea>
         </div>
 
         <div class="form-grid">
+
             <div class="field">
-                <label>公開開始日</label>
+                <label for="survey-start">公開開始日</label>
                 <input id="survey-start" type="date">
             </div>
+
             <div class="field">
-                <label>公開終了日</label>
+                <label for="survey-end">公開終了日</label>
                 <input id="survey-end" type="date">
             </div>
+
         </div>
+
     </div>
 
-    <div id="editor-questions"></div>
+    <div class="card">
 
-    <div style="display:flex;justify-content:space-between;margin-top:15px">
-        <button type="button" class="btn" id="btn-editor-back">一覧へ戻る</button>
-        <button type="button" class="btn btn-primary" id="btn-save-survey">保存</button>
-    </div>
-</section>
+        <div class="card-title">質問</div>
 
-<section id="page-detail" class="hidden">
-    <div class="page-header">
-        <div>
-            <h1 id="detail-title"></h1>
-            <div class="subtext" id="detail-subtitle"></div>
+        <div class="field">
+            <label for="question-text">質問内容</label>
+            <input id="question-text" type="text">
         </div>
-        <div>
-            <button type="button" class="btn" id="btn-detail-edit">編集</button>
-            <button type="button" class="btn btn-primary" id="btn-detail-send">送信</button>
-            <button type="button" class="btn" id="btn-detail-back">一覧へ戻る</button>
+
+        <div class="field">
+            <label for="question-type">回答形式</label>
+            <select id="question-type">
+                <option value="single">単一選択</option>
+                <option value="multiple">複数選択</option>
+                <option value="free">自由記述</option>
+            </select>
         </div>
+
     </div>
 
-    <div class="detail-tabs">
-        <button type="button" data-detail-tab="content">アンケート内容</button>
-        <button type="button" data-detail-tab="send">送信</button>
-        <button type="button" data-detail-tab="status">回答状況</button>
-        <button type="button" data-detail-tab="result">回答結果</button>
+    <div class="actions">
+
+        <button id="btn-editor-back" class="btn" type="button">
+            一覧へ戻る
+        </button>
+
+        <button id="btn-save-survey" class="btn btn-primary" type="button">
+            保存
+        </button>
+
     </div>
 
-    <div id="detail-content"></div>
 </section>
 
 <section id="page-customers" class="hidden">
+
     <div class="page-header">
         <div>
             <h1>顧客一覧</h1>
-            <div class="subtext">顧客情報を確認します</div>
+            <div class="subtext">顧客管理情報を確認します</div>
         </div>
     </div>
 
     <div id="customer-status"></div>
 
     <div class="card">
-        <div class="customer-toolbar">
-            <input id="customer-search" placeholder="顧客名・メールアドレスで検索">
-        </div>
+
         <table class="table">
             <thead>
-            <tr>
-                <th>顧客名</th>
-                <th>メールアドレス</th>
-                <th>会社名</th>
-                <th>顧客番号</th>
-            </tr>
+                <tr>
+                    <th>顧客名</th>
+                    <th>メールアドレス</th>
+                    <th>会社名</th>
+                    <th>顧客番号</th>
+                </tr>
             </thead>
+
             <tbody id="customer-body"></tbody>
         </table>
+
     </div>
+
 </section>
 
 <section id="page-settings" class="hidden">
+
     <div class="page-header">
         <div>
             <h1>設定</h1>
-            <div class="subtext">メール送信と顧客情報取得に必要な設定を管理します</div>
+            <div class="subtext">メール送信と顧客一覧取得に必要な設定を管理します</div>
         </div>
     </div>
 
     <div class="settings-tabs">
-        <button type="button" data-settings-tab="mail">メール送信設定</button>
-        <button type="button" data-settings-tab="kintone">キントーン設定</button>
+
+        <button
+            id="settings-tab-mail"
+            type="button"
+            class="active">
+            メール送信設定
+        </button>
+
+        <button
+            id="settings-tab-kintone"
+            type="button">
+            キントーン設定
+        </button>
+
     </div>
 
+    <div id="settings-message"></div>
     <div id="settings-content"></div>
+
 </section>
 
 </main>
 
 <div id="modal" class="modal-backdrop hidden">
+
     <div class="modal">
+
         <div class="modal-header">
             <strong id="modal-title"></strong>
-            <button type="button" class="btn btn-small" id="btn-modal-close">閉じる</button>
+
+            <button
+                id="modal-close"
+                class="btn btn-small"
+                type="button">
+                閉じる
+            </button>
         </div>
-        <div class="modal-body" id="modal-body"></div>
-        <div class="modal-footer" id="modal-footer"></div>
+
+        <div
+            class="modal-body"
+            id="modal-body">
+        </div>
+
+        <div
+            class="modal-footer"
+            id="modal-footer">
+        </div>
+
     </div>
+
 </div>
 
 <div id="toast" class="toast"></div>
@@ -1076,1125 +1228,69 @@ document.addEventListener('DOMContentLoaded', function () {
 
     'use strict';
 
-    const CSRF_TOKEN = <?= json_encode($csrf, JSON_UNESCAPED_UNICODE) ?>;
+    const csrfToken = <?php echo json_encode($csrfToken, JSON_UNESCAPED_UNICODE); ?>;
 
-    let surveys = <?= json_encode(
-        $surveys,
-        JSON_UNESCAPED_UNICODE |
-        JSON_UNESCAPED_SLASHES |
-        JSON_INVALID_UTF8_SUBSTITUTE
-    ) ?>;
+    let mailSettings = <?php echo json_encode($mailForJs, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+    let kintoneSettings = <?php echo json_encode($kintoneForJs, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
 
-    let customers = <?= json_encode(
-        $customers,
-        JSON_UNESCAPED_UNICODE |
-        JSON_UNESCAPED_SLASHES |
-        JSON_INVALID_UTF8_SUBSTITUTE
-    ) ?>;
+    let surveys = <?php echo json_encode($surveys, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+    let customers = <?php echo json_encode($customers, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
 
-    /*
-     * ここが今回の修正箇所。
-     *
-     * data/settings.jsonをPHP側で読み込み、
-     * その結果を初期状態として画面へ渡している。
-     *
-     * そのため、ブラウザからsettings.jsonをfetchする必要がなく、
-     * 「Fail to Fetch」でメール設定が未設定扱いになることを防止する。
-     */
-    let mailSettings = <?= json_encode(
-        $mailForClient,
-        JSON_UNESCAPED_UNICODE |
-        JSON_UNESCAPED_SLASHES |
-        JSON_INVALID_UTF8_SUBSTITUTE
-    ) ?>;
-
-    let kintoneSettings = <?= json_encode(
-        $kintoneForClient,
-        JSON_UNESCAPED_UNICODE |
-        JSON_UNESCAPED_SLASHES |
-        JSON_INVALID_UTF8_SUBSTITUTE
-    ) ?>;
-
-    let currentPage = 'page-list';
-    let currentSurveyId = null;
     let currentSettingsTab = 'mail';
+    let currentPage = 'list';
 
-    const $ = function (id) {
+    function $(id) {
         return document.getElementById(id);
-    };
+    }
 
     function escapeHtml(value) {
-        return String(value ?? '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
+        const div = document.createElement('div');
+        div.textContent = String(value ?? '');
+        return div.innerHTML;
     }
 
-    function setLoading(button, loading) {
-        if (!button) {
-            return;
-        }
+    function showPage(page) {
 
-        if (loading) {
-            button.disabled = true;
-            button.classList.add('loading');
-        } else {
-            button.disabled = false;
-            button.classList.remove('loading');
-        }
-    }
-
-    async function postJson(action, data, button) {
-        /*
-         * 非同期通信開始前に必ず即時disabled + loading。
-         */
-        if (button) {
-            button.disabled = true;
-            button.classList.add('loading');
-        }
-
-        try {
-            const response = await fetch(window.location.href, {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-Token': CSRF_TOKEN
-                },
-                body: JSON.stringify({
-                    action: action,
-                    ...data
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error('HTTP ' + response.status);
-            }
-
-            const result = await response.json();
-
-            if (!result || typeof result !== 'object') {
-                throw new Error('Invalid response');
-            }
-
-            return result;
-
-        } catch (error) {
-            /*
-             * 「Fail to Fetch」をそのまま画面に出さず、
-             * 利用者が状況を理解できる日本語にする。
-             */
-            return {
-                success: false,
-                message: 'サーバーとの通信に失敗しました。画面を再読み込みして再度お試しください。'
-            };
-
-        } finally {
-            if (button) {
-                button.disabled = false;
-                button.classList.remove('loading');
-            }
-        }
-    }
-
-    function showPage(id) {
-        [
+        const pages = [
             'page-list',
             'page-editor',
-            'page-detail',
             'page-customers',
             'page-settings'
-        ].forEach(function (pageId) {
-            const element = $(pageId);
+        ];
 
-            if (element) {
-                element.classList.add('hidden');
+        pages.forEach(function (id) {
+
+            const el = $(id);
+
+            if (el) {
+                el.classList.toggle('hidden', id !== 'page-' + page);
             }
+
         });
 
-        const target = $(id);
+        currentPage = page;
 
-        if (target) {
-            target.classList.remove('hidden');
-            currentPage = id;
-        }
+        const navMap = {
+            list: 'nav-list',
+            editor: 'nav-create',
+            customers: 'nav-customers',
+            settings: 'nav-settings'
+        };
 
-        [
-            'nav-list',
-            'nav-create',
-            'nav-customers',
-            'nav-settings'
-        ].forEach(function (navId) {
-            const element = $(navId);
+        Object.keys(navMap).forEach(function (key) {
 
-            if (element) {
-                element.classList.remove('active');
+            const nav = $(navMap[key]);
+
+            if (nav) {
+                nav.classList.toggle('active', key === page);
             }
+
         });
 
-        if (id === 'page-list' && $('nav-list')) {
-            $('nav-list').classList.add('active');
-        }
-
-        if (id === 'page-editor' && $('nav-create')) {
-            $('nav-create').classList.add('active');
-        }
-
-        if (id === 'page-customers' && $('nav-customers')) {
-            $('nav-customers').classList.add('active');
-        }
-
-        if (id === 'page-settings' && $('nav-settings')) {
-            $('nav-settings').classList.add('active');
-        }
-    }
-
-    function statusBadge(status) {
-        if (status === 'open') {
-            return '<span class="badge badge-open">公開中</span>';
-        }
-
-        if (status === 'end') {
-            return '<span class="badge badge-end">終了</span>';
-        }
-
-        return '<span class="badge badge-draft">下書き</span>';
-    }
-
-    function renderList() {
-        const body = $('survey-list-body');
-
-        if (!body) {
-            return;
-        }
-
-        if (!Array.isArray(surveys) || surveys.length === 0) {
-            body.innerHTML =
-                '<tr><td colspan="7" class="empty">アンケートがありません。</td></tr>';
-            return;
-        }
-
-        body.innerHTML = surveys.map(function (survey) {
-
-            const period =
-                survey.start || survey.end
-                    ? escapeHtml(survey.start || '未設定') +
-                      ' ～ ' +
-                      escapeHtml(survey.end || '未設定')
-                    : '未設定';
-
-            return '<tr>' +
-                '<td>' +
-                    '<button type="button" class="link-button" data-open-survey="' +
-                    escapeHtml(String(survey.id)) +
-                    '">' +
-                    escapeHtml(survey.name) +
-                    '</button>' +
-                '</td>' +
-                '<td>' + statusBadge(survey.status) + '</td>' +
-                '<td>' + escapeHtml(survey.created) + '</td>' +
-                '<td>' + period + '</td>' +
-                '<td>' + escapeHtml(String(survey.answers || 0)) + '件</td>' +
-                '<td>' + escapeHtml(survey.updated) + '</td>' +
-                '<td>' +
-                    '<button type="button" class="btn btn-small" data-edit-survey="' +
-                    escapeHtml(String(survey.id)) +
-                    '">編集</button> ' +
-                    '<button type="button" class="btn btn-small" data-open-survey="' +
-                    escapeHtml(String(survey.id)) +
-                    '">確認</button>' +
-                '</td>' +
-            '</tr>';
-        }).join('');
-    }
-
-    function getCurrentSurvey() {
-        return surveys.find(function (survey) {
-            return Number(survey.id) === Number(currentSurveyId);
-        }) || null;
-    }
-
-    function countQuestions(survey) {
-        if (!survey || !Array.isArray(survey.groups)) {
-            return 0;
-        }
-
-        return survey.groups.reduce(function (total, group) {
-            return total +
-                (Array.isArray(group.questions)
-                    ? group.questions.length
-                    : 0);
-        }, 0);
-    }
-
-    function openDetail(id) {
-        currentSurveyId = Number(id);
-
-        const survey = getCurrentSurvey();
-
-        if (!survey) {
-            return;
-        }
-
-        const title = $('detail-title');
-        const subtitle = $('detail-subtitle');
-
-        if (title) {
-            title.textContent = survey.name || '';
-        }
-
-        if (subtitle) {
-            subtitle.textContent =
-                (survey.status === 'open'
-                    ? '公開中'
-                    : survey.status === 'end'
-                        ? '終了'
-                        : '下書き');
-        }
-
-        showPage('page-detail');
-        renderDetailTab('content');
-    }
-
-    function renderDetailTab(tab) {
-        const survey = getCurrentSurvey();
-        const target = $('detail-content');
-
-        if (!survey || !target) {
-            return;
-        }
-
-        document.querySelectorAll('[data-detail-tab]').forEach(function (button) {
-            button.classList.toggle(
-                'active',
-                button.getAttribute('data-detail-tab') === tab
-            );
-        });
-
-        if (tab === 'send') {
-            renderSend(survey);
-            return;
-        }
-
-        if (tab === 'status') {
-            renderStatus(survey);
-            return;
-        }
-
-        if (tab === 'result') {
-            renderResult(survey);
-            return;
-        }
-
-        let html =
-            '<div class="card">' +
-            '<div class="card-title">アンケート内容</div>' +
-            '<p>' + escapeHtml(survey.description || '') + '</p>';
-
-        (survey.groups || []).forEach(function (group) {
-            html +=
-                '<h3>' + escapeHtml(group.name || '') + '</h3>';
-
-            (group.questions || []).forEach(function (question, index) {
-                html +=
-                    '<div class="question">' +
-                    '<div class="question-head">' +
-                    '<strong>Q' + (index + 1) + '</strong>' +
-                    '<span>' + escapeHtml(question.text || '') + '</span>' +
-                    '</div>';
-
-                (question.options || []).forEach(function (option) {
-                    html +=
-                        '<div style="margin:6px 0;color:#657786">' +
-                        '・' + escapeHtml(option.text || '') +
-                        '</div>';
-                });
-
-                html += '</div>';
-            });
-        });
-
-        html += '</div>';
-
-        target.innerHTML = html;
-    }
-
-    function renderSend(survey) {
-        const target = $('detail-content');
-
-        if (!target) {
-            return;
-        }
-
-        const readyText = mailSettings.ready
-            ? '<div class="notice success">メール送信設定は読み込み済みです。</div>'
-            : '<div class="notice warning">メール送信設定が未完了です。設定画面を確認してください。</div>';
-
-        target.innerHTML =
-            readyText +
-            '<div class="card">' +
-                '<div class="card-title">メール送信</div>' +
-                '<p>アンケート：' +
-                    escapeHtml(survey.name) +
-                '</p>' +
-                '<p>送信元：' +
-                    escapeHtml(mailSettings.fromName) +
-                    ' &lt;' +
-                    escapeHtml(mailSettings.from) +
-                    '&gt;' +
-                '</p>' +
-                '<div class="notice">' +
-                    '保存済みのメール設定を使用して送信します。' +
-                '</div>' +
-                '<button type="button" class="btn btn-primary" id="btn-check-mail-send">' +
-                    'メール設定を確認' +
-                '</button>' +
-            '</div>';
-
-        const button = $('btn-check-mail-send');
-
-        if (button) {
-            button.addEventListener('click', async function () {
-
-                const result = await postJson(
-                    'check_mail',
-                    {},
-                    button
-                );
-
-                if (result.success) {
-                    showToast(result.message || 'メール設定を確認しました。');
-                } else {
-                    showToast(result.message || 'メール設定を確認できませんでした。');
-                }
-            });
-        }
-    }
-
-    function renderStatus(survey) {
-        const target = $('detail-content');
-
-        if (!target) {
-            return;
-        }
-
-        const answers = Number(survey.answers || 0);
-        const targetCount = Number(survey.target || 0);
-        const rate = targetCount
-            ? Math.round(answers / targetCount * 100)
-            : 0;
-
-        target.innerHTML =
-            '<div class="detail-summary">' +
-                '<div class="stat-card"><div class="stat-label">回答数</div><div class="stat-value">' +
-                    answers +
-                '</div></div>' +
-                '<div class="stat-card"><div class="stat-label">回答率</div><div class="stat-value">' +
-                    rate +
-                    '%</div></div>' +
-                '<div class="stat-card"><div class="stat-label">未回答数</div><div class="stat-value">' +
-                    Math.max(targetCount - answers, 0) +
-                '</div></div>' +
-                '<div class="stat-card"><div class="stat-label">送信済み</div><div class="stat-value">' +
-                    Number(survey.sent || 0) +
-                '</div></div>' +
-            '</div>' +
-            '<div class="card">' +
-                '<div class="card-title">回答状況</div>' +
-                '<p>公開期間：' +
-                    escapeHtml(survey.start || '未設定') +
-                    ' ～ ' +
-                    escapeHtml(survey.end || '未設定') +
-                '</p>' +
-                '<div class="progress"><span style="width:' +
-                    Math.min(rate, 100) +
-                    '%"></span></div>' +
-            '</div>';
-    }
-
-    function renderResult(survey) {
-        const target = $('detail-content');
-
-        if (!target) {
-            return;
-        }
-
-        let html =
-            '<div class="detail-summary">' +
-                '<div class="stat-card"><div class="stat-label">総回答数</div><div class="stat-value">' +
-                    Number(survey.answers || 0) +
-                '</div></div>' +
-                '<div class="stat-card"><div class="stat-label">回答者数</div><div class="stat-value">' +
-                    Number(survey.answers || 0) +
-                '</div></div>' +
-                '<div class="stat-card"><div class="stat-label">質問数</div><div class="stat-value">' +
-                    countQuestions(survey) +
-                '</div></div>' +
-            '</div>';
-
-        html += '<div class="card">';
-
-        if (!Number(survey.answers || 0)) {
-            html +=
-                '<div class="empty">まだ回答結果がありません。</div>';
-        } else {
-            html += '<div class="card-title">回答結果</div>';
-
-            (survey.groups || []).forEach(function (group) {
-                html += '<h3>' + escapeHtml(group.name || '') + '</h3>';
-
-                (group.questions || []).forEach(function (question) {
-                    html +=
-                        '<div class="question">' +
-                        '<strong>' +
-                        escapeHtml(question.text || '') +
-                        '</strong>';
-
-                    (question.options || []).forEach(function (option) {
-                        html +=
-                            '<div style="margin-top:8px">' +
-                            escapeHtml(option.text || '') +
-                            '</div>';
-                    });
-
-                    html += '</div>';
-                });
-            });
-        }
-
-        html += '</div>';
-
-        target.innerHTML = html;
-    }
-
-    function showCustomers() {
-        showPage('page-customers');
-        renderCustomerStatus();
-        renderCustomers();
-    }
-
-    function renderCustomerStatus() {
-        const target = $('customer-status');
-
-        if (!target) {
-            return;
-        }
-
-        if (kintoneSettings.ready) {
-            target.innerHTML =
-                '<div class="notice success">顧客情報を利用できる設定が保存されています。</div>';
-        } else {
-            target.innerHTML =
-                '<div class="notice warning">キントーン設定が未完了です。</div>';
-        }
-    }
-
-    function renderCustomers() {
-        const body = $('customer-body');
-
-        if (!body) {
-            return;
-        }
-
-        const searchElement = $('customer-search');
-        const search = searchElement
-            ? searchElement.value.toLowerCase()
-            : '';
-
-        const filtered = customers.filter(function (customer) {
-            return !search ||
-                String(customer.name || '').toLowerCase().includes(search) ||
-                String(customer.email || '').toLowerCase().includes(search) ||
-                String(customer.company || '').toLowerCase().includes(search) ||
-                String(customer.code || '').toLowerCase().includes(search);
-        });
-
-        if (!filtered.length) {
-            body.innerHTML =
-                '<tr><td colspan="4" class="empty">該当する顧客がありません。</td></tr>';
-            return;
-        }
-
-        body.innerHTML = filtered.map(function (customer) {
-            return '<tr>' +
-                '<td>' + escapeHtml(customer.name) + '</td>' +
-                '<td>' + escapeHtml(customer.email) + '</td>' +
-                '<td>' + escapeHtml(customer.company) + '</td>' +
-                '<td>' + escapeHtml(customer.code) + '</td>' +
-            '</tr>';
-        }).join('');
-    }
-
-    function showSettings(tab) {
-        if (tab) {
-            currentSettingsTab = tab;
-        }
-
-        showPage('page-settings');
-        renderSettings();
-    }
-
-    function renderSettings() {
-        document.querySelectorAll('[data-settings-tab]').forEach(function (button) {
-            button.classList.toggle(
-                'active',
-                button.getAttribute('data-settings-tab') === currentSettingsTab
-            );
-        });
-
-        if (currentSettingsTab === 'kintone') {
-            renderKintoneSettings();
-        } else {
-            renderMailSettings();
-        }
-    }
-
-    function renderMailSettings() {
-        const target = $('settings-content');
-
-        if (!target) {
-            return;
-        }
-
-        target.innerHTML =
-            '<div class="card">' +
-                '<div class="card-title">メール送信設定</div>' +
-
-                '<div class="status-line">' +
-                    '<span class="status-dot ' +
-                    (mailSettings.ready ? 'ok' : 'warn') +
-                    '"></span>' +
-                    '<span>' +
-                    (mailSettings.ready
-                        ? '保存済みのメール設定を読み込みました。'
-                        : 'メール送信設定が未完了です。') +
-                    '</span>' +
-                '</div>' +
-
-                '<div class="notice">' +
-                    '保存済みの設定は data/settings.json から読み込まれています。' +
-                '</div>' +
-
-                '<div class="form-grid">' +
-                    '<div class="field">' +
-                        '<label>SMTPサーバ *</label>' +
-                        '<input id="smtp-server" value="' +
-                        escapeHtml(mailSettings.smtp) +
-                        '">' +
-                    '</div>' +
-
-                    '<div class="field">' +
-                        '<label>ポート番号 *</label>' +
-                        '<input id="smtp-port" value="' +
-                        escapeHtml(mailSettings.port) +
-                        '">' +
-                    '</div>' +
-                '</div>' +
-
-                '<div class="field">' +
-                    '<label>接続方式</label>' +
-                    '<select id="smtp-security">' +
-                        '<option value="なし"' +
-                        (mailSettings.security === 'なし' ? ' selected' : '') +
-                        '>なし</option>' +
-                        '<option value="STARTTLS"' +
-                        (mailSettings.security === 'STARTTLS' ? ' selected' : '') +
-                        '>STARTTLS</option>' +
-                        '<option value="SSL/TLS"' +
-                        (mailSettings.security === 'SSL/TLS' ? ' selected' : '') +
-                        '>SSL/TLS</option>' +
-                    '</select>' +
-                '</div>' +
-
-                '<div class="form-grid">' +
-                    '<div class="field">' +
-                        '<label>認証ユーザー名</label>' +
-                        '<input id="smtp-user" value="' +
-                        escapeHtml(mailSettings.username) +
-                        '">' +
-                    '</div>' +
-
-                    '<div class="field">' +
-                        '<label>認証パスワード</label>' +
-                        '<input id="smtp-password" type="password" placeholder="変更しない場合は空欄">' +
-                    '</div>' +
-                '</div>' +
-
-                '<div class="form-grid">' +
-                    '<div class="field">' +
-                        '<label>送信元メールアドレス *</label>' +
-                        '<input id="smtp-from" value="' +
-                        escapeHtml(mailSettings.from) +
-                        '">' +
-                    '</div>' +
-
-                    '<div class="field">' +
-                        '<label>送信元名</label>' +
-                        '<input id="smtp-from-name" value="' +
-                        escapeHtml(mailSettings.fromName) +
-                        '">' +
-                    '</div>' +
-                '</div>' +
-
-                '<div style="display:flex;gap:8px">' +
-                    '<button type="button" class="btn btn-primary" id="btn-save-mail">' +
-                        '設定を保存' +
-                    '</button>' +
-                    '<button type="button" class="btn" id="btn-check-mail">' +
-                        '設定を確認' +
-                    '</button>' +
-                '</div>' +
-            '</div>';
-
-        const saveButton = $('btn-save-mail');
-
-        if (saveButton) {
-            saveButton.addEventListener('click', async function () {
-
-                const smtp = $('smtp-server');
-                const port = $('smtp-port');
-                const security = $('smtp-security');
-                const username = $('smtp-user');
-                const password = $('smtp-password');
-                const from = $('smtp-from');
-                const fromName = $('smtp-from-name');
-
-                if (!smtp || !port || !security || !username ||
-                    !password || !from || !fromName) {
-                    return;
-                }
-
-                const smtpValue = smtp.value.trim();
-                const portValue = port.value.trim();
-                const fromValue = from.value.trim();
-
-                if (!smtpValue || !portValue || !fromValue) {
-                    alert('SMTPサーバ、ポート番号、送信元メールアドレスを入力してください。');
-                    return;
-                }
-
-                const result = await postJson(
-                    'save_settings',
-                    {
-                        mail: {
-                            smtp: smtpValue,
-                            port: portValue,
-                            security: security.value,
-                            username: username.value.trim(),
-                            password: password.value,
-                            from: fromValue,
-                            fromName: fromName.value.trim()
-                        }
-                    },
-                    saveButton
-                );
-
-                if (!result.success) {
-                    alert(result.message || '設定を保存できませんでした。');
-                    return;
-                }
-
-                /*
-                 * 保存後、画面上の状態も即時更新。
-                 */
-                mailSettings.smtp = smtpValue;
-                mailSettings.port = portValue;
-                mailSettings.security = security.value;
-                mailSettings.username = username.value.trim();
-                mailSettings.from = fromValue;
-                mailSettings.fromName = fromName.value.trim();
-                mailSettings.ready = true;
-
-                showToast('メール送信設定を保存しました。');
-                renderMailSettings();
-            });
-        }
-
-        const checkButton = $('btn-check-mail');
-
-        if (checkButton) {
-            checkButton.addEventListener('click', async function () {
-
-                const result = await postJson(
-                    'check_mail',
-                    {},
-                    checkButton
-                );
-
-                if (result.success) {
-                    showToast('保存済みのメール設定を確認しました。');
-                } else {
-                    alert(result.message || 'メール設定を確認できませんでした。');
-                }
-            });
-        }
-    }
-
-    function renderKintoneSettings() {
-        const target = $('settings-content');
-
-        if (!target) {
-            return;
-        }
-
-        target.innerHTML =
-            '<div class="card">' +
-                '<div class="card-title">キントーン設定</div>' +
-
-                '<div class="status-line">' +
-                    '<span class="status-dot ' +
-                    (kintoneSettings.ready ? 'ok' : 'warn') +
-                    '"></span>' +
-                    '<span>' +
-                    (kintoneSettings.ready
-                        ? 'キントーン設定が保存されています。'
-                        : 'キントーン設定が未完了です。') +
-                    '</span>' +
-                '</div>' +
-
-                '<div class="field">' +
-                    '<label>キントーンの利用先 *</label>' +
-                    '<input id="kt-domain" value="' +
-                    escapeHtml(kintoneSettings.domain) +
-                    '">' +
-                '</div>' +
-
-                '<div class="field">' +
-                    '<label>顧客管理アプリID *</label>' +
-                    '<input id="kt-appid" value="' +
-                    escapeHtml(kintoneSettings.appId) +
-                    '">' +
-                '</div>' +
-
-                '<div class="form-grid">' +
-                    '<div class="field">' +
-                        '<label>ログイン名 *</label>' +
-                        '<input id="kt-user" value="' +
-                        escapeHtml(kintoneSettings.loginName) +
-                        '">' +
-                    '</div>' +
-
-                    '<div class="field">' +
-                        '<label>パスワード *</label>' +
-                        '<input id="kt-password" type="password" placeholder="変更しない場合は空欄">' +
-                    '</div>' +
-                '</div>' +
-
-                '<div class="form-grid">' +
-                    '<div class="field">' +
-                        '<label>プロキシ ホスト名</label>' +
-                        '<input id="kt-proxy-host" value="' +
-                        escapeHtml(kintoneSettings.proxyHost) +
-                        '">' +
-                    '</div>' +
-
-                    '<div class="field">' +
-                        '<label>プロキシ ポート番号</label>' +
-                        '<input id="kt-proxy-port" value="' +
-                        escapeHtml(kintoneSettings.proxyPort) +
-                        '">' +
-                    '</div>' +
-                '</div>' +
-
-                '<div style="display:flex;gap:8px">' +
-                    '<button type="button" class="btn btn-primary" id="btn-save-kintone">' +
-                        '設定を保存' +
-                    '</button>' +
-                '</div>' +
-            '</div>';
-
-        const button = $('btn-save-kintone');
-
-        if (button) {
-            button.addEventListener('click', async function () {
-
-                const domain = $('kt-domain');
-                const appId = $('kt-appid');
-                const user = $('kt-user');
-                const password = $('kt-password');
-                const proxyHost = $('kt-proxy-host');
-                const proxyPort = $('kt-proxy-port');
-
-                if (!domain || !appId || !user || !password ||
-                    !proxyHost || !proxyPort) {
-                    return;
-                }
-
-                const domainValue = domain.value.trim();
-                const appIdValue = appId.value.trim();
-                const userValue = user.value.trim();
-                const proxyHostValue = proxyHost.value.trim();
-                const proxyPortValue = proxyPort.value.trim();
-
-                if (!domainValue || !appIdValue || !userValue) {
-                    alert('利用先、顧客管理アプリID、ログイン名を入力してください。');
-                    return;
-                }
-
-                if (proxyHostValue && !proxyPortValue) {
-                    alert('プロキシのホスト名を入力した場合は、ポート番号も入力してください。');
-                    return;
-                }
-
-                const result = await postJson(
-                    'save_settings',
-                    {
-                        kintone: {
-                            domain: domainValue,
-                            appId: appIdValue,
-                            loginName: userValue,
-                            password: password.value,
-                            proxyHost: proxyHostValue,
-                            proxyPort: proxyPortValue
-                        }
-                    },
-                    button
-                );
-
-                if (!result.success) {
-                    alert(result.message || '設定を保存できませんでした。');
-                    return;
-                }
-
-                kintoneSettings.domain = domainValue;
-                kintoneSettings.appId = appIdValue;
-                kintoneSettings.loginName = userValue;
-                kintoneSettings.proxyHost = proxyHostValue;
-                kintoneSettings.proxyPort = proxyPortValue;
-                kintoneSettings.ready = true;
-
-                showToast('キントーン設定を保存しました。');
-                renderKintoneSettings();
-            });
-        }
-    }
-
-    function openEditor(id) {
-        currentSurveyId = id ? Number(id) : null;
-
-        const survey = id
-            ? getCurrentSurvey()
-            : {
-                id: Date.now(),
-                name: '',
-                description: '',
-                status: 'draft',
-                created: new Date().toISOString().slice(0, 10),
-                start: '',
-                end: '',
-                answers: 0,
-                target: 0,
-                sent: 0,
-                updated: new Date().toISOString().slice(0, 10),
-                numbering: 'global',
-                groups: [
-                    {
-                        id: Date.now() + 1,
-                        name: '新しいグループ',
-                        questions: []
-                    }
-                ]
-            };
-
-        if (!survey) {
-            return;
-        }
-
-        if (!id) {
-            surveys.push(survey);
-        }
-
-        const title = $('editor-title');
-        const name = $('survey-name');
-        const status = $('survey-status');
-        const description = $('survey-description');
-        const start = $('survey-start');
-        const end = $('survey-end');
-
-        if (title) {
-            title.textContent = id ? 'アンケート編集' : 'アンケート作成';
-        }
-
-        if (name) name.value = survey.name || '';
-        if (status) status.value = survey.status || 'draft';
-        if (description) description.value = survey.description || '';
-        if (start) start.value = survey.start || '';
-        if (end) end.value = survey.end || '';
-
-        renderEditorQuestions(survey);
-
-        showPage('page-editor');
-    }
-
-    function renderEditorQuestions(survey) {
-        const target = $('editor-questions');
-
-        if (!target) {
-            return;
-        }
-
-        let html = '';
-
-        (survey.groups || []).forEach(function (group, groupIndex) {
-
-            html +=
-                '<div class="card">' +
-                    '<div class="form-grid">' +
-                        '<div class="field">' +
-                            '<label>グループ名</label>' +
-                            '<input data-group-name="' +
-                            groupIndex +
-                            '" value="' +
-                            escapeHtml(group.name) +
-                            '">' +
-                        '</div>' +
-                    '</div>';
-
-            (group.questions || []).forEach(function (question, questionIndex) {
-
-                html +=
-                    '<div class="question">' +
-                        '<div class="question-head">' +
-                            '<strong>Q' +
-                            (questionIndex + 1) +
-                            '</strong>' +
-                            '<input data-question-text="' +
-                            groupIndex +
-                            '-' +
-                            questionIndex +
-                            '" value="' +
-                            escapeHtml(question.text) +
-                            '">' +
-                        '</div>' +
-                    '</div>';
-            });
-
-            html +=
-                '<button type="button" class="btn btn-small" data-add-question="' +
-                groupIndex +
-                '">＋ 質問追加</button>' +
-                '</div>';
-        });
-
-        html +=
-            '<button type="button" class="btn" id="btn-add-group">＋ グループ追加</button>';
-
-        target.innerHTML = html;
-
-        document.querySelectorAll('[data-add-question]').forEach(function (button) {
-
-            button.addEventListener('click', function () {
-
-                const surveyNow = getCurrentSurvey();
-
-                if (!surveyNow) {
-                    return;
-                }
-
-                const groupIndex = Number(
-                    button.getAttribute('data-add-question')
-                );
-
-                if (!surveyNow.groups[groupIndex]) {
-                    return;
-                }
-
-                surveyNow.groups[groupIndex].questions.push({
-                    id: Date.now(),
-                    text: '',
-                    type: 'free',
-                    required: false,
-                    options: []
-                });
-
-                renderEditorQuestions(surveyNow);
-            });
-        });
-
-        const addGroupButton = $('btn-add-group');
-
-        if (addGroupButton) {
-            addGroupButton.addEventListener('click', function () {
-
-                const surveyNow = getCurrentSurvey();
-
-                if (!surveyNow) {
-                    return;
-                }
-
-                surveyNow.groups.push({
-                    id: Date.now(),
-                    name: '新しいグループ',
-                    questions: []
-                });
-
-                renderEditorQuestions(surveyNow);
-            });
-        }
-    }
-
-    function saveEditorToObject() {
-        const survey = getCurrentSurvey();
-
-        if (!survey) {
-            return false;
-        }
-
-        const name = $('survey-name');
-        const status = $('survey-status');
-        const description = $('survey-description');
-        const start = $('survey-start');
-        const end = $('survey-end');
-
-        if (!name || !status || !description || !start || !end) {
-            return false;
-        }
-
-        if (!name.value.trim()) {
-            alert('アンケート名を入力してください。');
-            return false;
-        }
-
-        survey.name = name.value.trim();
-        survey.status = status.value;
-        survey.description = description.value;
-        survey.start = start.value;
-        survey.end = end.value;
-        survey.updated = new Date().toISOString().slice(0, 10);
-
-        document.querySelectorAll('[data-group-name]').forEach(function (input) {
-
-            const index = Number(input.getAttribute('data-group-name'));
-
-            if (survey.groups[index]) {
-                survey.groups[index].name = input.value.trim();
-            }
-        });
-
-        document.querySelectorAll('[data-question-text]').forEach(function (input) {
-
-            const parts =
-                input.getAttribute('data-question-text').split('-');
-
-            const groupIndex = Number(parts[0]);
-            const questionIndex = Number(parts[1]);
-
-            if (
-                survey.groups[groupIndex] &&
-                survey.groups[groupIndex].questions[questionIndex]
-            ) {
-                survey.groups[groupIndex]
-                    .questions[questionIndex]
-                    .text = input.value.trim();
-            }
-        });
-
-        return true;
     }
 
     function showToast(message) {
+
         const toast = $('toast');
 
         if (!toast) {
@@ -2209,7 +1305,886 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 2500);
     }
 
-    function openModal(title, body, footer) {
+    function setLoading(button, loading, text) {
+
+        if (!button) {
+            return;
+        }
+
+        if (loading) {
+
+            button.disabled = true;
+            button.classList.add('loading');
+
+            button.dataset.originalText = button.textContent;
+
+            button.textContent = '';
+
+            const spinner = document.createElement('span');
+            spinner.className = 'spinner';
+
+            button.appendChild(spinner);
+            button.appendChild(document.createTextNode(text || '処理中...'));
+
+        } else {
+
+            button.disabled = false;
+            button.classList.remove('loading');
+
+            if (button.dataset.originalText) {
+                button.textContent = button.dataset.originalText;
+            }
+
+        }
+    }
+
+    async function api(action, payload) {
+
+        const url = new URL(window.location.href);
+        url.searchParams.set('action', action);
+
+        const options = {
+            method: payload ? 'POST' : 'GET',
+            credentials: 'same-origin',
+            headers: {
+                'Accept': 'application/json'
+            }
+        };
+
+        if (payload) {
+
+            options.headers['Content-Type'] = 'application/json';
+            options.headers['X-CSRF-Token'] = csrfToken;
+
+            options.body = JSON.stringify(
+                Object.assign(
+                    {},
+                    payload,
+                    {
+                        csrf_token: csrfToken
+                    }
+                )
+            );
+        }
+
+        let response;
+
+        try {
+
+            response = await fetch(url.toString(), options);
+
+        } catch (error) {
+
+            throw new Error(
+                'サーバーとの通信に失敗しました。画面を再読み込みして再度お試しください。'
+            );
+
+        }
+
+        let data;
+
+        try {
+            data = await response.json();
+        } catch (error) {
+
+            throw new Error(
+                'サーバーから正しい応答を受け取れませんでした。'
+            );
+
+        }
+
+        if (!response.ok || !data.success) {
+
+            throw new Error(
+                data.message ||
+                '処理に失敗しました。'
+            );
+
+        }
+
+        return data;
+    }
+
+    function renderList() {
+
+        const body = $('survey-list-body');
+
+        if (!body) {
+            return;
+        }
+
+        body.textContent = '';
+
+        if (!Array.isArray(surveys) || surveys.length === 0) {
+
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+
+            td.colSpan = 6;
+            td.className = 'empty';
+            td.textContent = 'アンケートがありません。';
+
+            tr.appendChild(td);
+            body.appendChild(tr);
+
+            return;
+        }
+
+        surveys.forEach(function (survey) {
+
+            const tr = document.createElement('tr');
+
+            const name = document.createElement('td');
+            name.textContent = survey.name || '';
+
+            const status = document.createElement('td');
+
+            const badge = document.createElement('span');
+            badge.className = 'badge';
+
+            if (survey.status === 'open') {
+
+                badge.classList.add('badge-open');
+                badge.textContent = '公開中';
+
+            } else if (survey.status === 'end') {
+
+                badge.classList.add('badge-end');
+                badge.textContent = '終了';
+
+            } else {
+
+                badge.classList.add('badge-draft');
+                badge.textContent = '下書き';
+
+            }
+
+            status.appendChild(badge);
+
+            const created = document.createElement('td');
+            created.textContent = survey.created || '';
+
+            const period = document.createElement('td');
+
+            period.textContent =
+                (survey.start || '未設定') +
+                ' ～ ' +
+                (survey.end || '未設定');
+
+            const answers = document.createElement('td');
+            answers.textContent = String(survey.answers || 0);
+
+            const updated = document.createElement('td');
+            updated.textContent = survey.updated || '';
+
+            tr.appendChild(name);
+            tr.appendChild(status);
+            tr.appendChild(created);
+            tr.appendChild(period);
+            tr.appendChild(answers);
+            tr.appendChild(updated);
+
+            body.appendChild(tr);
+
+        });
+
+    }
+
+    function openCreate() {
+
+        const name = $('survey-name');
+        const description = $('survey-description');
+        const start = $('survey-start');
+        const end = $('survey-end');
+        const question = $('question-text');
+
+        if (name) name.value = '';
+        if (description) description.value = '';
+        if (start) start.value = '';
+        if (end) end.value = '';
+        if (question) question.value = '';
+
+        showPage('editor');
+
+    }
+
+    function renderCustomers() {
+
+        const body = $('customer-body');
+
+        if (!body) {
+            return;
+        }
+
+        body.textContent = '';
+
+        if (!Array.isArray(customers) || customers.length === 0) {
+
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+
+            td.colSpan = 4;
+            td.className = 'empty';
+            td.textContent = '顧客情報がありません。';
+
+            tr.appendChild(td);
+            body.appendChild(tr);
+
+            return;
+        }
+
+        customers.forEach(function (customer) {
+
+            const tr = document.createElement('tr');
+
+            [
+                customer.name,
+                customer.email,
+                customer.company,
+                customer.code
+            ].forEach(function (value) {
+
+                const td = document.createElement('td');
+                td.textContent = value || '';
+                tr.appendChild(td);
+
+            });
+
+            body.appendChild(tr);
+
+        });
+
+    }
+
+    function renderCustomerStatus() {
+
+        const status = $('customer-status');
+
+        if (!status) {
+            return;
+        }
+
+        status.textContent = '';
+
+        const div = document.createElement('div');
+
+        if (kintoneSettings.ready) {
+
+            div.className = 'notice success';
+            div.textContent =
+                'キントーン設定が保存されています。';
+
+        } else {
+
+            div.className = 'notice warning';
+            div.textContent =
+                'キントーン設定が未完了です。設定画面から設定してください。';
+
+        }
+
+        status.appendChild(div);
+
+    }
+
+    function showSettings(tab) {
+
+        currentSettingsTab = tab || 'mail';
+
+        showPage('settings');
+        renderSettings();
+
+    }
+
+    function renderSettings() {
+
+        const mailTab = $('settings-tab-mail');
+        const kintoneTab = $('settings-tab-kintone');
+
+        if (mailTab) {
+            mailTab.classList.toggle(
+                'active',
+                currentSettingsTab === 'mail'
+            );
+        }
+
+        if (kintoneTab) {
+            kintoneTab.classList.toggle(
+                'active',
+                currentSettingsTab === 'kintone'
+            );
+        }
+
+        if (currentSettingsTab === 'mail') {
+            renderMailSettings();
+        } else {
+            renderKintoneSettings();
+        }
+
+    }
+
+    function renderMessage(message, type) {
+
+        const container = $('settings-message');
+
+        if (!container) {
+            return;
+        }
+
+        container.textContent = '';
+
+        if (!message) {
+            return;
+        }
+
+        const div = document.createElement('div');
+        div.className = 'notice ' + (type || 'success');
+        div.textContent = message;
+
+        container.appendChild(div);
+
+    }
+
+    function renderMailSettings() {
+
+        const content = $('settings-content');
+
+        if (!content) {
+            return;
+        }
+
+        content.textContent = '';
+
+        const card = document.createElement('div');
+        card.className = 'card';
+
+        const title = document.createElement('div');
+        title.className = 'card-title';
+        title.textContent = 'メール送信設定';
+
+        card.appendChild(title);
+
+        const status = document.createElement('div');
+        status.className = 'status-line';
+
+        const dot = document.createElement('span');
+        dot.className = 'status-dot ' +
+            (mailSettings.ready ? 'ok' : 'warn');
+
+        const statusText = document.createElement('span');
+
+        statusText.textContent =
+            mailSettings.ready
+                ? 'メール送信可能な設定が保存されています。'
+                : 'メール送信設定が未完了です。';
+
+        status.appendChild(dot);
+        status.appendChild(statusText);
+
+        card.appendChild(status);
+
+        const notice = document.createElement('div');
+        notice.className = 'notice';
+        notice.textContent =
+            'メール送信に使用するSMTPサーバと送信元情報を設定してください。';
+
+        card.appendChild(notice);
+
+        const grid1 = document.createElement('div');
+        grid1.className = 'form-grid';
+
+        grid1.appendChild(
+            createField(
+                'SMTPサーバ *',
+                'smtp-server',
+                'text',
+                mailSettings.smtp,
+                'smtp.example.com'
+            )
+        );
+
+        grid1.appendChild(
+            createField(
+                'ポート番号 *',
+                'smtp-port',
+                'number',
+                mailSettings.port,
+                '587'
+            )
+        );
+
+        card.appendChild(grid1);
+
+        const securityField = document.createElement('div');
+        securityField.className = 'field';
+
+        const securityLabel = document.createElement('label');
+        securityLabel.htmlFor = 'smtp-security';
+        securityLabel.textContent = '接続方式';
+
+        const security = document.createElement('select');
+        security.id = 'smtp-security';
+
+        ['なし', 'STARTTLS', 'SSL/TLS'].forEach(function (value) {
+
+            const option = document.createElement('option');
+
+            option.value = value;
+            option.textContent = value;
+
+            if (mailSettings.security === value) {
+                option.selected = true;
+            }
+
+            security.appendChild(option);
+
+        });
+
+        securityField.appendChild(securityLabel);
+        securityField.appendChild(security);
+
+        card.appendChild(securityField);
+
+        const grid2 = document.createElement('div');
+        grid2.className = 'form-grid';
+
+        grid2.appendChild(
+            createField(
+                '認証ユーザー名',
+                'smtp-user',
+                'text',
+                mailSettings.username,
+                ''
+            )
+        );
+
+        const passwordField = document.createElement('div');
+        passwordField.className = 'field';
+
+        const passwordLabel = document.createElement('label');
+        passwordLabel.htmlFor = 'smtp-password';
+        passwordLabel.textContent = '認証パスワード';
+
+        const password = document.createElement('input');
+        password.id = 'smtp-password';
+        password.type = 'password';
+        password.autocomplete = 'new-password';
+        password.placeholder = '変更する場合のみ入力';
+
+        passwordField.appendChild(passwordLabel);
+        passwordField.appendChild(password);
+
+        grid2.appendChild(passwordField);
+
+        card.appendChild(grid2);
+
+        const grid3 = document.createElement('div');
+        grid3.className = 'form-grid';
+
+        grid3.appendChild(
+            createField(
+                '送信元メールアドレス *',
+                'smtp-from',
+                'email',
+                mailSettings.from,
+                'survey@example.com'
+            )
+        );
+
+        grid3.appendChild(
+            createField(
+                '送信元名',
+                'smtp-from-name',
+                'text',
+                mailSettings.fromName,
+                ''
+            )
+        );
+
+        card.appendChild(grid3);
+
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+
+        const saveButton = document.createElement('button');
+        saveButton.id = 'btn-save-mail';
+        saveButton.type = 'button';
+        saveButton.className = 'btn btn-primary';
+        saveButton.textContent = '設定を保存';
+
+        const testButton = document.createElement('button');
+        testButton.id = 'btn-test-mail';
+        testButton.type = 'button';
+        testButton.className = 'btn';
+        testButton.textContent = '送信設定を確認';
+
+        actions.appendChild(saveButton);
+        actions.appendChild(testButton);
+
+        card.appendChild(actions);
+
+        content.appendChild(card);
+
+        if (saveButton) {
+
+            saveButton.addEventListener('click', async function () {
+
+                /*
+                 * 通信開始前に必ず即時無効化
+                 */
+                saveButton.disabled = true;
+                saveButton.classList.add('loading');
+
+                const originalText = saveButton.textContent;
+
+                saveButton.textContent = '';
+
+                const spinner = document.createElement('span');
+                spinner.className = 'spinner';
+
+                saveButton.appendChild(spinner);
+                saveButton.appendChild(
+                    document.createTextNode('保存中...')
+                );
+
+                renderMessage('', '');
+
+                try {
+
+                    const result = await api(
+                        'save_mail_settings',
+                        {
+                            smtp: $('smtp-server')?.value.trim() || '',
+                            port: $('smtp-port')?.value.trim() || '',
+                            security: $('smtp-security')?.value || 'なし',
+                            username: $('smtp-user')?.value.trim() || '',
+                            password: $('smtp-password')?.value || '',
+                            from: $('smtp-from')?.value.trim() || '',
+                            fromName: $('smtp-from-name')?.value.trim() || ''
+                        }
+                    );
+
+                    mailSettings = result.mail || mailSettings;
+
+                    renderMailSettings();
+
+                    renderMessage(
+                        'メール送信設定を保存しました。',
+                        'success'
+                    );
+
+                    showToast(
+                        'メール送信設定を保存しました'
+                    );
+
+                } catch (error) {
+
+                    renderMessage(
+                        error instanceof Error
+                            ? error.message
+                            : 'メール設定の保存に失敗しました。',
+                        'error'
+                    );
+
+                } finally {
+
+                    /*
+                     * 通信終了後は必ず復帰
+                     */
+                    saveButton.disabled = false;
+                    saveButton.classList.remove('loading');
+                    saveButton.textContent = originalText;
+
+                }
+
+            });
+
+        }
+
+        if (testButton) {
+
+            testButton.addEventListener('click', function () {
+
+                testButton.disabled = true;
+                testButton.classList.add('loading');
+
+                const originalText = testButton.textContent;
+
+                testButton.textContent = '';
+
+                const spinner = document.createElement('span');
+                spinner.className = 'spinner';
+
+                testButton.appendChild(spinner);
+                testButton.appendChild(
+                    document.createTextNode('確認中...')
+                );
+
+                window.setTimeout(function () {
+
+                    testButton.disabled = false;
+                    testButton.classList.remove('loading');
+                    testButton.textContent = originalText;
+
+                    if (!mailSettings.ready) {
+
+                        renderMessage(
+                            '先にメール送信設定を保存してください。',
+                            'warning'
+                        );
+
+                        return;
+                    }
+
+                    openModal(
+                        'メール送信設定の確認',
+                        '保存されているメール送信設定を確認しました。',
+                        '設定は保存されています。実際の送信確認はメール送信時に行われます。'
+                    );
+
+                }, 300);
+
+            });
+
+        }
+
+    }
+
+    function createField(labelText, id, type, value, placeholder) {
+
+        const field = document.createElement('div');
+        field.className = 'field';
+
+        const label = document.createElement('label');
+        label.htmlFor = id;
+        label.textContent = labelText;
+
+        const input = document.createElement('input');
+
+        input.id = id;
+        input.type = type;
+        input.value = value || '';
+
+        if (placeholder) {
+            input.placeholder = placeholder;
+        }
+
+        field.appendChild(label);
+        field.appendChild(input);
+
+        return field;
+
+    }
+
+    function renderKintoneSettings() {
+
+        const content = $('settings-content');
+
+        if (!content) {
+            return;
+        }
+
+        content.textContent = '';
+
+        const card = document.createElement('div');
+        card.className = 'card';
+
+        const title = document.createElement('div');
+        title.className = 'card-title';
+        title.textContent = 'キントーン設定';
+
+        card.appendChild(title);
+
+        const status = document.createElement('div');
+        status.className = 'status-line';
+
+        const dot = document.createElement('span');
+        dot.className =
+            'status-dot ' +
+            (kintoneSettings.ready ? 'ok' : 'warn');
+
+        const text = document.createElement('span');
+        text.textContent =
+            kintoneSettings.ready
+                ? '顧客一覧を取得できる設定が保存されています。'
+                : 'キントーン設定が未完了です。';
+
+        status.appendChild(dot);
+        status.appendChild(text);
+
+        card.appendChild(status);
+
+        const grid1 = document.createElement('div');
+        grid1.className = 'form-grid';
+
+        grid1.appendChild(
+            createField(
+                'キントーンの利用先 *',
+                'kt-domain',
+                'text',
+                kintoneSettings.domain,
+                'example.cybozu.com'
+            )
+        );
+
+        grid1.appendChild(
+            createField(
+                '顧客管理アプリID *',
+                'kt-appid',
+                'text',
+                kintoneSettings.appId,
+                '123'
+            )
+        );
+
+        card.appendChild(grid1);
+
+        const grid2 = document.createElement('div');
+        grid2.className = 'form-grid';
+
+        grid2.appendChild(
+            createField(
+                'ログイン名 *',
+                'kt-user',
+                'text',
+                kintoneSettings.loginName,
+                ''
+            )
+        );
+
+        const passwordField = document.createElement('div');
+        passwordField.className = 'field';
+
+        const passwordLabel = document.createElement('label');
+        passwordLabel.htmlFor = 'kt-password';
+        passwordLabel.textContent = 'パスワード *';
+
+        const password = document.createElement('input');
+        password.id = 'kt-password';
+        password.type = 'password';
+        password.autocomplete = 'new-password';
+        password.placeholder = '変更する場合のみ入力';
+
+        passwordField.appendChild(passwordLabel);
+        passwordField.appendChild(password);
+
+        grid2.appendChild(passwordField);
+
+        card.appendChild(grid2);
+
+        const grid3 = document.createElement('div');
+        grid3.className = 'form-grid';
+
+        grid3.appendChild(
+            createField(
+                'プロキシ ホスト名',
+                'kt-proxy-host',
+                'text',
+                kintoneSettings.proxyHost,
+                'proxy.example.local'
+            )
+        );
+
+        grid3.appendChild(
+            createField(
+                'プロキシ ポート番号',
+                'kt-proxy-port',
+                'number',
+                kintoneSettings.proxyPort,
+                '8080'
+            )
+        );
+
+        card.appendChild(grid3);
+
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+
+        const saveButton = document.createElement('button');
+        saveButton.id = 'btn-save-kintone';
+        saveButton.type = 'button';
+        saveButton.className = 'btn btn-primary';
+        saveButton.textContent = '設定を保存';
+
+        actions.appendChild(saveButton);
+
+        card.appendChild(actions);
+
+        content.appendChild(card);
+
+        if (saveButton) {
+
+            saveButton.addEventListener('click', async function () {
+
+                saveButton.disabled = true;
+                saveButton.classList.add('loading');
+
+                const originalText = saveButton.textContent;
+
+                saveButton.textContent = '';
+
+                const spinner = document.createElement('span');
+                spinner.className = 'spinner';
+
+                saveButton.appendChild(spinner);
+                saveButton.appendChild(
+                    document.createTextNode('保存中...')
+                );
+
+                renderMessage('', '');
+
+                try {
+
+                    const result = await api(
+                        'save_kintone_settings',
+                        {
+                            domain: $('kt-domain')?.value.trim() || '',
+                            appId: $('kt-appid')?.value.trim() || '',
+                            loginName: $('kt-user')?.value.trim() || '',
+                            password: $('kt-password')?.value || '',
+                            proxyHost: $('kt-proxy-host')?.value.trim() || '',
+                            proxyPort: $('kt-proxy-port')?.value.trim() || ''
+                        }
+                    );
+
+                    kintoneSettings =
+                        result.kintone || kintoneSettings;
+
+                    renderKintoneSettings();
+
+                    renderMessage(
+                        'キントーン設定を保存しました。',
+                        'success'
+                    );
+
+                    showToast(
+                        'キントーン設定を保存しました'
+                    );
+
+                } catch (error) {
+
+                    renderMessage(
+                        error instanceof Error
+                            ? error.message
+                            : 'キントーン設定の保存に失敗しました。',
+                        'error'
+                    );
+
+                } finally {
+
+                    saveButton.disabled = false;
+                    saveButton.classList.remove('loading');
+                    saveButton.textContent = originalText;
+
+                }
+
+            });
+
+        }
+
+    }
+
+    function openModal(title, message, detail) {
+
         const modal = $('modal');
         const modalTitle = $('modal-title');
         const modalBody = $('modal-body');
@@ -2220,40 +2195,46 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         modalTitle.textContent = title;
+
         modalBody.textContent = '';
 
-        const bodyWrapper = document.createElement('div');
-        bodyWrapper.innerHTML = body;
-        modalBody.appendChild(bodyWrapper);
+        const notice = document.createElement('div');
+        notice.className = 'notice success';
+        notice.textContent = message;
+
+        modalBody.appendChild(notice);
+
+        if (detail) {
+
+            const paragraph = document.createElement('p');
+            paragraph.textContent = detail;
+
+            modalBody.appendChild(paragraph);
+
+        }
 
         modalFooter.textContent = '';
 
-        if (footer) {
-            const footerWrapper = document.createElement('div');
-            footerWrapper.innerHTML = footer;
-            modalFooter.appendChild(footerWrapper);
-        }
-
         modal.classList.remove('hidden');
+
     }
 
     function closeModal() {
+
         const modal = $('modal');
 
         if (modal) {
             modal.classList.add('hidden');
         }
+
     }
 
-    /*
-     * ナビゲーション
-     */
     const navList = $('nav-list');
 
     if (navList) {
         navList.addEventListener('click', function () {
+            showPage('list');
             renderList();
-            showPage('page-list');
         });
     }
 
@@ -2261,14 +2242,20 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (navCreate) {
         navCreate.addEventListener('click', function () {
-            openEditor(null);
+            openCreate();
         });
     }
 
     const navCustomers = $('nav-customers');
 
     if (navCustomers) {
-        navCustomers.addEventListener('click', showCustomers);
+        navCustomers.addEventListener('click', function () {
+
+            showPage('customers');
+            renderCustomers();
+            renderCustomerStatus();
+
+        });
     }
 
     const navSettings = $('nav-settings');
@@ -2283,136 +2270,182 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (createButton) {
         createButton.addEventListener('click', function () {
-            openEditor(null);
+            openCreate();
         });
     }
 
-    const editorBack = $('btn-editor-back');
+    const backButton = $('btn-editor-back');
 
-    if (editorBack) {
-        editorBack.addEventListener('click', function () {
+    if (backButton) {
+        backButton.addEventListener('click', function () {
+            showPage('list');
             renderList();
-            showPage('page-list');
         });
     }
 
     const saveSurveyButton = $('btn-save-survey');
 
     if (saveSurveyButton) {
-        saveSurveyButton.addEventListener('click', function () {
 
-            /*
-             * 保存ボタンについても、非同期通信へ変更する場合に
-             * 二重操作を防げるよう即時disabled。
-             */
+        saveSurveyButton.addEventListener('click', async function () {
+
             saveSurveyButton.disabled = true;
             saveSurveyButton.classList.add('loading');
 
+            const originalText =
+                saveSurveyButton.textContent;
+
+            saveSurveyButton.textContent = '';
+
+            const spinner = document.createElement('span');
+            spinner.className = 'spinner';
+
+            saveSurveyButton.appendChild(spinner);
+            saveSurveyButton.appendChild(
+                document.createTextNode('保存中...')
+            );
+
             try {
-                if (!saveEditorToObject()) {
-                    return;
+
+                const name =
+                    $('survey-name')?.value.trim() || '';
+
+                if (!name) {
+                    throw new Error(
+                        'アンケート名を入力してください。'
+                    );
                 }
 
+                const questionText =
+                    $('question-text')?.value.trim() || '';
+
+                const survey = {
+                    id: Date.now(),
+                    name: name,
+                    description:
+                        $('survey-description')?.value || '',
+                    status:
+                        $('survey-status')?.value || 'draft',
+                    created:
+                        new Date().toISOString().slice(0, 10),
+                    start:
+                        $('survey-start')?.value || '',
+                    end:
+                        $('survey-end')?.value || '',
+                    answers: 0,
+                    target: 0,
+                    sent: 0,
+                    updated:
+                        new Date().toISOString().slice(0, 10),
+                    numbering: 'global',
+                    groups: [
+                        {
+                            id: Date.now() + 1,
+                            name: '質問',
+                            questions: questionText
+                                ? [
+                                    {
+                                        id: Date.now() + 2,
+                                        text: questionText,
+                                        type:
+                                            $('question-type')?.value ||
+                                            'single',
+                                        required: false,
+                                        options: []
+                                    }
+                                ]
+                                : []
+                        }
+                    ]
+                };
+
+                const nextSurveys =
+                    surveys.concat([survey]);
+
+                await api(
+                    'save_surveys',
+                    {
+                        surveys: nextSurveys
+                    }
+                );
+
+                surveys = nextSurveys;
+
+                showToast(
+                    'アンケートを保存しました'
+                );
+
+                showPage('list');
                 renderList();
-                showToast('アンケートを保存しました。');
-                showPage('page-list');
+
+            } catch (error) {
+
+                showToast(
+                    error instanceof Error
+                        ? error.message
+                        : 'アンケートの保存に失敗しました。'
+                );
 
             } finally {
+
                 saveSurveyButton.disabled = false;
                 saveSurveyButton.classList.remove('loading');
-            }
-        });
-    }
+                saveSurveyButton.textContent = originalText;
 
-    const detailEdit = $('btn-detail-edit');
-
-    if (detailEdit) {
-        detailEdit.addEventListener('click', function () {
-            openEditor(currentSurveyId);
-        });
-    }
-
-    const detailSend = $('btn-detail-send');
-
-    if (detailSend) {
-        detailSend.addEventListener('click', function () {
-            renderDetailTab('send');
-        });
-    }
-
-    const detailBack = $('btn-detail-back');
-
-    if (detailBack) {
-        detailBack.addEventListener('click', function () {
-            renderList();
-            showPage('page-list');
-        });
-    }
-
-    document.querySelectorAll('[data-detail-tab]').forEach(function (button) {
-        button.addEventListener('click', function () {
-            renderDetailTab(
-                button.getAttribute('data-detail-tab')
-            );
-        });
-    });
-
-    document.querySelectorAll('[data-settings-tab]').forEach(function (button) {
-        button.addEventListener('click', function () {
-            showSettings(
-                button.getAttribute('data-settings-tab')
-            );
-        });
-    });
-
-    const customerSearch = $('customer-search');
-
-    if (customerSearch) {
-        customerSearch.addEventListener('input', renderCustomers);
-    }
-
-    const surveyListBody = $('survey-list-body');
-
-    if (surveyListBody) {
-        surveyListBody.addEventListener('click', function (event) {
-
-            const openButton =
-                event.target.closest('[data-open-survey]');
-
-            if (openButton) {
-                openDetail(
-                    Number(openButton.getAttribute('data-open-survey'))
-                );
-                return;
             }
 
-            const editButton =
-                event.target.closest('[data-edit-survey]');
+        });
 
-            if (editButton) {
-                openEditor(
-                    Number(editButton.getAttribute('data-edit-survey'))
-                );
-            }
+    }
+
+    const mailTab = $('settings-tab-mail');
+
+    if (mailTab) {
+        mailTab.addEventListener('click', function () {
+            currentSettingsTab = 'mail';
+            renderSettings();
         });
     }
 
-    const modalClose = $('btn-modal-close');
+    const kintoneTab = $('settings-tab-kintone');
+
+    if (kintoneTab) {
+        kintoneTab.addEventListener('click', function () {
+            currentSettingsTab = 'kintone';
+            renderSettings();
+        });
+    }
+
+    const modalClose = $('modal-close');
 
     if (modalClose) {
-        modalClose.addEventListener('click', closeModal);
+        modalClose.addEventListener('click', function () {
+            closeModal();
+        });
+    }
+
+    const modal = $('modal');
+
+    if (modal) {
+
+        modal.addEventListener('click', function (event) {
+
+            if (event.target === modal) {
+                closeModal();
+            }
+
+        });
+
     }
 
     /*
-     * 初期表示。
-     *
-     * この時点ですでにPHPがsettings.jsonを読み込んでいるため、
-     * mailSettings.readyは保存済み設定の状態になっている。
+     * 初期表示
      */
+    showPage('list');
     renderList();
-    showPage('page-list');
 
 });
 </script>
+
 </body>
 </html>
