@@ -802,6 +802,10 @@ function krequestFromSettings(
   );
 }
 
+/* =========================
+ * SMTP
+ * ========================= */
+
 function smtpRead($s): array {
   $lines = [];
 
@@ -829,13 +833,123 @@ function smtpRead($s): array {
   return [$code, $lines];
 }
 
-function smtpCmd($s, string $cmd, array $ok): void {
-  fwrite($s, $cmd . "\r\n");
-  [$code] = smtpRead($s);
+function smtpResponseText(array $lines): string {
+  $safe = [];
+
+  foreach ($lines as $line) {
+    $line = (string)$line;
+
+    $line = preg_replace(
+      '/\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\b/u',
+      '[email]',
+      $line
+    ) ?? $line;
+
+    $safe[] = $line;
+  }
+
+  $text = implode(' | ', $safe);
+
+  if ($text === '') {
+    return 'SMTPサーバーから応答がありません。';
+  }
+
+  return $text;
+}
+
+function smtpCommandName(string $cmd): string {
+  $u = strtoupper(trim($cmd));
+
+  if ($u === 'EHLO LOCALHOST') {
+    return 'EHLO';
+  }
+
+  if ($u === 'HELO LOCALHOST') {
+    return 'HELO';
+  }
+
+  if ($u === 'STARTTLS') {
+    return 'STARTTLS';
+  }
+
+  if ($u === 'AUTH LOGIN') {
+    return 'AUTH LOGIN';
+  }
+
+  if ($u === 'AUTH PLAIN') {
+    return 'AUTH PLAIN';
+  }
+
+  if ($u === 'QUIT') {
+    return 'QUIT';
+  }
+
+  if (str_starts_with($u, 'MAIL FROM:')) {
+    return 'MAIL FROM';
+  }
+
+  if (str_starts_with($u, 'RCPT TO:')) {
+    return 'RCPT TO';
+  }
+
+  if ($u === 'DATA') {
+    return 'DATA';
+  }
+
+  if ($u === 'RSET') {
+    return 'RSET';
+  }
+
+  return 'SMTPコマンド';
+}
+
+function smtpCmd($s, string $cmd, array $ok): array {
+  $written = fwrite($s, $cmd . "\r\n");
+
+  if ($written === false) {
+    throw new RuntimeException(
+      smtpCommandName($cmd) . 'の送信に失敗しました。'
+    );
+  }
+
+  [$code, $lines] = smtpRead($s);
 
   if (!in_array($code, $ok, true)) {
-    throw new RuntimeException('SMTPサーバーから予期しない応答が返されました。');
+    throw new RuntimeException(
+      smtpCommandName($cmd) .
+      'に失敗しました。' .
+      '応答コード=' . $code .
+      ' 応答=' . smtpResponseText($lines)
+    );
   }
+
+  return [$code, $lines];
+}
+
+function smtpAuthMethods(array $ehloLines): array {
+  $methods = [];
+
+  foreach ($ehloLines as $line) {
+    if (
+      preg_match(
+        '/^\d{3}[- ]AUTH(?:=)?\s+(.+)$/i',
+        trim((string)$line),
+        $m
+      )
+    ) {
+      $parts = preg_split('/\s+/', trim($m[1]));
+
+      foreach ($parts as $part) {
+        $part = strtoupper(trim((string)$part));
+
+        if ($part !== '') {
+          $methods[$part] = true;
+        }
+      }
+    }
+  }
+
+  return array_keys($methods);
 }
 
 function smtpOpen(array $cfg) {
@@ -849,7 +963,15 @@ function smtpOpen(array $cfg) {
     throw new RuntimeException('SMTPホストとポートを設定してください。');
   }
 
-  $remote = ($secure === 'ssl' ? 'ssl://' : 'tcp://') . $host . ':' . $port;
+  if (!in_array($secure, ['none', 'ssl', 'tls'], true)) {
+    throw new RuntimeException('SMTP暗号化方式が正しくありません。');
+  }
+
+  $remote =
+    ($secure === 'ssl' ? 'ssl://' : 'tcp://') .
+    $host .
+    ':' .
+    $port;
 
   $ctx = stream_context_create([
     'ssl' => [
@@ -869,43 +991,98 @@ function smtpOpen(array $cfg) {
   );
 
   if ($s === false) {
-    throw new RuntimeException('SMTPサーバーへ接続できません。');
+    $detail = trim((string)$errstr);
+
+    throw new RuntimeException(
+      'SMTPサーバーへ接続できません。' .
+      ($detail !== '' ? ' 接続エラー=' . $detail : '')
+    );
   }
 
   stream_set_timeout($s, 15);
-  [$code] = smtpRead($s);
+
+  [$code, $lines] = smtpRead($s);
 
   if ($code < 200 || $code >= 400) {
     fclose($s);
-    throw new RuntimeException('SMTPサーバーの初期応答が不正です。');
+
+    throw new RuntimeException(
+      'SMTPサーバーの初期応答が不正です。' .
+      ' 応答コード=' . $code .
+      ' 応答=' . smtpResponseText($lines)
+    );
   }
 
-  smtpCmd($s, 'EHLO localhost', [250]);
+  try {
+    [, $ehloLines] = smtpCmd($s, 'EHLO localhost', [250]);
 
-  if ($secure === 'tls') {
-    smtpCmd($s, 'STARTTLS', [220]);
+    if ($secure === 'tls') {
+      $ehloText = strtolower(implode("\n", $ehloLines));
 
-    if (
-      stream_socket_enable_crypto(
+      if (
+        !str_contains($ehloText, 'starttls')
+      ) {
+        throw new RuntimeException(
+          'SMTPサーバーがSTARTTLSを提供していません。' .
+          ' 暗号化方式またはSMTPポートを確認してください。' .
+          ' EHLO応答=' . smtpResponseText($ehloLines)
+        );
+      }
+
+      smtpCmd($s, 'STARTTLS', [220]);
+
+      $crypto = stream_socket_enable_crypto(
         $s,
         true,
         STREAM_CRYPTO_METHOD_TLS_CLIENT
-      ) !== true
-    ) {
-      fclose($s);
-      throw new RuntimeException('SMTPのTLS接続に失敗しました。');
+      );
+
+      if ($crypto !== true) {
+        throw new RuntimeException(
+          'SMTPのTLS接続に失敗しました。'
+        );
+      }
+
+      [, $ehloLines] = smtpCmd($s, 'EHLO localhost', [250]);
     }
 
-    smtpCmd($s, 'EHLO localhost', [250]);
-  }
+    if ($user !== '') {
+      $methods = smtpAuthMethods($ehloLines);
 
-  if ($user !== '') {
-    smtpCmd($s, 'AUTH LOGIN', [334]);
-    smtpCmd($s, base64_encode($user), [334]);
-    smtpCmd($s, base64_encode($pass), [235]);
-  }
+      if (in_array('LOGIN', $methods, true)) {
+        smtpCmd($s, 'AUTH LOGIN', [334]);
+        smtpCmd($s, base64_encode($user), [334]);
+        smtpCmd($s, base64_encode($pass), [235]);
+      } elseif (in_array('PLAIN', $methods, true)) {
+        [$authCode] = smtpCmd(
+          $s,
+          'AUTH PLAIN',
+          [334, 235]
+        );
 
-  return $s;
+        if ($authCode === 334) {
+          smtpCmd(
+            $s,
+            base64_encode("\0" . $user . "\0" . $pass),
+            [235]
+          );
+        }
+      } else {
+        throw new RuntimeException(
+          'SMTPサーバーが利用可能な認証方式を通知していません。' .
+          ' AUTH LOGIN / AUTH PLAIN の対応状況を確認してください。' .
+          ' EHLO応答=' . smtpResponseText($ehloLines)
+        );
+      }
+    }
+
+    return $s;
+  } catch (\Throwable $e) {
+    if (is_resource($s)) {
+      @fclose($s);
+    }
+    throw $e;
+  }
 }
 
 function smtpClose($s): void {
@@ -960,7 +1137,10 @@ function smtpSend(
 
     smtpCmd(
       $s,
-      implode("\r\n", $h) . "\r\n\r\n" . str_replace("\n", "\r\n", $b) . "\r\n.",
+      implode("\r\n", $h) .
+      "\r\n\r\n" .
+      str_replace("\n", "\r\n", $b) .
+      "\r\n.",
       [250]
     );
   } finally {
@@ -2777,7 +2957,7 @@ function editorPage(){
 
         <div class="fg">
           <label>説明文 / 案内文</label>
-          <textarea class=ctl rows=3 data-ed=desc>${esc(s.description)}</textarea>
+          <textarea class="ctl" rows=3 data-ed=desc>${esc(s.description)}</textarea>
         </div>
 
         <div class=grid2>
@@ -2792,7 +2972,7 @@ function editorPage(){
           </div>
         </div>
 
-        <div class=a-info alert>状態：${badge(s.status)}</div>
+        <div class="a-info alert">状態：${badge(s.status)}</div>
       </div>
 
       <div class=card>
@@ -3503,7 +3683,7 @@ function bindRespondent(){
     }
 
     const allow=new Set(
-      (()=>{
+      (()=> {
         const all=qs(s);
         const ix=Object.fromEntries(
           all.map((q,i)=>[q.id,i])
