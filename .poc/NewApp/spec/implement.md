@@ -296,3 +296,10 @@ JavaScriptはDOMContentLoaded後に初期化し、存在しないDOM要素を参
 10. モックとの差異を確認
 
 モックはUI・操作確認用であり、実データ保存、kintone通信、SMTP送信、回答登録については本実装の仕様を優先する。
+
+****頻出エラー
+index.php?_t=1790314388546:1 Access to fetch at 'https://n11-1041/gojacic/.poc/NewApp/draft/index.php?api=bootstrap' from origin 'null' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+index.php?_t=1790314388546:421  GET https://n11-1041/gojacic/.poc/NewApp/draft/index.php?api=bootstrap net::ERR_FAILED 200 (OK)
+api @ index.php?_t=1790314388546:421
+loadBootstrap @ index.php?_t=1790314388546:576
+(anonymous) @ index.php?_t=1790314388546:2376
