@@ -196,6 +196,10 @@ JSONの読み込み・保存に失敗した場合は処理を成功扱いにし�
 - ユーザー入力やAPIレスポンスを未エスケープでHTMLへ出力しない。
 - パスワード・認証情報をエラーメッセージへ含めない。
 
+
+
+
+
 ## 14. 処理単位
 以下を個別の処理として実装する。
 
@@ -221,3 +225,18 @@ JSONの読み込み・保存に失敗した場合は処理を成功扱いにし�
 → 回答結果確認
 → 必要に応じて再送
 → アンケート終了
+
+#＃過去のエラー・問題事象
+index.php?_t=1790298742865:135 Uncaught ReferenceError: App is not defined
+    at HTMLButtonElement.onclick (index.php?_t=1790298742865:135:58)
+onclick @ index.php?_t=1790298742865:135
+index.php?_t=1790298742865:133 Uncaught ReferenceError: App is not defined
+    at HTMLButtonElement.onclick (index.php?_t=1790298742865:133:69)
+onclick @ index.php?_t=1790298742865:133
+index.php?_t=1790298742865:134 Uncaught ReferenceError: App is not defined
+    at HTMLButtonElement.onclick (index.php?_t=1790298742865:134:63)
+onclick @ index.php?_t=1790298742865:134
+
+キントーンとメールがダミーになっておる
+
+
