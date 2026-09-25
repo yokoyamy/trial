@@ -2184,6 +2184,6 @@ function init(){
 }
 
 init();
-</script>
+ </script>
 </body>
 </html>
