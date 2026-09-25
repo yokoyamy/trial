@@ -3810,3 +3810,1052 @@ textarea.form-control {
 
 </style>
 </head>
+<body>
+<header id="app-header">
+    <div class="header-container">
+        <div class="logo" id="app-logo">📋 アンケート業務運営アプリ</div>
+        <nav>
+            <ul>
+                <li><button type="button" id="nav-surveys">アンケート一覧</button></li>
+                <li><button type="button" id="nav-new">新規アンケート作成</button></li>
+                <li><button type="button" id="nav-customers">顧客一覧</button></li>
+                <li><button type="button" id="nav-settings">設定</button></li>
+            </ul>
+        </nav>
+    </div>
+
+    <div id="sub-nav-bar" class="sub-nav" style="display:none;">
+        <div class="sub-nav-container">
+            <div class="sub-nav-title">
+                選択中：<span id="current-survey-name"></span>
+            </div>
+            <ul>
+                <li><button type="button" id="sub-detail">アンケート内容</button></li>
+                <li><button type="button" id="sub-send">送信</button></li>
+                <li><button type="button" id="sub-status">回答状況</button></li>
+                <li><button type="button" id="sub-result">回答結果</button></li>
+                <li>
+                    <button type="button" class="btn btn-outline btn-sm" id="btn-preview">
+                        回答画面プレビュー
+                    </button>
+                </li>
+            </ul>
+        </div>
+    </div>
+</header>
+
+<main id="main-content"></main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<div id="modal" class="modal-overlay" aria-hidden="true">
+    <div class="modal">
+        <h3 id="modal-title" style="margin-bottom:.75rem;">確認</h3>
+        <div id="modal-body" style="font-size:.9rem;margin-bottom:1.25rem;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:.5rem;">
+            <button type="button" class="btn btn-outline" id="modal-cancel">
+                キャンセル
+            </button>
+            <button type="button" id="modal-confirm-btn" class="btn btn-primary">
+                実行
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    'use strict';
+
+    const APP = {
+        csrf: <?= json_encode($csrfToken, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>,
+        api: 'index.php',
+        view: 'survey-list',
+        subView: 'detail',
+        surveyId: null,
+        dirty: false
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function setLoading(button, loading) {
+        if (!button) {
+            return;
+        }
+
+        if (loading) {
+            button.disabled = true;
+            button.classList.add('is-loading');
+            button.setAttribute('aria-busy', 'true');
+        } else {
+            button.disabled = false;
+            button.classList.remove('is-loading');
+            button.removeAttribute('aria-busy');
+        }
+    }
+
+    function escapeHtml(value) {
+        const div = document.createElement('div');
+        div.textContent = value === null || value === undefined ? '' : String(value);
+        return div.innerHTML;
+    }
+
+    function showToast(message) {
+        const toast = $('toast');
+        if (!toast) {
+            return;
+        }
+
+        toast.textContent = String(message || '');
+        toast.style.display = 'block';
+
+        window.clearTimeout(showToast.timer);
+        showToast.timer = window.setTimeout(() => {
+            toast.style.display = 'none';
+        }, 3000);
+    }
+
+    function modal(title, message, callback) {
+        const overlay = $('modal');
+        const titleEl = $('modal-title');
+        const bodyEl = $('modal-body');
+        const confirm = $('modal-confirm-btn');
+
+        if (!overlay || !titleEl || !bodyEl || !confirm) {
+            return;
+        }
+
+        titleEl.textContent = title || '確認';
+        bodyEl.textContent = message || '';
+
+        overlay.style.display = 'flex';
+        overlay.setAttribute('aria-hidden', 'false');
+
+        confirm.onclick = async () => {
+            setLoading(confirm, true);
+
+            try {
+                if (typeof callback === 'function') {
+                    await callback();
+                }
+            } finally {
+                setLoading(confirm, false);
+                closeModal();
+            }
+        };
+    }
+
+    function closeModal() {
+        const overlay = $('modal');
+        if (!overlay) {
+            return;
+        }
+
+        overlay.style.display = 'none';
+        overlay.setAttribute('aria-hidden', 'true');
+
+        const confirm = $('modal-confirm-btn');
+        if (confirm) {
+            confirm.onclick = null;
+            setLoading(confirm, false);
+        }
+    }
+
+    async function request(action, data = {}, button = null) {
+        if (button) {
+            button.disabled = true;
+            button.classList.add('is-loading');
+            button.setAttribute('aria-busy', 'true');
+        }
+
+        try {
+            const body = new URLSearchParams();
+
+            body.set('action', action);
+            body.set('csrf_token', APP.csrf);
+
+            Object.keys(data).forEach((key) => {
+                const value = data[key];
+
+                if (value !== undefined && value !== null) {
+                    if (typeof value === 'object') {
+                        body.set(key, JSON.stringify(value));
+                    } else {
+                        body.set(key, String(value));
+                    }
+                }
+            });
+
+            const response = await fetch(APP.api, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                    'X-CSRF-Token': APP.csrf,
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: body.toString()
+            });
+
+            const result = await response.json();
+
+            if (!result || typeof result !== 'object') {
+                throw new Error('サーバーから正しい応答を取得できませんでした。');
+            }
+
+            if (!result.success) {
+                throw new Error(result.message || '処理に失敗しました。');
+            }
+
+            return result;
+        } catch (error) {
+            showToast(error instanceof Error ? error.message : '通信エラーが発生しました。');
+            throw error;
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.classList.remove('is-loading');
+                button.removeAttribute('aria-busy');
+            }
+        }
+    }
+
+    async function loadView(view, surveyId = null) {
+        APP.view = view;
+
+        if (surveyId !== null && surveyId !== undefined) {
+            APP.surveyId = Number(surveyId);
+        }
+
+        const main = $('main-content');
+        if (!main) {
+            return;
+        }
+
+        main.textContent = '読み込み中…';
+
+        try {
+            const result = await request('get_view', {
+                view: APP.view,
+                survey_id: APP.surveyId || ''
+            });
+
+            if (result.html) {
+                main.innerHTML = result.html;
+            } else {
+                main.textContent = '表示する内容がありません。';
+            }
+
+            updateNavigation();
+            bindDynamicEvents();
+        } catch (error) {
+            main.textContent = '画面の読み込みに失敗しました。';
+        }
+    }
+
+    function updateNavigation() {
+        const navMap = {
+            'survey-list': 'nav-surveys',
+            'survey-editor': 'nav-new',
+            'customer-list': 'nav-customers',
+            'settings': 'nav-settings'
+        };
+
+        Object.values(navMap).forEach((id) => {
+            const element = $(id);
+            if (element) {
+                element.classList.remove('active');
+            }
+        });
+
+        const activeId = navMap[APP.view];
+
+        if (activeId) {
+            const active = $(activeId);
+            if (active) {
+                active.classList.add('active');
+            }
+        }
+
+        const subNav = $('sub-nav-bar');
+
+        if (!subNav) {
+            return;
+        }
+
+        if (APP.surveyId && ['survey-detail', 'survey-send', 'survey-status', 'survey-result'].includes(APP.view)) {
+            subNav.style.display = 'block';
+
+            const name = $('current-survey-name');
+            if (name) {
+                name.textContent = window.currentSurveyName || '';
+            }
+
+            const subMap = {
+                'survey-detail': 'sub-detail',
+                'survey-send': 'sub-send',
+                'survey-status': 'sub-status',
+                'survey-result': 'sub-result'
+            };
+
+            Object.values(subMap).forEach((id) => {
+                const button = $(id);
+                if (button) {
+                    button.classList.remove('active');
+                }
+            });
+
+            const active = $(subMap[APP.view]);
+            if (active) {
+                active.classList.add('active');
+            }
+        } else {
+            subNav.style.display = 'none';
+        }
+    }
+
+    function navigate(view, surveyId = null) {
+        if (APP.dirty) {
+            const leave = window.confirm(
+                '保存されていない変更があります。画面を移動してよろしいですか？'
+            );
+
+            if (!leave) {
+                return;
+            }
+
+            APP.dirty = false;
+        }
+
+        loadView(view, surveyId);
+    }
+
+    function navigateSub(subView) {
+        if (!APP.surveyId) {
+            return;
+        }
+
+        const viewMap = {
+            detail: 'survey-detail',
+            send: 'survey-send',
+            status: 'survey-status',
+            result: 'survey-result'
+        };
+
+        const target = viewMap[subView];
+
+        if (!target) {
+            return;
+        }
+
+        loadView(target, APP.surveyId);
+    }
+
+    function startNewSurvey() {
+        navigate('survey-editor', null);
+    }
+
+    function bindDynamicEvents() {
+        const saveButton = $('survey-save');
+
+        if (saveButton) {
+            saveButton.addEventListener('click', async () => {
+                APP.dirty = false;
+
+                try {
+                    const form = $('survey-editor-form');
+
+                    if (!form) {
+                        return;
+                    }
+
+                    const formData = new FormData(form);
+                    const payload = {};
+
+                    formData.forEach((value, key) => {
+                        payload[key] = value;
+                    });
+
+                    const result = await request(
+                        'save_survey',
+                        payload,
+                        saveButton
+                    );
+
+                    if (result.survey_id) {
+                        APP.surveyId = Number(result.survey_id);
+                    }
+
+                    APP.dirty = false;
+                    showToast('アンケートを保存しました。');
+
+                    await loadView('survey-editor', APP.surveyId);
+                } catch (error) {
+                    APP.dirty = true;
+                }
+            });
+        }
+
+        const editor = $('survey-editor-form');
+
+        if (editor) {
+            editor.addEventListener('input', () => {
+                APP.dirty = true;
+            });
+
+            editor.addEventListener('change', () => {
+                APP.dirty = true;
+            });
+        }
+
+        const publishButton = $('survey-publish');
+
+        if (publishButton) {
+            publishButton.addEventListener('click', async () => {
+                modal(
+                    'アンケートを公開',
+                    '内容を確認した上でアンケートを公開します。よろしいですか？',
+                    async () => {
+                        await request(
+                            'publish_survey',
+                            { survey_id: APP.surveyId },
+                            publishButton
+                        );
+
+                        APP.dirty = false;
+                        showToast('アンケートを公開しました。');
+                        await loadView('survey-detail', APP.surveyId);
+                    }
+                );
+            });
+        }
+
+        const closeButton = $('survey-close');
+
+        if (closeButton) {
+            closeButton.addEventListener('click', async () => {
+                modal(
+                    'アンケートを終了',
+                    '回答受付を終了します。終了後は回答を受け付けられません。よろしいですか？',
+                    async () => {
+                        await request(
+                            'close_survey',
+                            { survey_id: APP.surveyId },
+                            closeButton
+                        );
+
+                        showToast('アンケートを終了しました。');
+                        await loadView('survey-detail', APP.surveyId);
+                    }
+                );
+            });
+        }
+
+        const deleteButton = $('survey-delete');
+
+        if (deleteButton) {
+            deleteButton.addEventListener('click', async () => {
+                modal(
+                    'アンケートを削除',
+                    '下書きアンケートを削除します。この操作は取り消せません。よろしいですか？',
+                    async () => {
+                        await request(
+                            'delete_survey',
+                            { survey_id: APP.surveyId },
+                            deleteButton
+                        );
+
+                        APP.surveyId = null;
+                        showToast('アンケートを削除しました。');
+                        await loadView('survey-list');
+                    }
+                );
+            });
+        }
+
+        const sendButton = $('send-mail');
+
+        if (sendButton) {
+            sendButton.addEventListener('click', async () => {
+                const selected = Array.from(
+                    document.querySelectorAll('input[name="recipient_ids[]"]:checked')
+                ).map((element) => element.value);
+
+                const subject = $('mail-subject');
+                const body = $('mail-body');
+
+                if (selected.length === 0) {
+                    showToast('送信対象者を選択してください。');
+                    return;
+                }
+
+                modal(
+                    '送信内容の最終確認',
+                    `送信対象者数：${selected.length}名\n件名：${subject ? subject.value : ''}`,
+                    async () => {
+                        await request(
+                            'send_mail',
+                            {
+                                survey_id: APP.surveyId,
+                                recipient_ids: selected,
+                                subject: subject ? subject.value : '',
+                                body: body ? body.value : ''
+                            },
+                            sendButton
+                        );
+
+                        showToast('メール送信処理が完了しました。');
+                        await loadView('survey-send', APP.surveyId);
+                    }
+                );
+            });
+        }
+
+        const syncButton = $('kintone-sync');
+
+        if (syncButton) {
+            syncButton.addEventListener('click', async () => {
+                try {
+                    await request('sync_customers', {}, syncButton);
+                    showToast('キントーンから顧客情報を取得しました。');
+                    await loadView('customer-list');
+                } catch (error) {
+                    // request() 側で表示済み
+                }
+            });
+        }
+
+        const smtpTestButton = $('smtp-test');
+
+        if (smtpTestButton) {
+            smtpTestButton.addEventListener('click', async () => {
+                try {
+                    await request(
+                        'test_smtp',
+                        collectSettings(),
+                        smtpTestButton
+                    );
+
+                    showToast('SMTP接続確認に成功しました。');
+                } catch (error) {
+                    // request() 側で表示済み
+                }
+            });
+        }
+
+        const kintoneTestButton = $('kintone-test');
+
+        if (kintoneTestButton) {
+            kintoneTestButton.addEventListener('click', async () => {
+                try {
+                    await request(
+                        'test_kintone',
+                        collectSettings(),
+                        kintoneTestButton
+                    );
+
+                    showToast('キントーン接続確認に成功しました。');
+                } catch (error) {
+                    // request() 側で表示済み
+                }
+            });
+        }
+
+        const settingsSaveButton = $('settings-save');
+
+        if (settingsSaveButton) {
+            settingsSaveButton.addEventListener('click', async () => {
+                try {
+                    await request(
+                        'save_settings',
+                        collectSettings(),
+                        settingsSaveButton
+                    );
+
+                    showToast('設定を保存しました。');
+                } catch (error) {
+                    // request() 側で表示済み
+                }
+            });
+        }
+
+        document.querySelectorAll('[data-action]').forEach((element) => {
+            element.addEventListener('click', async () => {
+                const action = element.getAttribute('data-action');
+
+                if (!action) {
+                    return;
+                }
+
+                if (action === 'open-survey') {
+                    const id = element.getAttribute('data-id');
+
+                    if (id) {
+                        navigate('survey-detail', Number(id));
+                    }
+
+                    return;
+                }
+
+                if (action === 'edit-survey') {
+                    const id = element.getAttribute('data-id');
+
+                    if (id) {
+                        navigate('survey-editor', Number(id));
+                    }
+
+                    return;
+                }
+
+                if (action === 'delete-survey') {
+                    const id = element.getAttribute('data-id');
+
+                    if (!id) {
+                        return;
+                    }
+
+                    modal(
+                        'アンケートを削除',
+                        '下書きアンケートを削除します。よろしいですか？',
+                        async () => {
+                            await request(
+                                'delete_survey',
+                                { survey_id: id },
+                                element
+                            );
+
+                            showToast('アンケートを削除しました。');
+                            await loadView('survey-list');
+                        }
+                    );
+
+                    return;
+                }
+
+                if (action === 'publish-survey') {
+                    const id = element.getAttribute('data-id');
+
+                    if (!id) {
+                        return;
+                    }
+
+                    modal(
+                        'アンケートを公開',
+                        'アンケートを公開します。よろしいですか？',
+                        async () => {
+                            await request(
+                                'publish_survey',
+                                { survey_id: id },
+                                element
+                            );
+
+                            showToast('アンケートを公開しました。');
+                            await loadView('survey-list');
+                        }
+                    );
+
+                    return;
+                }
+
+                if (action === 'close-survey') {
+                    const id = element.getAttribute('data-id');
+
+                    if (!id) {
+                        return;
+                    }
+
+                    modal(
+                        'アンケートを終了',
+                        '回答受付を終了します。よろしいですか？',
+                        async () => {
+                            await request(
+                                'close_survey',
+                                { survey_id: id },
+                                element
+                            );
+
+                            showToast('アンケートを終了しました。');
+                            await loadView('survey-list');
+                        }
+                    );
+                }
+            });
+        });
+
+        bindQuestionEditorEvents();
+        bindCustomerSelectionEvents();
+        bindBranchEvents();
+    }
+
+    function collectSettings() {
+        const result = {};
+
+        document.querySelectorAll('[data-setting]').forEach((element) => {
+            const key = element.getAttribute('data-setting');
+
+            if (!key) {
+                return;
+            }
+
+            result[key] = element.value || '';
+        });
+
+        return result;
+    }
+
+    function bindQuestionEditorEvents() {
+        const addGroup = $('add-group');
+
+        if (addGroup) {
+            addGroup.addEventListener('click', () => {
+                const groups = $('groups-container');
+
+                if (!groups) {
+                    return;
+                }
+
+                const template = document.querySelector('[data-group-template]');
+
+                if (!template) {
+                    return;
+                }
+
+                const clone = template.content.cloneNode(true);
+                groups.appendChild(clone);
+                renumberQuestions();
+            });
+        }
+
+        document.querySelectorAll('[data-add-question]').forEach((button) => {
+            button.addEventListener('click', () => {
+                const group = button.closest('[data-group]');
+
+                if (!group) {
+                    return;
+                }
+
+                const template = document.querySelector('[data-question-template]');
+
+                if (!template) {
+                    return;
+                }
+
+                const questions = group.querySelector('[data-questions]');
+
+                if (!questions) {
+                    return;
+                }
+
+                questions.appendChild(
+                    template.content.cloneNode(true)
+                );
+
+                renumberQuestions();
+                bindQuestionEditorEvents();
+            });
+        });
+
+        document.querySelectorAll('[data-delete-group]').forEach((button) => {
+            button.addEventListener('click', () => {
+                const group = button.closest('[data-group]');
+
+                if (!group) {
+                    return;
+                }
+
+                const questions = group.querySelectorAll('[data-question]');
+
+                if (questions.length > 0) {
+                    const confirmed = window.confirm(
+                        'このグループには質問があります。グループと質問をすべて削除しますか？'
+                    );
+
+                    if (!confirmed) {
+                        return;
+                    }
+                }
+
+                group.remove();
+                renumberQuestions();
+                APP.dirty = true;
+            });
+        });
+
+        document.querySelectorAll('[data-delete-question]').forEach((button) => {
+            button.addEventListener('click', () => {
+                const question = button.closest('[data-question]');
+
+                if (!question) {
+                    return;
+                }
+
+                if (!window.confirm('この質問を削除しますか？')) {
+                    return;
+                }
+
+                question.remove();
+                renumberQuestions();
+                APP.dirty = true;
+            });
+        });
+
+        document.querySelectorAll('[data-question-type]').forEach((select) => {
+            select.addEventListener('change', () => {
+                const question = select.closest('[data-question]');
+
+                if (!question) {
+                    return;
+                }
+
+                const choiceArea = question.querySelector('[data-choice-area]');
+
+                if (!choiceArea) {
+                    return;
+                }
+
+                if (select.value === 'single' || select.value === 'multiple') {
+                    choiceArea.style.display = '';
+                } else {
+                    choiceArea.style.display = 'none';
+                }
+
+                APP.dirty = true;
+            });
+        });
+
+        document.querySelectorAll('[data-add-choice]').forEach((button) => {
+            button.addEventListener('click', () => {
+                const question = button.closest('[data-question]');
+
+                if (!question) {
+                    return;
+                }
+
+                const choices = question.querySelector('[data-choices]');
+
+                if (!choices) {
+                    return;
+                }
+
+                const row = document.createElement('div');
+                row.className = 'choice-row';
+
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'form-control';
+                input.name = 'choice[]';
+
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'btn btn-danger-outline btn-sm';
+                remove.textContent = '削除';
+
+                remove.addEventListener('click', () => {
+                    row.remove();
+                    APP.dirty = true;
+                });
+
+                row.appendChild(input);
+                row.appendChild(remove);
+                choices.appendChild(row);
+
+                APP.dirty = true;
+            });
+        });
+    }
+
+    function renumberQuestions() {
+        const numbering =
+            document.querySelector('[name="numbering_format"]');
+
+        const format = numbering ? numbering.value : 'global';
+
+        let globalNumber = 1;
+
+        document.querySelectorAll('[data-group]').forEach((group, groupIndex) => {
+            let groupNumber = 1;
+
+            group.querySelectorAll('[data-question]').forEach((question) => {
+                const number = question.querySelector('[data-question-number]');
+
+                if (!number) {
+                    return;
+                }
+
+                if (format === 'group') {
+                    number.textContent =
+                        `Q${groupIndex + 1}-${groupNumber}`;
+                } else {
+                    number.textContent = `Q${globalNumber}`;
+                }
+
+                globalNumber += 1;
+                groupNumber += 1;
+            });
+        });
+    }
+
+    function bindCustomerSelectionEvents() {
+        const search = $('customer-search');
+
+        if (search) {
+            search.addEventListener('input', () => {
+                const keyword = search.value.trim().toLowerCase();
+
+                document.querySelectorAll('[data-customer-row]').forEach((row) => {
+                    const text = row.textContent.toLowerCase();
+                    row.style.display =
+                        !keyword || text.includes(keyword) ? '' : 'none';
+                });
+            });
+        }
+
+        const selectAll = $('customer-select-all');
+
+        if (selectAll) {
+            selectAll.addEventListener('change', () => {
+                document.querySelectorAll(
+                    'input[name="recipient_ids[]"]'
+                ).forEach((checkbox) => {
+                    checkbox.checked = selectAll.checked;
+                });
+            });
+        }
+    }
+
+    function bindBranchEvents() {
+        document.querySelectorAll('[data-branch-choice]').forEach((element) => {
+            element.addEventListener('change', () => {
+                const question = element.closest('[data-question]');
+
+                if (!question) {
+                    return;
+                }
+
+                const target = question.querySelector(
+                    '[data-branch-target]'
+                );
+
+                if (!target) {
+                    return;
+                }
+
+                if (element.checked && element.value) {
+                    target.disabled = false;
+                }
+            });
+        });
+    }
+
+    const logo = $('app-logo');
+
+    if (logo) {
+        logo.addEventListener('click', () => {
+            navigate('survey-list');
+        });
+    }
+
+    const navSurveys = $('nav-surveys');
+
+    if (navSurveys) {
+        navSurveys.addEventListener('click', () => {
+            navigate('survey-list');
+        });
+    }
+
+    const navNew = $('nav-new');
+
+    if (navNew) {
+        navNew.addEventListener('click', () => {
+            startNewSurvey();
+        });
+    }
+
+    const navCustomers = $('nav-customers');
+
+    if (navCustomers) {
+        navCustomers.addEventListener('click', () => {
+            navigate('customer-list');
+        });
+    }
+
+    const navSettings = $('nav-settings');
+
+    if (navSettings) {
+        navSettings.addEventListener('click', () => {
+            navigate('settings');
+        });
+    }
+
+    const subDetail = $('sub-detail');
+
+    if (subDetail) {
+        subDetail.addEventListener('click', () => {
+            navigateSub('detail');
+        });
+    }
+
+    const subSend = $('sub-send');
+
+    if (subSend) {
+        subSend.addEventListener('click', () => {
+            navigateSub('send');
+        });
+    }
+
+    const subStatus = $('sub-status');
+
+    if (subStatus) {
+        subStatus.addEventListener('click', () => {
+            navigateSub('status');
+        });
+    }
+
+    const subResult = $('sub-result');
+
+    if (subResult) {
+        subResult.addEventListener('click', () => {
+            navigateSub('result');
+        });
+    }
+
+    const preview = $('btn-preview');
+
+    if (preview) {
+        preview.addEventListener('click', () => {
+            navigate('respondent-preview', APP.surveyId);
+        });
+    }
+
+    const modalCancel = $('modal-cancel');
+
+    if (modalCancel) {
+        modalCancel.addEventListener('click', () => {
+            closeModal();
+        });
+    }
+
+    const modalOverlay = $('modal');
+
+    if (modalOverlay) {
+        modalOverlay.addEventListener('click', (event) => {
+            if (event.target === modalOverlay) {
+                closeModal();
+            }
+        });
+    }
+
+    window.addEventListener('beforeunload', (event) => {
+        if (!APP.dirty) {
+            return;
+        }
+
+        event.preventDefault();
+        event.returnValue = '';
+    });
+
+    navigate('survey-list');
+});
+</script>
+</body>
+</html>
