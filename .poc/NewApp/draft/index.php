@@ -802,10 +802,6 @@ function krequestFromSettings(
   );
 }
 
-/* =========================
- * SMTP
- * ========================= */
-
 function smtpRead($s): array {
   $lines = [];
 
@@ -1019,9 +1015,7 @@ function smtpOpen(array $cfg) {
     if ($secure === 'tls') {
       $ehloText = strtolower(implode("\n", $ehloLines));
 
-      if (
-        !str_contains($ehloText, 'starttls')
-      ) {
+      if (!str_contains($ehloText, 'starttls')) {
         throw new RuntimeException(
           'SMTPサーバーがSTARTTLSを提供していません。' .
           ' 暗号化方式またはSMTPポートを確認してください。' .
@@ -1137,10 +1131,7 @@ function smtpSend(
 
     smtpCmd(
       $s,
-      implode("\r\n", $h) .
-      "\r\n\r\n" .
-      str_replace("\n", "\r\n", $b) .
-      "\r\n.",
+      implode("\r\n", $h) . "\r\n\r\n" . str_replace("\n", "\r\n", $b) . "\r\n.",
       [250]
     );
   } finally {
