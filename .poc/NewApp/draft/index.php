@@ -1654,10 +1654,21 @@ function apiRun(): void {
     }
 
     if ($api === 'smtp_test') {
-      $s = smtpOpen($d['settings']['smtp'] ?? []);
-      smtpClose($s);
+      try {
+        $s = smtpOpen($d['settings']['smtp'] ?? []);
+        smtpClose($s);
 
-      ok(['message' => 'SMTP接続と認証に成功しました。']);
+        ok([
+          'message' => 'SMTP接続と認証に成功しました。',
+        ]);
+      } catch (\Throwable $e) {
+        ng(
+          'SMTP_ERROR',
+          $e->getMessage(),
+          [],
+          500
+        );
+      }
     }
 
     if ($api === 'send_mail') {
@@ -2286,7 +2297,7 @@ const toastEl=document.getElementById('toast');
 const modal=document.getElementById('modal');
 const fileMode=location.protocol==='file:';
 
-/* 修正箇所 */
+/* APIは表示中のindex.phpを基準に解決 */
 const API=new URL('index.php',document.baseURI).href;
 
 const st={
@@ -2485,13 +2496,13 @@ function nav(page,sid='',tab='content'){
     p.set('page',page);
   }
 
-  const url=new URL(API);
-  url.search= p.toString();
+  const pageUrl=new URL(API);
+  pageUrl.search=p.toString();
 
   history.replaceState(
     null,
     '',
-    url.toString()
+    pageUrl.toString()
   );
 
   render();
@@ -3492,7 +3503,7 @@ function bindRespondent(){
     }
 
     const allow=new Set(
-      (()=>{ 
+      (()=>{
         const all=qs(s);
         const ix=Object.fromEntries(
           all.map((q,i)=>[q.id,i])
@@ -4173,7 +4184,6 @@ function bind(){
   });
 
   const cs=document.getElementById('cs');
-
   if(cs){
     cs.addEventListener(
       'input',
