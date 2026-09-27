@@ -1,497 +1,668 @@
 <?php
 declare(strict_types=1);
-namespace Jacic\Gojacic\QuestionnaireOperations;
-use DateTimeImmutable;
-use RuntimeException;
 
-date_default_timezone_set('Asia/Tokyo');
+/*
+ * アンケート運営システム
+ * Apache 2.4 / PHP 8.4 / 8.5
+ * DBなし / JSONファイル保存 / 入口は本ファイルのみ
+ */
 
-const SKEY = 'jacic_gojacic_questionnaire_operations';
-const DATADIR = __DIR__ . DIRECTORY_SEPARATOR . 'data';
+const APP_NAME = 'アンケート運営';
+const JSON_FILES = [
+    'surveys' => 'surveys.json',
+    'customers' => 'customers.json',
+    'responses' => 'responses.json',
+    'answer_tokens' => 'answer_tokens.json',
+    'send_logs' => 'send_logs.json',
+    'settings' => 'settings.json',
+    'kintone_mapping' => 'kintone_mapping.json',
+    'kintone_sync_logs' => 'kintone_sync_logs.json'
+];
 
+ini_set('session.use_only_cookies', '1');
+ini_set('session.cookie_httponly', '1');
+ini_set('session.cookie_samesite', 'Lax');
 if (session_status() !== PHP_SESSION_ACTIVE) {
-  session_set_cookie_params(['httponly'=>true,'samesite'=>'Lax']);
-  session_start();
+    session_start();
 }
-header('X-Frame-Options: SAMEORIGIN');
+if (empty($_SESSION['survey_csrf'])) {
+    $_SESSION['survey_csrf'] = bin2hex(random_bytes(32));
+}
+
 header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: SAMEORIGIN');
 header('Referrer-Policy: same-origin');
-if (!isset($_SESSION[SKEY]['csrf'])) $_SESSION[SKEY]['csrf'] = bin2hex(random_bytes(32));
+header("Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'self'; frame-ancestors 'self'");
 
-function h(?string $s): string { return htmlspecialchars($s ?? '', ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
-function nowi(): string { return (new DateTimeImmutable())->format('c'); }
-function nows(): string { return (new DateTimeImmutable())->format('Y-m-d H:i:s'); }
-function rid(string $p=''): string { return $p . bin2hex(random_bytes(8)); }
-function jp(mixed $v): string { return json_encode($v, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR); }
-function pathOf(string $f): string { if (!is_dir(DATADIR) && !mkdir(DATADIR,0775,true) && !is_dir(DATADIR)) throw new RuntimeException('データフォルダを作成できません。'); return DATADIR.DIRECTORY_SEPARATOR.$f; }
-function writeJson(string $f,mixed $data): void {
-  $p=pathOf($f); $fp=fopen($p,'c+b'); if($fp===false) throw new RuntimeException('データ保存に失敗しました。');
-  if(!flock($fp,LOCK_EX)){fclose($fp);throw new RuntimeException('データをロックできません。');}
-  $json=jp($data); if(!ftruncate($fp,0)){flock($fp,LOCK_UN);fclose($fp);throw new RuntimeException('データを更新できません。');}
-  rewind($fp); $ok=fwrite($fp,$json); fflush($fp); flock($fp,LOCK_UN); fclose($fp); if($ok===false||$ok<strlen($json))throw new RuntimeException('データを更新できません。');
-}
-function readJson(string $f,mixed $default): mixed {
-  $p=pathOf($f); if(!file_exists($p)){writeJson($f,$default);return $default;} $fp=fopen($p,'rb'); if($fp===false)throw new RuntimeException('データを開けません。');
-  if(!flock($fp,LOCK_SH)){fclose($fp);throw new RuntimeException('データをロックできません。');} $s=stream_get_contents($fp); flock($fp,LOCK_UN); fclose($fp);
-  if($s===false||trim($s)==='')throw new RuntimeException('JSONデータが空です。');
-  try{return json_decode($s,true,512,JSON_THROW_ON_ERROR);}catch(\Throwable){throw new RuntimeException('JSONデータが破損しています。');}
-}
-function allData(): array { initData(); $km=readJson('kintone_mapping.json',kintoneMappingDefault()); return ['surveys'=>readJson('surveys.json',[]),'customers'=>readJson('customers.json',[]),'responses'=>readJson('responses.json',[]),'tokens'=>readJson('answer_tokens.json',[]),'logs'=>readJson('send_logs.json',[]),'settings'=>readJson('settings.json',[]),'kintoneMapping'=>normalizeKintoneMappingSaved(is_array($km)?$km:kintoneMappingDefault()),'kintoneSyncLogs'=>readJson('kintone_sync_logs.json',[])]; }
-function surveyIndex(array $surveys,string $id): int { foreach($surveys as $i=>$s) if((string)($s['id']??'')===$id)return $i; return -1; }
-function questions(array $s): array { $r=[]; foreach(($s['groups']??[]) as $g)foreach(($g['questions']??[]) as $q)$r[]=$q; return $r; }
-function qmap(array $s): array { $r=[]; foreach(questions($s) as $q)$r[(string)$q['id']]=$q; return $r; }
-function qnums(array $s): array { $r=[];$g=1;$n=1;foreach(($s['groups']??[]) as $gr){$n=1;foreach(($gr['questions']??[]) as $q){$r[$q['id']]=($s['numberingFormat']??'group')==='global'?'Q'.$n:'Q'.$g.'-'.$n;$n++;} $g++;} if(($s['numberingFormat']??'group')==='global'){ $n=1;$r=[];foreach(($s['groups']??[]) as $gr)foreach(($gr['questions']??[]) as $q)$r[$q['id']]='Q'.$n++; } return $r; }
-
-function initData(): void {
-  if(file_exists(pathOf('surveys.json')))return;
-  $sv1=['id'=>rid('sv_'),'name'=>'新サービス利用満足度調査 2026','description'=>'新サービスをご利用いただいた皆さまから、利用状況や満足度についてお伺いします。','status'=>'published','startAt'=>'2026-01-01T00:00:00+09:00','endAt'=>'2026-12-31T23:59:59+09:00','numberingFormat'=>'group','groups'=>[
-    ['id'=>rid('g_'),'name'=>'利用状況','questions'=>[
-      ['id'=>'q_usage','text'=>'サービスをどのくらいの頻度で利用していますか？','type'=>'single','required'=>true,'choices'=>[['id'=>'c_daily','label'=>'毎日'],['id'=>'c_weekly','label'=>'週に数回'],['id'=>'c_monthly','label'=>'月に数回'],['id'=>'c_rarely','label'=>'ほとんど利用しない']],'branches'=>[]],
-      ['id'=>'q_sat','text'=>'総合的な満足度を教えてください。','type'=>'single','required'=>true,'choices'=>[['id'=>'c_vgood','label'=>'とても満足'],['id'=>'c_good','label'=>'満足'],['id'=>'c_neutral','label'=>'どちらともいえない'],['id'=>'c_bad','label'=>'不満'],['id'=>'c_vbad','label'=>'とても不満']],'branches'=>[]]
-    ]],['id'=>rid('g_'),'name'=>'ご意見','questions'=>[['id'=>'q_comment','text'=>'今後改善してほしい点があれば教えてください。','type'=>'text','required'=>false,'choices'=>[],'branches'=>[]]]]],'createdAt'=>'2026-01-05T10:00:00+09:00','updatedAt'=>nowi()];
-  $sv2=['id'=>rid('sv_'),'name'=>'ユーザー会参加希望アンケート','description'=>'次回ユーザー会への参加希望についてお聞かせください。','status'=>'draft','startAt'=>nowi(),'endAt'=>(new DateTimeImmutable('+1 month'))->format('c'),'numberingFormat'=>'global','groups'=>[['id'=>rid('g_'),'name'=>'参加希望','questions'=>[['id'=>'q_join','text'=>'次回ユーザー会に参加したいですか？','type'=>'single','required'=>true,'choices'=>[['id'=>'c_yes','label'=>'参加したい'],['id'=>'c_no','label'=>'参加しない']],'branches'=>[]],['id'=>'q_reason','text'=>'参加したい理由を教えてください。','type'=>'text','required'=>false,'choices'=>[],'branches'=>[]]]]],'createdAt'=>nowi(),'updatedAt'=>nowi()];
-  writeJson('surveys.json',[$sv1,$sv2]);
-  writeJson('customers.json',[
-    ['id'=>'cust_001','name'=>'山田 太郎','email'=>'taro@example.com','company'=>'サンプル株式会社','phone'=>'090-1111-2222','address'=>'東京都 港区 赤坂1-1-1 サンプルビル101','addressParts'=>[],'updatedAt'=>nowi()],
-    ['id'=>'cust_002','name'=>'佐藤 花子','email'=>'hanako@example.com','company'=>'テスト商事','phone'=>'03-1234-5678','address'=>'東京都 千代田区 1-2-3','addressParts'=>[],'updatedAt'=>nowi()],
-    ['id'=>'cust_003','name'=>'鈴木 一郎','email'=>'ichiro@example.com','company'=>'デモ企業','phone'=>'080-3333-4444','address'=>'大阪府 大阪市 北区 4-5-6','addressParts'=>[],'updatedAt'=>nowi()]
-  ]);
-  writeJson('responses.json',[]);writeJson('answer_tokens.json',[]);writeJson('send_logs.json',[]);
-  writeJson('settings.json',['smtp'=>['host'=>'','port'=>587,'secure'=>'tls','username'=>'','password'=>'','fromEmail'=>'','fromName'=>'アンケート事務局'],'kintone'=>['subdomain'=>'','appId'=>'','login'=>'','password'=>'','nameField'=>'会社名','emailField'=>'メールアドレス','proxyHostPort'=>'','verifySsl'=>false]]);
+function h(?string $str): string {
+    return htmlspecialchars($str ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
-function validateSurveyDraft(array $s): array {
-  $e=[];$gids=[];$qids=[];
-  if(!is_array($s['groups']??null))$e['groups']='グループデータが正しくありません。';
-  foreach(($s['groups']??[]) as $gi=>$g){
-    if(!is_array($g)){$e['group'.$gi]='グループデータが正しくありません。';continue;}
-    $gid=(string)($g['id']??'');
-    if($gid===''||isset($gids[$gid]))$e['group'.$gi]='グループIDが不正です。';
-    $gids[$gid]=1;
-    if(!is_array($g['questions']??null)){$e['gquestions'.$gi]='質問データが正しくありません。';continue;}
-    foreach($g['questions'] as $qi=>$q){
-      if(!is_array($q)){$e['question'.$gi.'_'.$qi]='質問データが正しくありません。';continue;}
-      $qid=(string)($q['id']??'');
-      if($qid===''||isset($qids[$qid]))$e['qid'.$gi.'_'.$qi]='質問IDが不正です。';
-      $qids[$qid]=1;
-      if(!in_array((string)($q['type']??''),['text','single','multiple'],true))$e['qtype'.$gi.'_'.$qi]='回答形式が不正です。';
-      if(!is_array($q['choices']??null))$e['choices'.$gi.'_'.$qi]='選択肢データが正しくありません。';
-      $cids=[];
-      foreach(($q['choices']??[]) as $ci=>$c){
-        if(!is_array($c)){$e['choice'.$gi.'_'.$qi.'_'.$ci]='選択肢データが正しくありません。';continue;}
-        $cid=(string)($c['id']??'');
-        if($cid===''||isset($cids[$cid]))$e['cid'.$gi.'_'.$qi.'_'.$ci]='選択肢IDが不正です。';
-        $cids[$cid]=1;
-      }
-      if(!is_array($q['branches']??null))$e['branchdata'.$gi.'_'.$qi]='分岐データが正しくありません。';
-    }
-  }
-  return $e;
+function now_iso(): string {
+    return date('c');
 }
 
-function validateSurvey(array $s): array {
-  $e=[];$name=trim((string)($s['name']??''));if($name==='')$e['name']='アンケート名は必須です。';
-  try{if(new DateTimeImmutable((string)$s['endAt'])<new DateTimeImmutable((string)$s['startAt']))$e['period']='公開終了日時は開始日時以降にしてください。';}catch(\Throwable){$e['period']='公開期間が正しくありません。';}
-  $gids=[];$qids=[];
-  foreach(($s['groups']??[]) as $gi=>$g){$gid=(string)($g['id']??'');if($gid===''||isset($gids[$gid]))$e['group'.$gi]='グループIDが不正です。';$gids[$gid]=1;if(trim((string)($g['name']??''))==='')$e['gname'.$gi]='グループ名は必須です。';
-    foreach(($g['questions']??[]) as $qi=>$q){$qid=(string)($q['id']??'');if($qid===''||isset($qids[$qid]))$e['qid'.$gi.'_'.$qi]='質問IDが不正です。';$qids[$qid]=1;if(trim((string)($q['text']??''))==='')$e['qtext'.$gi.'_'.$qi]='質問文は必須です。';$type=(string)($q['type']??'');if(!in_array($type,['text','single','multiple'],true)){$e['qtype'.$gi.'_'.$qi]='回答形式が不正です。';continue;}
-      $choices=is_array($q['choices']??null)?$q['choices']:[];if($type==='text'&&$choices!==[])$e['choices'.$gi.'_'.$qi]='自由記述に選択肢は設定できません。';if($type!=='text'&&!$choices)$e['choices'.$gi.'_'.$qi]='選択肢を1つ以上設定してください。';$cids=[];foreach($choices as $ci=>$c){$cid=(string)($c['id']??'');$lab=trim((string)($c['label']??''));if($cid===''||isset($cids[$cid]))$e['cid'.$gi.'_'.$qi.'_'.$ci]='選択肢IDが不正です。';$cids[$cid]=1;if($lab==='')$e['clabel'.$gi.'_'.$qi.'_'.$ci]='選択肢の文言は必須です。';}
-      if($type!=='single'&&!empty($q['branches']))$e['branch'.$gi.'_'.$qi]='分岐は単一選択のみです.';
+function json_path(string $key): string {
+    if (!isset(JSON_FILES[$key])) {
+        throw new RuntimeException('データ定義が不正です。');
     }
-  }
-  $qm=qmap($s);foreach(($s['groups']??[]) as $gi=>$g)foreach(($g['questions']??[]) as $qi=>$q)if(($q['type']??'')==='single')foreach(($q['branches']??[]) as $cid=>$target){$target=(string)$target;if($target===''||$target==='next'||$target==='end')continue;$tid=str_starts_with($target,'question:')?substr($target,9):$target;if(!isset($qm[$tid]))$e['bt'.$gi.'_'.$qi]='分岐先の質問が存在しません。';}
-  if(empty($s['groups']))$e['groups']='グループを1つ以上設定してください。';
-  if(count(questions($s))===0)$e['questions']='質問を1つ以上設定してください。';
-  if(!$e&&cycle($s))$e['branches']='分岐に循環が存在します。';
-  return $e;
-}
-function cycle(array $s): bool {
-  $qs=questions($s); $ix=[]; foreach($qs as $i=>$q)$ix[$q['id']]=$i; $graph=[];
-  foreach($qs as $i=>$q){$targets=[];if(isset($qs[$i+1]))$targets[]=$qs[$i+1]['id'];if(($q['type']??'')==='single')foreach(($q['branches']??[]) as $t){$t=(string)$t;if($t===''||$t==='end')continue;if($t==='next'){if(isset($qs[$i+1]))$targets[]=$qs[$i+1]['id'];}else{$tid=str_starts_with($t,'question:')?substr($t,9):$t;if(isset($ix[$tid]))$targets[]=$tid;}}$graph[$q['id']]=array_values(array_unique($targets));}
-  $state=[]; $visit=function(string $id) use (&$visit,&$state,$graph): bool { $state[$id]=1;foreach($graph[$id]??[] as $next){if(($state[$next]??0)===1)return true;if(($state[$next]??0)===0&&$visit($next))return true;}$state[$id]=2;return false;};
-  foreach(array_keys($graph) as $id)if(($state[$id]??0)===0&&$visit($id))return true;return false;
-}
-function reachable(array $s,array $answers): array { $qs=questions($s);$ix=[];foreach($qs as $i=>$q)$ix[$q['id']]=$i;$out=[];$i=0;$seen=[];$guard=0;while(isset($qs[$i])&&$guard++<10000){$q=$qs[$i];if(isset($seen[$q['id']]))break;$seen[$q['id']]=1;$out[$q['id']]=1;if(($q['type']??'')!=='single'){$i++;continue;}$a=$answers[$q['id']]??null;$target='next';foreach(($q['choices']??[]) as $c)if((string)$c['id']===(string)$a)$target=(string)(($q['branches']??[])[$c['id']]??'next');if($target==='end')break;if($target===''||$target==='next'){$i++;continue;}$tid=str_starts_with($target,'question:')?substr($target,9):$target;if(!isset($ix[$tid]))break;$i=$ix[$tid];}return array_keys($out); }
-function validateAnswers(array $s,array $a): array { $e=[];$qm=qmap($s);$allow=array_fill_keys(reachable($s,$a),1);foreach($a as $qid=>$v){if(!isset($qm[$qid])){$e[$qid]='存在しない質問です。';continue;}if(!isset($allow[$qid]))continue;$q=$qm[$qid];$set=[];foreach(($q['choices']??[]) as $c)$set[$c['id']]=1;if($q['type']==='text'){if(!is_string($v)||mb_strlen($v)>10000)$e[$qid]='自由記述の値が正しくありません。';}elseif($q['type']==='single'){if(!is_string($v)||!isset($set[$v]))$e[$qid]='選択肢が正しくありません。';}else{if(!is_array($v)||count(array_unique($v))!==count($v))$e[$qid]='複数選択の値が正しくありません。';else foreach($v as $x)if(!isset($set[$x]))$e[$qid]='選択肢が正しくありません。';}}
-  foreach($qm as $qid=>$q)if(isset($allow[$qid])&&($q['required']??false)){ $v=$a[$qid]??null;if($v===null||$v===''||($q['type']==='multiple'&&(!$v||count($v)===0)))$e[$qid]='必須項目です。'; }
-  return $e;
-}
-function safeHeaders(): array { return http_get_last_response_headers() ?? []; }
-function kurl(string $domain,string $endpoint): string { $d=trim($domain);$d=preg_replace('/^https?:\/\//i','',$d)??'';$d=preg_replace('/\.cybozu\.com.*$/i','',$d)??$d;$d=trim($d," /\t\r\n");if($d==='')throw new RuntimeException('kintoneのサブドメインを設定してください。');return 'https://'.$d.'.cybozu.com/'.ltrim($endpoint,'/'); }
-function kreq(string $method,string $url,array $headers,mixed $payload=null,array $cfg=[]): array {
-  $o=['method'=>strtoupper($method),'header'=>implode("\r\n",$headers),'ignore_errors'=>true,'timeout'=>20];
-  if(strtoupper($method)!=='GET'&&$payload!==null)$o['content']=is_array($payload)?jp($payload):(string)$payload;
-  $co=['http'=>$o,'ssl'=>['verify_peer'=>(bool)($cfg['verify_ssl']??false),'verify_peer_name'=>(bool)($cfg['verify_ssl']??false)]];
-  $proxy=trim((string)($cfg['proxy']??''));if($proxy!==''){$co['http']['proxy']='tcp://'.$proxy;$co['http']['request_fulluri']=true;}
-  $ctx=stream_context_create($co);$body=@file_get_contents($url,false,$ctx);$hs=safeHeaders();$status=500;if($hs&&preg_match('/HTTP\/\d\.\d\s+(\d+)/i',$hs[0],$m))$status=(int)$m[1];$d=is_string($body)?json_decode($body,true):null;
-  if($body!==false&&$status>=200&&$status<300)return ['success'=>true,'status'=>$status,'data'=>is_array($d)?$d:[]];
-  $msg=is_array($d)?(string)($d['message']??'kintone API通信でエラーが発生しました。'):'kintone API通信でエラーが発生しました。';
-  if(is_array($d['errors']??null)){foreach($d['errors'] as $field=>$err)if(is_array($err)&&!empty($err['messages']))$msg.=' '.$field.':'.implode(',',array_map('strval',$err['messages']));}
-  return ['success'=>false,'status'=>$status,'message'=>$msg,'data'=>is_array($d)?$d:[]];
-}
-function krequestFromSettings(array $settings,string $method,string $endpoint,mixed $payload=null): array {
-  $k=$settings['kintone']??[];$sub=(string)($k['subdomain']??'');$login=(string)($k['login']??'');$pass=(string)($k['password']??'');if($sub===''||$login===''||$pass==='')throw new RuntimeException('kintoneの接続設定が未完了です。');
-  $headers=['X-Cybozu-Authorization: '.base64_encode(trim($login).':'.trim($pass)),'Accept: application/json'];if(strtoupper($method)!=='GET')$headers[]='Content-Type: application/json';
-  return kreq($method,kurl($sub,$endpoint),$headers,$payload,['proxy'=>$k['proxyHostPort']??'','verify_ssl'=>(bool)($k['verifySsl']??false)]);
+    return __DIR__ . '/' . JSON_FILES[$key];
 }
 
-function kintoneMappingDefault(): array {return ['appId'=>'','fetchedAt'=>null,'schemaHash'=>'','fields'=>[],'mappings'=>['name'=>'','email'=>'','company'=>'','phone'=>'','address'=>[]],'mappingVersion'=>0,'updatedAt'=>null];}
-
-function normalizeKintoneMappingSaved(array $mapping): array {
-  $d=kintoneMappingDefault();$out=$d;$out['appId']=(string)($mapping['appId']??'');$out['fetchedAt']=$mapping['fetchedAt']??null;$out['schemaHash']=(string)($mapping['schemaHash']??'');$out['fields']=is_array($mapping['fields']??null)?$mapping['fields']:[];
-  $m=is_array($mapping['mappings']??null)?$mapping['mappings']:[];$out['mappings']['name']=trim((string)($m['name']??''));$out['mappings']['email']=trim((string)($m['email']??''));$out['mappings']['company']=trim((string)($m['company']??''));$out['mappings']['phone']=trim((string)($m['phone']??''));
-  $addr=$m['address']??[];if(is_string($addr)){$decoded=json_decode($addr,true);$addr=is_array($decoded)?$decoded:[];}if(!is_array($addr))$addr=[];$clean=[];foreach($addr as $code){$code=trim((string)$code);if($code!==''&&!in_array($code,$clean,true))$clean[]=$code;}$out['mappings']['address']=$clean;
-  $out['mappingVersion']=(int)($mapping['mappingVersion']??0);$out['updatedAt']=$mapping['updatedAt']??null;return $out;
-}
-function normalizeKintoneFields(array $data): array {
-  $props=$data['properties']??[];if(!is_array($props))throw new RuntimeException('kintoneのフィールド定義を取得できませんでした。');
-  $out=[];foreach($props as $code=>$f){if(!is_array($f))continue;$fc=(string)($f['code']??$code);if($fc==='')continue;$options=[];if(is_array($f['options']??null))foreach($f['options'] as $ok=>$ov)$options[(string)$ok]=is_array($ov)?(string)($ov['label']??$ok):(string)$ov;$lookup=$f['lookup']??null;$protocol=strtoupper((string)($f['protocol']??''));$out[$fc]=['code'=>$fc,'label'=>trim((string)($f['label']??$fc)),'type'=>strtoupper((string)($f['type']??'')),'required'=>(bool)($f['required']??false),'options'=>$options,'lookup'=>is_array($lookup)&&$lookup!==[],'protocol'=>$protocol];}
-  uasort($out,function(array $a,array $b): int{return strcmp($a['code'],$b['code']);});return array_values($out);
-}
-function kintoneSchemaHash(array $fields): string {$rows=[];foreach($fields as $f)$rows[]=['code'=>(string)($f['code']??''),'label'=>(string)($f['label']??''),'type'=>(string)($f['type']??''),'protocol'=>(string)($f['protocol']??''),'required'=>(bool)($f['required']??false),'options'=>$f['options']??[]];usort($rows,function(array $a,array $b): int{return strcmp($a['code'],$b['code']);});return hash('sha256',jp($rows));}
-function kintoneFieldsFromSettings(array $settings): array {
-  $k=$settings['kintone']??[];$app=(int)($k['appId']??0);if($app<=0)throw new RuntimeException('kintoneのアプリIDを設定してください。');$ep='/k/v1/app/form/fields.json?'.http_build_query(['app'=>$app],'','&',PHP_QUERY_RFC3986);$r=krequestFromSettings($settings,'GET',$ep);
-  if(!$r['success']){if(in_array((int)($r['status']??0),[401,403],true))throw new RuntimeException('kintoneの認証またはアプリへのアクセス権を確認してください。');throw new RuntimeException((string)($r['message']??'kintoneのフィールド定義を取得できませんでした。'));}
-  $fields=normalizeKintoneFields($r['data']);if(!$fields)throw new RuntimeException('kintoneのフィールド定義が取得できませんでした。');return ['appId'=>(string)$app,'fields'=>$fields,'schemaHash'=>kintoneSchemaHash($fields),'fetchedAt'=>nowi()];
-}
-function kintoneFieldMap(array $fields): array {$m=[];foreach($fields as $f)$m[(string)$f['code']]=$f;return $m;}
-function kintoneFieldSupported(string $target,array $field): bool {
-  $type=strtoupper((string)($field['type']??''));$protocol=strtoupper((string)($field['protocol']??''));if(!empty($field['lookup']))return false;
-  if($target==='email')return $type==='EMAIL'||$type==='SINGLE_LINE_TEXT'||($type==='LINK'&&$protocol==='MAIL');
-  if($target==='phone')return $type==='SINGLE_LINE_TEXT'||($type==='LINK'&&$protocol==='TEL');
-  if(in_array($target,['name','company','address'],true))return in_array($type,['SINGLE_LINE_TEXT','MULTI_LINE_TEXT'],true);return false;
-}
-function validateKintoneMapping(array $mappings,array $fields): array {
-  $errors=[];$fm=kintoneFieldMap($fields);$required=['name'=>'顧客名','email'=>'メールアドレス'];$used=[];
-  foreach($required as $key=>$label){$code=trim((string)($mappings[$key]??''));if($code===''){$errors[$key]=$label.'のマッピングが未設定です。';continue;}if(!isset($fm[$code])){$errors[$key]=$label.'に指定したフィールドが存在しません。';continue;}if(!kintoneFieldSupported($key,$fm[$code]))$errors[$key]=$label.'に指定したフィールドの種類は利用できません。';if(isset($used[$code])&&$used[$code]!==$key)$errors[$key]='同じkintoneフィールドを複数の顧客項目へ割り当てています。';$used[$code]=$key;}
-  foreach(['company'=>'会社名','phone'=>'電話番号'] as $key=>$label){$code=trim((string)($mappings[$key]??''));if($code==='')continue;if(!isset($fm[$code])){$errors[$key]=$label.'に指定したフィールドが存在しません。';continue;}if(!kintoneFieldSupported($key,$fm[$code]))$errors[$key]=$label.'に指定したフィールドの種類は利用できません。';elseif(isset($used[$code]))$errors[$key]='同じkintoneフィールドを複数の顧客項目へ割り当てています。';else $used[$code]=$key;}
-  $addr=$mappings['address']??[];if(is_string($addr)){$decoded=json_decode($addr,true);$addr=is_array($decoded)?$decoded:[];}if(!is_array($addr))$addr=[];$seen=[];foreach($addr as $n=>$code){$code=trim((string)$code);if($code==='')continue;if(isset($seen[$code])){$errors['address_'.$n]='住所に同じkintoneフィールドを重複指定しています。';continue;}$seen[$code]=true;if(!isset($fm[$code])){$errors['address_'.$n]='住所に指定したフィールドが存在しません。';continue;}if(!kintoneFieldSupported('address',$fm[$code])){$errors['address_'.$n]='住所に指定したフィールドの種類は利用できません。';continue;}if(isset($used[$code]))$errors['address_'.$n]='住所で指定したkintoneフィールドが他の顧客項目と重複しています。';else $used[$code]='address_'.$n;}
-  return $errors;
-}
-function kintoneMappingIsCurrent(array $mapping,array $current): bool {return (string)($mapping['appId']??'')===(string)($current['appId']??'')&&(string)($mapping['schemaHash']??'')!==''&&hash_equals((string)$mapping['schemaHash'],(string)($current['schemaHash']??''));}
-function fetchKintoneCustomerRecords(array $settings,array $mapping): array {
-  $k=$settings['kintone']??[];$app=(int)($k['appId']??0);if($app<=0)throw new RuntimeException('kintoneのアプリIDを設定してください。');$mm=$mapping['mappings']??[];$codes=['$id'];foreach(['name','email','company','phone'] as $target){$code=trim((string)($mm[$target]??''));if($code!=='')$codes[]=$code;}$addr=$mm['address']??[];if(is_string($addr)){$decoded=json_decode($addr,true);$addr=is_array($decoded)?$decoded:[];}if(is_array($addr))foreach($addr as $code){$code=trim((string)$code);if($code!=='')$codes[]=$code;}$codes=array_values(array_unique($codes));
-  $created=krequestFromSettings($settings,'POST','/k/v1/records/cursor.json',['app'=>$app,'fields'=>$codes,'size'=>500]);if(!$created['success'])throw new RuntimeException((string)($created['message']??'kintoneの顧客情報を取得できませんでした。'));$cursorId=(string)($created['data']['id']??'');if($cursorId==='')throw new RuntimeException('kintoneの顧客取得カーソルを作成できませんでした。');$records=[];$next=true;
-  try{while($next){$ep='/k/v1/records/cursor.json?'.http_build_query(['id'=>$cursorId],'','&',PHP_QUERY_RFC3986);$r=krequestFromSettings($settings,'GET',$ep);if(!$r['success'])throw new RuntimeException((string)($r['message']??'kintoneの顧客情報取得に失敗しました。'));$batch=$r['data']['records']??[];if(!is_array($batch))$batch=[];foreach($batch as $rec)if(is_array($rec))$records[]=$rec;$next=(bool)($r['data']['next']??false);}}finally{$ep='/k/v1/records/cursor.json?'.http_build_query(['id'=>$cursorId],'','&',PHP_QUERY_RFC3986);try{krequestFromSettings($settings,'DELETE',$ep,null);}catch(\Throwable){}}
-  return $records;
-}
-function kvalue(array $record,string $code): string {$v=$record[$code]['value']??'';return is_scalar($v)?trim((string)$v):'';}
-function kintoneAddressCodes(array $mappings): array {$addr=$mappings['address']??[];if(is_string($addr)){$decoded=json_decode($addr,true);$addr=is_array($decoded)?$decoded:[];}if(!is_array($addr))$addr=[];$out=[];foreach($addr as $code){$code=trim((string)$code);if($code!==''&&!in_array($code,$out,true))$out[]=$code;}return $out;}
-function kintoneAddressParts(array $record,array $fields,array $codes): array {$fm=kintoneFieldMap($fields);$parts=[];foreach($codes as $code){$v=kvalue($record,$code);if($v==='')continue;$parts[]=['code'=>$code,'label'=>(string)($fm[$code]['label']??$code),'value'=>$v];}return $parts;}
-function kintoneAddressCombined(array $parts): string {$out=[];foreach($parts as $part){$v=trim((string)($part['value']??''));if($v!=='')$out[]=$v;}return implode(' ',$out);}
-function buildKintoneSyncPreview(array $customers,array $records,array $mapping): array {
-  $local=[];foreach($customers as $c){$rid=(string)($c['kintoneRecordId']??'');if($rid!=='')$local[$rid]=$c;}$remote=[];$rows=[];$new=0;$updated=0;$unchanged=0;$errors=[];$mm=$mapping['mappings']??[];$fields=is_array($mapping['fields']??null)?$mapping['fields']:[];$addressCodes=kintoneAddressCodes($mm);
-  foreach($records as $rec){$rid=kvalue($rec,'$id');if($rid===''){$errors[]='レコード番号を取得できない顧客レコードがあります。';continue;}$name=kvalue($rec,(string)($mm['name']??''));$email=kvalue($rec,(string)($mm['email']??''));$company=kvalue($rec,(string)($mm['company']??''));$phone=kvalue($rec,(string)($mm['phone']??''));$addressParts=kintoneAddressParts($rec,$fields,$addressCodes);$address=kintoneAddressCombined($addressParts);$remote[$rid]=true;$row=['kintoneRecordId'=>$rid,'name'=>$name,'email'=>$email,'company'=>$company,'phone'=>$phone,'address'=>$address,'addressParts'=>$addressParts,'status'=>''];
-    if($name===''||$email===''||!filter_var($email,FILTER_VALIDATE_EMAIL)){$row['status']='error';$row['error']=$name===''?'顧客名が空です。':($email===''?'メールアドレスが空です。':'メールアドレスの形式が正しくありません。');$errors[]=$rid.'：'.$row['error'];$rows[]=$row;continue;}
-    if(isset($local[$rid])){$same=(string)($local[$rid]['name']??'')===$name&&(string)($local[$rid]['email']??'')===$email&&(string)($local[$rid]['company']??'')===$company&&(string)($local[$rid]['phone']??'')===$phone&&(string)($local[$rid]['address']??'')===$address&&(string)($local[$rid]['status']??'')==='active';if($same){$unchanged++;$row['status']='unchanged';}else{$updated++;$row['status']='updated';}}else{$new++;$row['status']='new';}$rows[]=$row;
-  }
-  $inactive=0;foreach($local as $rid=>$c)if(!isset($remote[$rid]))$inactive++;return ['totalCount'=>count($records),'newCount'=>$new,'updatedCount'=>$updated,'unchangedCount'=>$unchanged,'inactiveCount'=>$inactive,'errorCount'=>count($errors),'errors'=>array_slice($errors,0,50),'rows'=>array_slice($rows,0,100)];
-}
-function openKintoneSyncLock(){ $p=pathOf('kintone_sync.lock');$fp=fopen($p,'c+b');if($fp===false)throw new RuntimeException('kintone同期の排他制御を開始できません。');if(!flock($fp,LOCK_EX|LOCK_NB)){fclose($fp);throw new RuntimeException('kintone同期は現在実行中です。');}return $fp; }
-function smtpRead($s): array {
-  $lines=[];
-  while(!feof($s)){
-    $line=fgets($s,4096);
-    if($line===false)break;
-    $line=rtrim($line,"\r\n");
-    $lines[]=$line;
-    if(preg_match('/^\d{3} /',$line))break;
-  }
-  $code=0;
-  if(preg_match('/^(\d{3})/',$lines[0]??'', $m))$code=(int)$m[1];
-  return [$code,$lines];
-}
-function smtpResponseText(array $lines): string {
-  $safe=[];
-  foreach($lines as $line){
-    $line=(string)$line;
-    $line=preg_replace('/\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\b/u','[email]',$line)??$line;
-    $safe[]=$line;
-  }
-  $text=implode(' | ',$safe);
-  return $text===''?'SMTPサーバーから応答がありません。':$text;
-}
-function smtpCommandName(string $cmd): string {
-  $first=preg_split('/\s+/',$cmd,2)[0]??'';
-  return strtoupper((string)$first);
-}
-function smtpCmd($s,string $cmd,array $ok): array {
-  $written=fwrite($s,$cmd."\r\n");
-  if($written===false)throw new RuntimeException(smtpCommandName($cmd).'の送信に失敗しました。');
-  [$code,$lines]=smtpRead($s);
-  if(!in_array($code,$ok,true)){
-    throw new RuntimeException(smtpCommandName($cmd).'に失敗しました。応答コード='.$code.' 応答='.smtpResponseText($lines));
-  }
-  return [$code,$lines];
-}
-function smtpAuthMethods(array $lines): array {
-  $methods=[];
-  foreach($lines as $line){
-    $line=preg_replace('/^250[\- ]?/i','',$line)??$line;
-    if(preg_match('/^AUTH(?:=|\s+)(.+)$/i',trim($line),$m)){
-      foreach(preg_split('/\s+/',$m[1]) as $method){
-        $method=strtoupper(trim($method));
-        if($method!=='')$methods[$method]=true;
-      }
-    }
-  }
-  return array_keys($methods);
-}
-function smtpOpen(array $cfg) {
-  $host=trim((string)($cfg['host']??''));
-  $port=(int)($cfg['port']??0);
-  $secure=strtolower(trim((string)($cfg['secure']??'tls')));
-  $user=(string)($cfg['username']??'');
-  $pass=(string)($cfg['password']??'');
-  if($host===''||$port<=0)throw new RuntimeException('SMTPホストとポートを設定してください。');
-  if(!in_array($secure,['none','ssl','tls'],true))throw new RuntimeException('SMTP暗号化方式が正しくありません。');
-
-  $remote=($secure==='ssl'?'ssl://':'tcp://').$host.':'.$port;
-  $ctx=stream_context_create(['ssl'=>['verify_peer'=>false,'verify_peer_name'=>false,'allow_self_signed'=>true]]);
-  $s=@stream_socket_client($remote,$errno,$errstr,15,STREAM_CLIENT_CONNECT,$ctx);
-  if($s===false){
-    $detail=trim((string)$errstr);
-    throw new RuntimeException($detail!==''?'SMTPサーバーへ接続できません。'.$detail:'SMTPサーバーへ接続できません。');
-  }
-  stream_set_timeout($s,15);
-
-  [$code,$greeting]=smtpRead($s);
-  if($code<200||$code>=400){
-    fclose($s);
-    throw new RuntimeException('SMTPサーバーの初期応答が不正です。応答コード='.$code.' 応答='.smtpResponseText($greeting));
-  }
-
-  [$ehloCode,$ehloLines]=smtpCmd($s,'EHLO localhost',[250]);
-  if($secure==='tls'){
-    $hasStartTls=false;
-    foreach($ehloLines as $line){
-      if(preg_match('/^250[\- ]STARTTLS(?:\s|$)/i',$line)){$hasStartTls=true;break;}
-    }
-    if(!$hasStartTls){
-      fclose($s);
-      throw new RuntimeException('SMTPサーバーがSTARTTLSを提供していません。');
-    }
-    smtpCmd($s,'STARTTLS',[220]);
-    $crypto=stream_socket_enable_crypto($s,true,STREAM_CRYPTO_METHOD_TLS_CLIENT);
-    if($crypto!==true){
-      fclose($s);
-      throw new RuntimeException('SMTPのTLS接続に失敗しました。');
-    }
-    [, $ehloLines]=smtpCmd($s,'EHLO localhost',[250]);
-  }
-
-  if($user!==''){
-    $methods=smtpAuthMethods($ehloLines);
-    if(in_array('LOGIN',$methods,true)){
-      smtpCmd($s,'AUTH LOGIN',[334]);
-      smtpCmd($s,base64_encode($user),[334]);
-      smtpCmd($s,base64_encode($pass),[235]);
-    }elseif(in_array('PLAIN',$methods,true)){
-      $initial=base64_encode("\0".$user."\0".$pass);
-      [$authCode,$authLines]=smtpCmd($s,'AUTH PLAIN '.$initial,[235,334]);
-      if($authCode===334)smtpCmd($s,$initial,[235]);
-    }else{
-      $shown=$methods?implode(', ',$methods):'なし';
-      fclose($s);
-      throw new RuntimeException('SMTPサーバーが利用可能な認証方式を通知していません。認証方式='.$shown);
-    }
-  }
-  return $s;
-}
-function smtpClose($s): void {if(is_resource($s)){@fwrite($s,"QUIT\r\n");fclose($s);}}
-function mh(string $s): string { return preg_match('/^[\x20-\x7E]*$/',$s)?$s:'=?UTF-8?B?'.base64_encode($s).'?='; }
-function smtpSend(array $cfg,string $to,string $toName,string $subject,string $body): void {
-  $from=trim((string)($cfg['fromEmail']??''));if(!filter_var($from,FILTER_VALIDATE_EMAIL))throw new RuntimeException('送信元メールアドレスが正しくありません。');if(!filter_var($to,FILTER_VALIDATE_EMAIL))throw new RuntimeException('送信先メールアドレスが正しくありません。');$s=smtpOpen($cfg);
-  try{smtpCmd($s,'MAIL FROM:<'.$from.'>',[250]);smtpCmd($s,'RCPT TO:<'.$to.'>',[250,251]);smtpCmd($s,'DATA',[354]);$h=['From: '.mh((string)($cfg['fromName']??'アンケート事務局')).' <'.$from.'>','To: '.mh($toName).' <'.$to.'>','Subject: '.mh($subject),'Date: '.date(DATE_RFC2822),'MIME-Version: 1.0','Content-Type: text/plain; charset=UTF-8','Content-Transfer-Encoding: 8bit'];$b=str_replace(["\r\n","\r"],"\n",$body);$b=preg_replace('/^\./m','..',$b)??$b;smtpCmd($s,implode("\r\n",$h)."\r\n\r\n".str_replace("\n","\r\n",$b)."\r\n.",[250]);}finally{smtpClose($s);}
-}
-function smtpSendTest(array $cfg,string $to): void { $subject='SMTP送信テスト'; $body="SMTPの送信テストです。\n\nこのメールが届けば、SMTP接続・認証・送信処理は正常です。\n送信日時：".nows(); smtpSend($cfg,$to,$to,$subject,$body); }
-function responseJson(array $r,int $status=200): never { while(ob_get_level()>0)ob_end_clean();http_response_code($status);header('Content-Type: application/json; charset=utf-8');echo jp($r);exit; }
-function ok(mixed $d=null): never { responseJson(['ok'=>true,'data'=>$d]); }
-function ng(string $code,string $msg,array $fields=[],int $status=400): never { responseJson(['ok'=>false,'error'=>['code'=>$code,'message'=>$msg,'fields'=>$fields]],$status); }
-function bodyJson(): array { $raw=file_get_contents('php://input');if($raw===false||trim($raw)==='')return [];try{$v=json_decode($raw,true,512,JSON_THROW_ON_ERROR);}catch(\Throwable){ng('INVALID_REQUEST','リクエスト形式が正しくありません。');}if(!is_array($v))ng('INVALID_REQUEST','リクエスト形式が正しくありません。');return $v; }
-function csrf(): void { $x=$_SERVER['HTTP_X_CSRF_TOKEN']??'';$e=$_SESSION[SKEY]['csrf']??'';if($e===''||!is_string($x)||!hash_equals($e,$x))ng('CSRF_ERROR','セッションが確認できません。',[],403); }
-function safeSettings(array $s): array {return ['smtp'=>['host'=>(string)($s['smtp']['host']??''),'port'=>(int)($s['smtp']['port']??587),'secure'=>(string)($s['smtp']['secure']??'tls'),'username'=>(string)($s['smtp']['username']??''),'fromEmail'=>(string)($s['smtp']['fromEmail']??''),'fromName'=>(string)($s['smtp']['fromName']??''),'passwordSet'=>(string)($s['smtp']['password']??'')!==''],'kintone'=>['subdomain'=>(string)($s['kintone']['subdomain']??''),'appId'=>(string)($s['kintone']['appId']??''),'login'=>(string)($s['kintone']['login']??''),'nameField'=>(string)($s['kintone']['nameField']??''),'emailField'=>(string)($s['kintone']['emailField']??''),'proxyHostPort'=>(string)($s['kintone']['proxyHostPort']??''),'verifySsl'=>(bool)($s['kintone']['verifySsl']??false),'passwordSet'=>(string)($s['kintone']['password']??'')!=='']];}
-function statsFor(string $sid,array $responses,array $logs): array { $ls=array_values(array_filter($logs,fn($x)=>(string)($x['surveyId']??'')===$sid));$rs=array_values(array_filter($responses,fn($x)=>(string)($x['surveyId']??'')===$sid));$sent=array_values(array_filter($ls,fn($x)=>in_array($x['status']??'', ['sent','answered'],true)));$sc=[];$ac=[];foreach($sent as $x)if($x['customerId']??'')$sc[(string)$x['customerId']] = true;foreach($rs as $x)if($x['customerId']??'')$ac[(string)$x['customerId']] = true;$answered=0;foreach($ac as $id=>$_)if(isset($sc[$id]))$answered++;$rate=count($sc)?round($answered/count($sc)*100,1):0;$daily=[];foreach($rs as $x){$d=substr((string)($x['answeredAt']??''),0,10);if($d)$daily[$d]=($daily[$d]??0)+1;}ksort($daily);$rec=[];foreach($sent as $x)if($x['customerId']??'')$rec[(string)$x['customerId']] = ['customerId'=>$x['customerId'],'name'=>$x['name'],'email'=>$x['email'],'status'=>'sent','sentAt'=>$x['sentAt']??''];foreach($rs as $x)if(($x['customerId']??'')!==''&&isset($rec[(string)$x['customerId']]))$rec[(string)$x['customerId']]['status']='answered';return ['responseCount'=>count($rs),'sentCount'=>count($sent),'deliveredCount'=>count($sent),'responseRate'=>$rate,'unansweredCount'=>max(0,count($sc)-$answered),'daily'=>$daily,'recipientStatuses'=>array_values($rec)];}
-function resultFor(array $s,array $responses): array { $rows=array_values(array_filter($responses,fn($x)=>(string)($x['surveyId']??'')===(string)$s['id']));$out=[];foreach(questions($s) as $q){$target=[];foreach($rows as $r){$a=is_array($r['answers']??null)?$r['answers']:[];if(in_array($q['id'],reachable($s,$a),true))$target[]=$r;}if($q['type']==='text'){ $texts=[];foreach($target as $r)if(($r['answers'][$q['id']]??'')!=='')$texts[]=['text'=>$r['answers'][$q['id']],'answeredAt'=>$r['answeredAt']??''];$out[]=['questionId'=>$q['id'],'type'=>'text','targetCount'=>count($target),'answeredCount'=>count($texts),'texts'=>$texts]; } else {$cnt=[];foreach(($q['choices']??[]) as $c)$cnt[$c['id']]=0;foreach($target as $r){$v=$r['answers'][$q['id']]??null;foreach(is_array($v)?$v:[$v] as $x)if(isset($cnt[$x]))$cnt[$x]++;}$cs=[];foreach(($q['choices']??[]) as $c){$n=$cnt[$c['id']]??0;$d=count($target);$cs[]=['id'=>$c['id'],'label'=>$c['label'],'count'=>$n,'percentage'=>$d?round($n/$d*100,1):0];}$out[]=['questionId'=>$q['id'],'type'=>$q['type'],'targetCount'=>count($target),'choices'=>$cs];}}return $out;}
-function apiRun(): void {
-  $api=(string)($_GET['api']??'');if($api==='')return;
-  try{
-    if($api==='bootstrap'&&($_SERVER['REQUEST_METHOD']??'GET')==='GET'){$d=allData();$sd=[];foreach($d['surveys'] as $s)$sd[]=['survey'=>$s,'stats'=>statsFor((string)$s['id'],$d['responses'],$d['logs']),'results'=>resultFor($s,$d['responses']),'logs'=>array_values(array_filter($d['logs'],fn($x)=>(string)($x['surveyId']??'')===(string)$s['id']))];ok(['csrfToken'=>$_SESSION[SKEY]['csrf'],'surveys'=>$d['surveys'],'customers'=>$d['customers'],'surveyData'=>$sd,'settings'=>safeSettings($d['settings']),'kintoneMapping'=>$d['kintoneMapping']]);}
-    if(($_SERVER['REQUEST_METHOD']??'POST')!=='POST') ng('INVALID_REQUEST','このAPIはPOSTで呼び出してください。',[],405);
-    $b=bodyJson();if(in_array($api,['save_survey','delete_survey','publish','close','save_settings','kintone_test','kintone_fields','kintone_mapping_validate','kintone_mapping_save','kintone_sync_preview','kintone_sync_execute','smtp_test','smtp_test_mail','send_mail','resend_failed'],true))csrf();$d=allData();
-    if($api==='save_survey'){
-      $s=$b['survey']??null;if(!is_array($s))ng('INVALID_REQUEST','アンケートデータが正しくありません。');$s['name']=trim((string)($s['name']??''));$s['description']=(string)($s['description']??'');$s['updatedAt']=nowi();$s['id']=(string)($s['id']??rid('sv_'));$s['createdAt']=$s['createdAt']??nowi();$s['status']=$s['status']??'draft';$s['groups']=is_array($s['groups']??null)?$s['groups']:[];
-      foreach($s['groups'] as &$g){$g['id']=(string)($g['id']??rid('g_'));$g['name']=trim((string)($g['name']??''));$g['questions']=is_array($g['questions']??null)?$g['questions']:[];foreach($g['questions'] as &$q){$q['id']=(string)($q['id']??rid('q_'));$q['text']=(string)($q['text']??'');$q['type']=in_array(($q['type']??''),['text','single','multiple'],true)?$q['type']:'text';$q['required']=(bool)($q['required']??false);$q['choices']=is_array($q['choices']??null)?$q['choices']:[];foreach($q['choices'] as &$c){$c['id']=(string)($c['id']??rid('c_'));$c['label']=(string)($c['label']??'');}unset($c);if(is_array($q['branches']??null)){if(array_is_list($q['branches']))$q['branches']=[];}else{$q['branches']=[];}}unset($q);}unset($g);
-      $er=validateSurveyDraft($s);if($er)ng('VALIDATION_ERROR','下書きデータの構造を確認してください。',$er);$i=surveyIndex($d['surveys'],$s['id']);if($i>=0){$s['createdAt']=$d['surveys'][$i]['createdAt']??$s['createdAt'];$s['status']=$d['surveys'][$i]['status']??'draft';$d['surveys'][$i]=$s;}else{$s['status']='draft';$d['surveys'][]=$s;}writeJson('surveys.json',$d['surveys']);ok(['survey'=>$s]);
-    }
-    if($api==='delete_survey'){$id=(string)($b['surveyId']??'');$i=surveyIndex($d['surveys'],$id);if($i<0)ng('NOT_FOUND','アンケートが見つかりません。',[],404);if(($d['surveys'][$i]['status']??'')!=='draft')ng('INVALID_STATE','下書きのアンケートだけ削除できます。');$d['surveys']=array_values(array_filter($d['surveys'],fn($x)=>(string)$x['id']!==$id));$d['responses']=array_values(array_filter($d['responses'],fn($x)=>(string)($x['surveyId']??'')!==$id));$d['tokens']=array_values(array_filter($d['tokens'],fn($x)=>(string)($x['surveyId']??'')!==$id));$d['logs']=array_values(array_filter($d['logs'],fn($x)=>(string)($x['surveyId']??'')!==$id));writeJson('surveys.json',$d['surveys']);writeJson('responses.json',$d['responses']);writeJson('answer_tokens.json',$d['tokens']);writeJson('send_logs.json',$d['logs']);ok(['surveyId'=>$id]);}
-    if($api==='publish'){$id=(string)($b['surveyId']??'');$i=surveyIndex($d['surveys'],$id);if($i<0)ng('NOT_FOUND','アンケートが見つかりません。',[],404);if(($d['surveys'][$i]['status']??'')!=='draft')ng('INVALID_STATE','下書きのアンケートだけ公開できます。');$er=validateSurvey($d['surveys'][$i]);if($er)ng('VALIDATION_ERROR','公開前に修正が必要です。',$er);$d['surveys'][$i]['status']='published';$d['surveys'][$i]['updatedAt']=nowi();writeJson('surveys.json',$d['surveys']);ok(['survey'=>$d['surveys'][$i]]);}
-    if($api==='close'){$id=(string)($b['surveyId']??'');$i=surveyIndex($d['surveys'],$id);if($i<0)ng('NOT_FOUND','アンケートが見つかりません。',[],404);if(($d['surveys'][$i]['status']??'')!=='published')ng('INVALID_STATE','公開中のアンケートだけ終了できます。');$d['surveys'][$i]['status']='closed';$d['surveys'][$i]['updatedAt']=nowi();writeJson('surveys.json',$d['surveys']);ok(['survey'=>$d['surveys'][$i]]);}
-    if($api==='save_settings'){$in=$b['settings']??[];if(!is_array($in))ng('INVALID_REQUEST','設定データが正しくありません。');$old=$d['settings'];$smtp=$in['smtp']??[];$k=$in['kintone']??[];$new=['smtp'=>['host'=>trim((string)($smtp['host']??'')),'port'=>max(1,(int)($smtp['port']??587)),'secure'=>in_array(($smtp['secure']??'tls'),['none','ssl','tls'],true)?$smtp['secure']:'tls','username'=>trim((string)($smtp['username']??'')),'password'=>trim((string)($smtp['password']??''))!==''?(string)$smtp['password']:(string)($old['smtp']['password']??''),'fromEmail'=>trim((string)($smtp['fromEmail']??'')),'fromName'=>trim((string)($smtp['fromName']??'アンケート事務局'))],'kintone'=>['subdomain'=>trim((string)($k['subdomain']??'')),'appId'=>trim((string)($k['appId']??'')),'login'=>trim((string)($k['login']??'')),'password'=>trim((string)($k['password']??''))!==''?(string)$k['password']:(string)($old['kintone']['password']??''),'nameField'=>trim((string)($k['nameField']??'')),'emailField'=>trim((string)($k['emailField']??'')),'proxyHostPort'=>trim((string)($k['proxyHostPort']??'')),'verifySsl'=>(bool)($k['verifySsl']??false)]];writeJson('settings.json',$new);ok(['settings'=>safeSettings($new)]);}
-    if($api==='kintone_test'){
-      $k=$d['settings']['kintone']??[];$app=(int)($k['appId']??0);if($app<=0)ng('VALIDATION_ERROR','kintoneのアプリIDを設定してください。');$ep='/k/v1/app.json?'.http_build_query(['id'=>$app],'','&',PHP_QUERY_RFC3986);$r=krequestFromSettings($d['settings'],'GET',$ep);
-      if(!$r['success']){if(in_array((int)($r['status']??0),[401,403],true))ng('KINTONE_AUTH_ERROR','kintoneの認証または対象アプリへのアクセス権を確認してください。',[],403);ng('KINTONE_ERROR',(string)$r['message']);}ok(['message'=>'kintoneへの接続と対象アプリの確認に成功しました。']);
-    }
-    if($api==='kintone_fields'){
-      $current=kintoneFieldsFromSettings($d['settings']);$mapping=is_array($d['kintoneMapping']??null)?$d['kintoneMapping']:kintoneMappingDefault();$mapping['appId']=$current['appId'];$mapping['fetchedAt']=$current['fetchedAt'];$mapping['schemaHash']=$current['schemaHash'];$mapping['fields']=$current['fields'];$mapping=normalizeKintoneMappingSaved($mapping);$mapping['updatedAt']=nowi();writeJson('kintone_mapping.json',$mapping);ok(['appId'=>$current['appId'],'fetchedAt'=>$current['fetchedAt'],'schemaHash'=>$current['schemaHash'],'fields'=>$current['fields'],'mappings'=>$mapping['mappings'],'mappingVersion'=>$mapping['mappingVersion']]);
-    }
-    if($api==='kintone_mapping_validate'){
-      $m=$b['mappings']??[];if(!is_array($m))ng('KINTONE_MAPPING_INVALID','マッピング内容が正しくありません。');$current=kintoneFieldsFromSettings($d['settings']);$mapping=$d['kintoneMapping'];if(!kintoneMappingIsCurrent($mapping,$current))ng('KINTONE_SCHEMA_CHANGED','kintoneのフィールド定義が最新状態ではありません。先にフィールド定義を取得してください。');$errors=validateKintoneMapping($m,$current['fields']);if($errors)ng('KINTONE_MAPPING_INVALID','マッピング内容を確認してください。',$errors);ok(['valid'=>true,'appId'=>$current['appId'],'schemaHash'=>$current['schemaHash'],'mappings'=>$m]);
-    }
-    if($api==='kintone_mapping_save'){
-      $m=$b['mappings']??[];if(!is_array($m))ng('KINTONE_MAPPING_INVALID','マッピング内容が正しくありません。');$current=kintoneFieldsFromSettings($d['settings']);$errors=validateKintoneMapping($m,$current['fields']);if($errors)ng('KINTONE_MAPPING_INVALID','マッピング内容を確認してください。',$errors);$mapping=$d['kintoneMapping'];$mapping['appId']=$current['appId'];$mapping['fetchedAt']=$current['fetchedAt'];$mapping['schemaHash']=$current['schemaHash'];$mapping['fields']=$current['fields'];$mapping['mappings']=['name'=>trim((string)($m['name']??'')),'email'=>trim((string)($m['email']??'')),'company'=>trim((string)($m['company']??'')),'phone'=>trim((string)($m['phone']??'')),'address'=>kintoneAddressCodes($m)];$mapping['mappingVersion']=(int)($mapping['mappingVersion']??0)+1;$mapping['updatedAt']=nowi();writeJson('kintone_mapping.json',$mapping);ok(['mapping'=>$mapping]);
-    }
-    if($api==='kintone_sync_preview'){
-      $mapping=$d['kintoneMapping'];$current=kintoneFieldsFromSettings($d['settings']);if(!kintoneMappingIsCurrent($mapping,$current))ng('KINTONE_SCHEMA_CHANGED','kintoneの顧客アプリの項目構成が変更されています。フィールド定義を取得してマッピングを確認してください。');$errors=validateKintoneMapping($mapping['mappings']??[],$current['fields']);if($errors)ng('KINTONE_MAPPING_INVALID','マッピング内容を確認してください。',$errors);$records=fetchKintoneCustomerRecords($d['settings'],$mapping);$preview=buildKintoneSyncPreview($d['customers'],$records,$mapping);$preview['appId']=$current['appId'];$preview['schemaHash']=$current['schemaHash'];$preview['fetchedAt']=$current['fetchedAt'];ok(['preview'=>$preview]);
-    }
-    if($api==='kintone_sync_execute'){
-      $lock=openKintoneSyncLock();$responseError=null;$successData=null;
-      try{
-        $mapping=$d['kintoneMapping'];$current=kintoneFieldsFromSettings($d['settings']);
-        if(!kintoneMappingIsCurrent($mapping,$current))$responseError=['code'=>'KINTONE_SCHEMA_CHANGED','message'=>'kintoneの顧客アプリの項目構成が変更されています。フィールド定義を取得してマッピングを確認してください。','fields'=>[],'status'=>400];
-        if($responseError===null){$errors=validateKintoneMapping($mapping['mappings']??[],$current['fields']);if($errors)$responseError=['code'=>'KINTONE_MAPPING_INVALID','message'=>'マッピング内容を確認してください。','fields'=>$errors,'status'=>400];}
-        if($responseError===null){$records=fetchKintoneCustomerRecords($d['settings'],$mapping);$preview=buildKintoneSyncPreview($d['customers'],$records,$mapping);if((int)$preview['errorCount']>0)$responseError=['code'=>'KINTONE_SYNC_ERROR','message'=>'同期対象データにエラーがあります。同期を実行できません。','fields'=>['errors'=>$preview['errors']],'status'=>400];}
-        if($responseError===null){$localByRid=[];foreach($d['customers'] as $idx=>$c){$rid=(string)($c['kintoneRecordId']??'');if($rid!=='')$localByRid[$rid]=$idx;}$remoteIds=[];$created=0;$updated=0;$unchanged=0;
-          foreach($records as $rec){$rid=kvalue($rec,'$id');$remoteIds[$rid]=true;$name=kvalue($rec,(string)$mapping['mappings']['name']);$email=kvalue($rec,(string)$mapping['mappings']['email']);$company=kvalue($rec,(string)($mapping['mappings']['company']??''));$phone=kvalue($rec,(string)($mapping['mappings']['phone']??''));$addressParts=kintoneAddressParts($rec,is_array($mapping['fields']??null)?$mapping['fields']:[],kintoneAddressCodes($mapping['mappings']??[]));$address=kintoneAddressCombined($addressParts);$new=['name'=>$name,'email'=>$email,'company'=>$company,'phone'=>$phone,'address'=>$address,'addressParts'=>$addressParts,'status'=>'active','kintoneRecordId'=>$rid,'kintoneUpdatedAt'=>nowi(),'syncStatus'=>'synced','syncError'=>'','updatedAt'=>nowi()];if(isset($localByRid[$rid])){$idx=$localByRid[$rid];$same=(string)($d['customers'][$idx]['name']??'')===$name&&(string)($d['customers'][$idx]['email']??'')===$email&&(string)($d['customers'][$idx]['company']??'')===$company&&(string)($d['customers'][$idx]['phone']??'')===$phone&&(string)($d['customers'][$idx]['address']??'')===$address&&(string)($d['customers'][$idx]['status']??'')==='active';$d['customers'][$idx]=array_merge($d['customers'][$idx],$new);if($same)$unchanged++;else $updated++;}else{$new['id']=rid('cust_');$d['customers'][]=$new;$created++;}}
-          $inactive=0;foreach($d['customers'] as &$c){$rid=(string)($c['kintoneRecordId']??'');if($rid!==''&&!isset($remoteIds[$rid])){$c['status']='inactive';$c['syncStatus']='remote_missing';$c['syncError']='kintone側に該当レコードがありません。';$c['updatedAt']=nowi();$inactive++;}}unset($c);writeJson('customers.json',$d['customers']);$log=['syncId'=>rid('sync_'),'startedAt'=>nows(),'finishedAt'=>nows(),'appId'=>$current['appId'],'schemaHash'=>$current['schemaHash'],'mappingVersion'=>(int)($mapping['mappingVersion']??0),'totalCount'=>count($records),'createdCount'=>$created,'updatedCount'=>$updated,'unchangedCount'=>$unchanged,'inactiveCount'=>$inactive,'skippedCount'=>0,'errorCount'=>0,'status'=>'success','errorSummary'=>''];$d['kintoneSyncLogs'][]=$log;writeJson('kintone_sync_logs.json',$d['kintoneSyncLogs']);$successData=['customers'=>$d['customers'],'result'=>['totalCount'=>count($records),'createdCount'=>$created,'updatedCount'=>$updated,'unchangedCount'=>$unchanged,'inactiveCount'=>$inactive],'syncId'=>$log['syncId']];
+function ensure_data_files(): void {
+    foreach (JSON_FILES as $name => $file) {
+        $path = __DIR__ . '/' . $file;
+        if (is_file($path)) {
+            continue;
         }
-      }catch(\Throwable $e){$responseError=['code'=>'KINTONE_ERROR','message'=>$e->getMessage(),'fields'=>[],'status'=>400];}
-      finally{flock($lock,LOCK_UN);fclose($lock);}
-      if($responseError!==null)ng((string)$responseError['code'],(string)$responseError['message'],is_array($responseError['fields'])?$responseError['fields']:[],(int)$responseError['status']);
-      ok($successData);
+        $initial = [];
+        if ($name === 'settings') {
+            $initial = [
+                'smtp' => [
+                    'host' => '', 'port' => '587', 'encryption' => 'tls',
+                    'username' => '', 'password' => '', 'fromEmail' => '', 'fromName' => APP_NAME
+                ],
+                'kintone' => [
+                    'subdomain' => '', 'appId' => '', 'login' => '', 'password' => '',
+                    'proxyHostPort' => '', 'verifySsl' => false
+                ]
+            ];
+        }
+        atomic_write_json($path, $initial);
     }
-    if($api==='smtp_test'){$s=smtpOpen($d['settings']['smtp']??[]);smtpClose($s);ok(['message'=>'SMTP接続と認証に成功しました。']);}
-    if($api==='smtp_test_mail'){ $to=trim((string)($b['to']??'')); if(!filter_var($to,FILTER_VALIDATE_EMAIL)) ng('VALIDATION_ERROR','テスト送信先メールアドレスを正しく入力してください。'); smtpSendTest($d['settings']['smtp']??[],$to); ok(['message'=>'SMTPテストメールを送信しました。','to'=>$to]);}
-    if($api==='send_mail'){
-      $sid=(string)($b['surveyId']??'');$ids=is_array($b['customerIds']??null)?array_map('strval',$b['customerIds']):[];$sub=trim((string)($b['subject']??''));$body=(string)($b['body']??'');$i=surveyIndex($d['surveys'],$sid);if($i<0)ng('NOT_FOUND','アンケートが見つかりません。',[],404);if(($d['surveys'][$i]['status']??'')!=='published')ng('INVALID_STATE','アンケートを公開してから送信してください。');if($sub===''||$body===''||!$ids)ng('VALIDATION_ERROR','送信対象者、件名、本文を確認してください。');$smtp=$d['settings']['smtp']??[];if(trim((string)($smtp['host']??''))===''||trim((string)($smtp['fromEmail']??''))==='')ng('SMTP_ERROR','SMTP設定を完了してから送信してください。');try{$probe=smtpOpen($smtp);smtpClose($probe);}catch(\Throwable $e){ng('SMTP_ERROR','SMTP接続・認証に失敗したため送信を開始できません。詳細：'.$e->getMessage(),[],400);}$cm=[];foreach($d['customers'] as $c)$cm[$c['id']]=$c;$success=0;$failed=0;$results=[];
-      foreach($ids as $cid){if(!isset($cm[$cid])){$failed++;$results[]=['customerId'=>$cid,'status'=>'failed','error'=>'顧客が見つかりません。'];continue;} $sentBefore=false;foreach($d['logs'] as $l)if((string)($l['surveyId']??'')===$sid&&(string)($l['customerId']??'')===$cid&&in_array($l['status']??'', ['sent','answered'],true)){$sentBefore=true;break;}if($sentBefore){$results[]=['customerId'=>$cid,'status'=>'skipped','error'=>'すでに送信済みのため再送しませんでした。'];continue;}
-        $c=$cm[$cid];$token=bin2hex(random_bytes(24));$scheme=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https':'http';$host=$_SERVER['HTTP_HOST']??'';$script=$_SERVER['SCRIPT_NAME']??'/index.php';$url=$scheme.'://'.$host.$script.'?answer='.rawurlencode($sid).'&token='.rawurlencode($token);$mail=str_replace(['{{ANSWER_URL}}','{{回答URL}}'],$url,$body);$log=['id'=>rid('log_'),'surveyId'=>$sid,'customerId'=>$cid,'email'=>$c['email'],'name'=>$c['name'],'subject'=>$sub,'body'=>$body,'status'=>'failed','sentAt'=>null,'answeredAt'=>null,'error'=>'','tokenId'=>null];
-        try{smtpSend($smtp,$c['email'],$c['name'],$sub,$mail);$log['status']='sent';$log['sentAt']=nows();$log['tokenId']=$token;$d['tokens'][]=['tokenId'=>$token,'surveyId'=>$sid,'customerId'=>$cid,'email'=>$c['email'],'issuedAt'=>nowi(),'usedAt'=>null];$success++;$results[]=['customerId'=>$cid,'status'=>'sent','error'=>''];}catch(\Throwable $e){$log['error']=$e->getMessage();$failed++;$results[]=['customerId'=>$cid,'status'=>'failed','error'=>$e->getMessage()];}$d['logs'][]=$log;
-      }
-      writeJson('send_logs.json',$d['logs']);writeJson('answer_tokens.json',$d['tokens']);ok(['total'=>count($ids),'success'=>$success,'failed'=>$failed,'results'=>$results,'sentAt'=>nows()]);
-    }
-    if($api==='resend_failed'){$ids=is_array($b['logIds']??null)?array_map('strval',$b['logIds']):[];if(!$ids)ng('VALIDATION_ERROR','再送対象がありません。');$set=array_fill_keys($ids,true);$cm=[];foreach($d['customers'] as $c)$cm[$c['id']]=$c;$okc=0;$fc=0;$smtp=$d['settings']['smtp']??[];foreach($d['logs'] as &$l){if(!isset($set[$l['id']])||($l['status']??'')!=='failed')continue;$sid=(string)$l['surveyId'];$cid=(string)$l['customerId'];$i=surveyIndex($d['surveys'],$sid);if($i<0||($d['surveys'][$i]['status']??'')!=='published'){$fc++;continue;} $token=bin2hex(random_bytes(24));$scheme=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https':'http';$host=$_SERVER['HTTP_HOST']??'';$script=$_SERVER['SCRIPT_NAME']??'/index.php';$url=$scheme.'://'.$host.$script.'?answer='.rawurlencode($sid).'&token='.rawurlencode($token);$mail=str_replace(['{{ANSWER_URL}}','{{回答URL}}'],$url,(string)$l['body']);try{smtpSend($smtp,(string)$l['email'],(string)$l['name'],(string)$l['subject'],$mail);$l['status']='sent';$l['sentAt']=nows();$l['error']='';$l['tokenId']=$token;$d['tokens'][]=['tokenId'=>$token,'surveyId'=>$sid,'customerId'=>$cid,'email'=>$l['email'],'issuedAt'=>nowi(),'usedAt'=>null];$okc++;}catch(\Throwable $e){$l['error']=$e->getMessage();$fc++;}}unset($l);writeJson('send_logs.json',$d['logs']);writeJson('answer_tokens.json',$d['tokens']);ok(['success'=>$okc,'failed'=>$fc]);}
-    if($api==='issue_answer_token'){$sid=(string)($b['surveyId']??'');$i=surveyIndex($d['surveys'],$sid);if($i<0)ng('NOT_FOUND','アンケートが見つかりません。',[],404);if(($d['surveys'][$i]['status']??'')!=='published')ng('INVALID_STATE','公開中のアンケートだけ回答URLを発行できます。');$token=bin2hex(random_bytes(24));$d['tokens'][]=['tokenId'=>$token,'surveyId'=>$sid,'customerId'=>null,'email'=>'','issuedAt'=>nowi(),'usedAt'=>null];writeJson('answer_tokens.json',$d['tokens']);$scheme=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https':'http';$host=$_SERVER['HTTP_HOST']??'';$script=$_SERVER['SCRIPT_NAME']??'/index.php';$url=$scheme.'://'.$host.$script.'?answer='.rawurlencode($sid).'&token='.rawurlencode($token);ok(['url'=>$url,'token'=>$token]);}
-    if($api==='submit_answer'){
-      $sid=(string)($b['surveyId']??'');$token=(string)($b['token']??'');$a=is_array($b['answers']??null)?$b['answers']:[];$i=surveyIndex($d['surveys'],$sid);if($i<0)ng('NOT_FOUND','アンケートが見つかりません。',[],404);$s=$d['surveys'][$i];if(($s['status']??'')!=='published')ng('INVALID_STATE','このアンケートは現在回答を受け付けていません。');try{$now=new DateTimeImmutable();if($now<new DateTimeImmutable($s['startAt'])||$now>new DateTimeImmutable($s['endAt']))ng('OUT_OF_PERIOD','このアンケートは現在回答期間外です。');}catch(\Throwable){ng('INVALID_STATE','公開期間を確認できません。');}$ti=-1;foreach($d['tokens'] as $n=>$t)if((string)($t['tokenId']??'')===$token&&(string)($t['surveyId']??'')===$sid){$ti=$n;break;}if($ti<0)ng('INVALID_TOKEN','回答URLが正しくありません。',[],403);if(!empty($d['tokens'][$ti]['usedAt']))ng('TOKEN_USED','この回答URLはすでに回答済みです。',[],409);$er=validateAnswers($s,$a);if($er)ng('VALIDATION_ERROR','入力内容を確認してください。',$er);$allow=array_fill_keys(reachable($s,$a),true);$clean=[];foreach($a as $qid=>$v)if(isset($allow[$qid]))$clean[$qid]=$v;$t=$d['tokens'][$ti];$r=['id'=>rid('resp_'),'surveyId'=>$sid,'tokenId'=>$token,'customerId'=>$t['customerId']??null,'customerName'=>'','customerEmail'=>(string)($t['email']??''),'answeredAt'=>nowi(),'answers'=>$clean];foreach($d['customers'] as $c)if((string)$c['id']===(string)($t['customerId']??'')){$r['customerName']=$c['name'];break;}$d['responses'][]=$r;$d['tokens'][$ti]['usedAt']=nowi();foreach($d['logs'] as &$l)if((string)($l['tokenId']??'')===$token){$l['status']='answered';$l['answeredAt']=$r['answeredAt'];break;}unset($l);writeJson('responses.json',$d['responses']);writeJson('answer_tokens.json',$d['tokens']);writeJson('send_logs.json',$d['logs']);ok(['responseId'=>$r['id']]);
-    }
-    ng('NOT_FOUND','指定されたAPIは存在しません。',[],404);
-  }catch(\Throwable $e){error_log('[QuestionnaireOperations] '.$e->getMessage());if(str_starts_with($api,'kintone_'))ng('KINTONE_ERROR',$e->getMessage(),[],400);ng('SERVER_ERROR','処理中にエラーが発生しました。',[],500);}
 }
-initData();apiRun();
 
-$answer=(string)($_GET['answer']??'');$token=(string)($_GET['token']??'');$preview=(string)($_GET['preview']??'');$mode='admin';$context=null;$message='';
-if($answer!==''){
-  $mode='answer';try{$d=allData();$i=surveyIndex($d['surveys'],$answer);if($i<0)$message='アンケートが見つかりません。';else{$s=$d['surveys'][$i];$t=null;foreach($d['tokens'] as $x)if((string)($x['tokenId']??'')===$token&&(string)($x['surveyId']??'')===$answer){$t=$x;break;}if(($s['status']??'')!=='published')$message='このアンケートは現在回答を受け付けていません。';elseif(!$t)$message='回答URLが正しくありません。';elseif(!empty($t['usedAt']))$message='この回答URLはすでに回答済みです。';else{try{$n=new DateTimeImmutable();if($n<new DateTimeImmutable($s['startAt'])||$n>new DateTimeImmutable($s['endAt']))$message='このアンケートは現在回答期間外です。';else$context=['survey'=>$s,'token'=>$token,'preview'=>false];}catch(\Throwable){$message='公開期間を確認できません。';}}}}catch(\Throwable){$message='回答画面の読み込みに失敗しました。';}}
-if($preview!==''){$mode='preview';try{$d=allData();$i=surveyIndex($d['surveys'],$preview);if($i<0)$message='アンケートが見つかりません。';else$context=['survey'=>$d['surveys'][$i],'token'=>'','preview'=>true];}catch(\Throwable){$message='プレビュー画面の読み込みに失敗しました。';}}
-$ctx=$context?json_encode($context,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT):'null';
-?>
-<!doctype html>
-<html lang="ja">
-<head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>アンケート業務運営アプリ</title>
-<style>
-:root{--p:#2563eb;--pd:#1d4ed8;--bg:#f8fafc;--s:#fff;--b:#e2e8f0;--t:#1e293b;--m:#64748b;--ok:#16a34a;--ng:#dc2626;--wa:#d97706}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--t);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.6}.hdr{background:#fff;border-bottom:1px solid var(--b);position:sticky;top:0;z-index:20}.hdrin{max-width:1200px;margin:auto;padding:0 18px;min-height:62px;display:flex;align-items:center;gap:20px}.logo{font-weight:800;color:var(--p);white-space:nowrap}.nav{display:flex;gap:2px;overflow:auto}.nav button{border:0;background:none;padding:20px 12px;color:var(--m);border-bottom:2px solid transparent;white-space:nowrap}.nav button.on{color:var(--p);border-bottom-color:var(--p);font-weight:700}.page{max-width:1200px;margin:auto;padding:24px 18px 50px}.bar{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:18px}.title{font-size:24px;font-weight:800;margin:0}.sub{color:var(--m);margin:5px 0 0}.card{background:#fff;border:1px solid var(--b);border-radius:12px;padding:18px;margin-bottom:16px}.actions{display:flex;flex-wrap:wrap;gap:7px}.btn{border:1px solid var(--b);background:#fff;color:var(--t);border-radius:8px;padding:8px 12px;font-weight:700}.btn:hover:not(:disabled){transform:translateY(-1px)}.primary{background:var(--p);color:#fff;border-color:var(--p)}.danger{background:var(--ng);color:#fff;border-color:var(--ng)}.warning{background:#f59e0b;color:#fff;border-color:#f59e0b}.success{background:var(--ok);color:#fff;border-color:var(--ok)}.small{font-size:12px}.muted{color:var(--m)}.badge{display:inline-flex;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700}.draft{background:#e2e8f0;color:#475569}.pub{background:#dcfce7;color:#166534}.closed{background:#fee2e2;color:#991b1b}.info{background:#dbeafe;color:#1d4ed8}.wrap{overflow:auto;border:1px solid var(--b);border-radius:9px}table{width:100%;min-width:760px;border-collapse:collapse}th,td{padding:11px 12px;border-bottom:1px solid var(--b);text-align:left;vertical-align:middle}th{background:#f8fafc;color:var(--m);font-size:12px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:13px}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.fg{margin-bottom:13px}.fg label{display:block;font-size:13px;font-weight:700;margin-bottom:5px}.req{color:var(--ng)}.ctl{width:100%;padding:9px 10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff}.ctl:focus{outline:2px solid #bfdbfe;border-color:var(--p)}.alert{border-radius:9px;padding:10px 12px;margin:10px 0}.a-info{background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8}.a-ng{background:#fef2f2;border:1px solid #fecaca;color:#991b1b}.a-ok{background:#f0fdf4;border:1px solid #bbf7d0;color:#166534}.subnav{background:#f1f5f9;border-bottom:1px solid var(--b)}.subnavin{max-width:1200px;margin:auto;padding:7px 18px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}.subname{font-weight:800;margin-right:auto}.tab{border:0;background:transparent;padding:8px 10px;border-radius:7px;color:var(--m)}.tab.on{background:#fff;color:var(--p);font-weight:800}.group{border:1px solid var(--b);border-radius:10px;margin-bottom:12px;overflow:hidden;background:#fbfdff}.gh{background:#f1f5f9;padding:9px 11px;display:flex;align-items:center;gap:8px}.gb{padding:11px}.q{background:#fff;border:1px solid var(--b);border-radius:9px;padding:11px;margin-bottom:9px}.qgrid{display:grid;grid-template-columns:55px 1fr auto;gap:9px;align-items:start}.qnum{display:inline-flex;align-items:center;justify-content:center;min-width:58px;min-height:32px;padding:5px 8px;border-radius:999px;background:#eff6ff;color:var(--p);font-weight:800;font-size:13px;white-space:nowrap}.q-actions{display:flex;align-items:flex-start;justify-content:flex-end;gap:7px;align-self:start}.q-actions .btn{align-self:flex-start;height:auto}.choice{display:grid;grid-template-columns:1fr auto;gap:7px;margin:6px 0}.mapping-row{display:flex;gap:8px;align-items:center;margin:7px 0;padding:8px;border:1px solid var(--b);border-radius:8px;background:#f8fafc}.drag-handle{display:flex;align-items:center;justify-content:center;gap:4px;min-width:58px;min-height:42px;border:1px dashed #94a3b8;border-radius:8px;background:#f8fafc;color:#475569;font-weight:800;cursor:grab;user-select:none}.drag-handle:active{cursor:grabbing}.drag-handle span{font-size:11px}.q.drop-target{border-color:var(--p);box-shadow:0 0 0 2px #bfdbfe;background:#eff6ff}.gb.drop-target{outline:2px dashed #93c5fd;outline-offset:2px}.branch{display:grid;grid-template-columns:1fr 280px;gap:8px;align-items:center;margin:6px 0}.stat{border:1px solid var(--b);border-radius:9px;padding:13px;background:#fff}.stat b{display:block;font-size:25px;margin-top:3px}.barbg{height:8px;background:#e2e8f0;border-radius:99px;overflow:hidden}.barbg i{display:block;height:100%;background:var(--p)}.btn.loading{position:relative;padding-right:34px}.btn.loading::after{content:"";position:absolute;right:10px;top:50%;width:13px;height:13px;margin-top:-7px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.connection-result{display:none;margin-top:12px;padding:13px 14px;border:2px solid #94a3b8;border-radius:9px;background:#fff;color:#111827;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;font-size:14px}.connection-result.show{display:block}.connection-result.success{border-color:#16a34a;color:#166534;background:#fff}.connection-result.error{border-color:#dc2626;color:#991b1b;background:#fff}.connection-result .result-title{font-weight:800;margin-bottom:5px}.connection-result .result-detail{font-size:13px;color:#374151}.toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:120;background:#fff;color:#111827;padding:0;border:2px solid #64748b;border-radius:12px;box-shadow:0 12px 30px #0003;width:min(720px,calc(100vw - 28px));max-width:720px;display:none}.toast.show{display:block}.toast.error{border-color:#dc2626}.toast.ok{border-color:#16a34a}.toast-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 13px;border-bottom:1px solid #e5e7eb;background:#f8fafc}.toast.error .toast-head{background:#fef2f2}.toast.ok .toast-head{background:#f0fdf4}.toast-title{font-weight:800;color:#111827}.toast.error .toast-title{color:#991b1b}.toast.ok .toast-title{color:#166534}.toast-close{border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:7px;padding:5px 9px;font-size:12px;font-weight:700}.toast-body{padding:12px 13px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65;max-height:32vh;overflow:auto}.modalbg{position:fixed;inset:0;background:#0f172a66;display:flex;align-items:center;justify-content:center;padding:18px;z-index:100}.modal{background:#fff;border-radius:12px;padding:18px;width:min(620px,100%)}.mact{display:flex;justify-content:flex-end;gap:7px;margin-top:16px}.respond{min-height:100vh;padding:30px 15px;background:var(--bg)}.respondcard{max-width:820px;margin:auto;background:#fff;border:1px solid var(--b);border-radius:13px;padding:25px}.rq{padding:16px 0;border-top:1px solid var(--b)}.rqt{font-weight:800;margin-bottom:8px}.rchoice{display:flex;gap:8px;margin:8px 0}.done{text-align:center;padding:35px 15px}.preview{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;padding:9px;border-radius:8px;margin-bottom:13px}.empty{text-align:center;padding:35px;color:var(--m)}@media(max-width:850px){.grid2,.grid4{grid-template-columns:1fr 1fr}.qgrid{grid-template-columns:45px 1fr}.qgrid>.actions{grid-column:1/-1}.branch{grid-template-columns:1fr}}@media(max-width:600px){.grid2,.grid4{grid-template-columns:1fr}.hdrin{align-items:flex-start;flex-direction:column;padding-top:9px}.nav{width:100%}.nav button{padding:11px}.page{padding:18px 12px 38px}}
-</style>
-</head>
-<body>
-<div id="app"></div><div id="toast"></div><div id="modal"></div>
+function read_json_file(string $key): array {
+    $path = json_path($key);
+    if (!is_file($path)) {
+        throw new RuntimeException('データファイルが見つかりません。');
+    }
+    $raw = file_get_contents($path);
+    if ($raw === false) {
+        throw new RuntimeException('データファイルを読み込めません。');
+    }
+    $data = json_decode($raw, true);
+    if (!is_array($data)) {
+        throw new RuntimeException('データファイルが壊れています。内容を上書きせず処理を停止しました。');
+    }
+    return $data;
+}
+
+function atomic_write_json_path(string $path, array $data): void {
+    $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+    if ($json === false) {
+        throw new RuntimeException('JSON化に失敗しました。');
+    }
+    $tmp = $path . '.tmp.' . bin2hex(random_bytes(6));
+    $fp = fopen($tmp, 'xb');
+    if ($fp === false) {
+        throw new RuntimeException('データファイルを書き込めません。');
+    }
+    try {
+        if (!flock($fp, LOCK_EX)) {
+            throw new RuntimeException('データファイルのロックに失敗しました。');
+        }
+        $written = fwrite($fp, $json);
+        if ($written === false || $written < strlen($json)) {
+            throw new RuntimeException('データファイルの書き込みに失敗しました。');
+        }
+        fflush($fp);
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        if (!rename($tmp, $path)) {
+            @unlink($tmp);
+            throw new RuntimeException('データファイルの反映に失敗しました。');
+        }
+        @chmod($path, 0600);
+    } catch (Throwable $e) {
+        if (is_resource($fp)) {
+            fclose($fp);
+        }
+        @unlink($tmp);
+        throw $e;
+    }
+}
+
+function atomic_write_json(string $keyOrPath, array $data): void {
+    $path = isset(JSON_FILES[$keyOrPath]) ? json_path($keyOrPath) : $keyOrPath;
+    atomic_write_json_path($path, $data);
+}
+
+function with_file_lock(string $key, callable $callback): mixed {
+    $lockPath = json_path($key) . '.lock';
+    $fp = fopen($lockPath, 'c');
+    if ($fp === false) {
+        throw new RuntimeException('データ処理のロックを取得できません。');
+    }
+    try {
+        if (!flock($fp, LOCK_EX)) {
+            throw new RuntimeException('データ処理のロックを取得できません。');
+        }
+        $result = $callback();
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        return $result;
+    } catch (Throwable $e) {
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        throw $e;
+    }
+}
+
+function api_response(bool $ok, array $data = [], string $code = '', string $message = '', array $fields = []): never {
+    while (ob_get_level() > 0) { ob_end_clean(); }
+    header('Content-Type: application/json; charset=UTF-8');
+    if ($ok) {
+        echo json_encode(['ok' => true, 'data' => $data], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    } else {
+        echo json_encode(['ok' => false, 'error' => ['code' => $code, 'message' => $message, 'fields' => $fields]], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+    exit;
+}
+
+function require_csrf(): void {
+    $token = (string)($_POST['csrf'] ?? '');
+    if ($token === '' || !hash_equals((string)$_SESSION['survey_csrf'], $token)) {
+        api_response(false, [], 'CSRF_ERROR', 'セキュリティ確認に失敗しました。画面を再読み込みしてください。');
+    }
+}
+
+function request_json(): array {
+    $raw = (string)($_POST['payload'] ?? '');
+    $data = json_decode($raw, true);
+    if (!is_array($data)) {
+        api_response(false, [], 'VALIDATION_ERROR', '入力データを読み込めませんでした。');
+    }
+    return $data;
+}
+
+function validate_email(string $email): bool {
+    return filter_var($email, FILTER_VALIDATE_EMAIL) !== false;
+}
+
+function new_id(string $prefix): string {
+    return $prefix . '_' . date('YmdHis') . '_' . bin2hex(random_bytes(5));
+}
+
+function survey_question_flat(array $survey): array {
+    $out = [];
+    foreach ($survey['groups'] ?? [] as $gi => $group) {
+        foreach ($group['questions'] ?? [] as $qi => $question) {
+            $question['_groupIndex'] = $gi;
+            $question['_questionIndex'] = $qi;
+            $out[] = $question;
+        }
+    }
+    return $out;
+}
+
+function validate_survey(array $survey): array {
+    $errors = [];
+    $name = trim((string)($survey['name'] ?? ''));
+    if ($name === '') $errors[] = 'アンケート名を入力してください。';
+    $start = (string)($survey['startAt'] ?? '');
+    $end = (string)($survey['endAt'] ?? '');
+    if ($start === '' || strtotime($start) === false) $errors[] = '開始日時を正しく設定してください。';
+    if ($end === '' || strtotime($end) === false) $errors[] = '終了日時を正しく設定してください。';
+    if ($start !== '' && $end !== '' && strtotime($start) !== false && strtotime($end) !== false && strtotime($start) >= strtotime($end)) {
+        $errors[] = '開始日時は終了日時より前にしてください。';
+    }
+    $groups = $survey['groups'] ?? null;
+    if (!is_array($groups) || count($groups) === 0) $errors[] = 'グループを1つ以上作成してください。';
+    $questionIds = [];
+    $groupIds = [];
+    foreach ($groups ?? [] as $gi => $group) {
+        $gid = trim((string)($group['id'] ?? ''));
+        if ($gid === '' || isset($groupIds[$gid])) $errors[] = 'グループIDが不正または重複しています。';
+        $groupIds[$gid] = true;
+        $questions = $group['questions'] ?? [];
+        if (!is_array($questions)) { $errors[] = 'グループ内の質問データが不正です。'; continue; }
+        foreach ($questions as $qi => $q) {
+            $qid = trim((string)($q['id'] ?? ''));
+            $type = (string)($q['type'] ?? '');
+            $title = trim((string)($q['title'] ?? ''));
+            if ($qid === '' || isset($questionIds[$qid])) $errors[] = '質問IDが不正または重複しています。';
+            $questionIds[$qid] = true;
+            if ($title === '') $errors[] = '質問文を入力してください。';
+            if (!in_array($type, ['text','single','multiple'], true)) $errors[] = '質問形式が不正です。';
+            if (in_array($type, ['single','multiple'], true)) {
+                $choices = $q['choices'] ?? [];
+                if (!is_array($choices) || count($choices) === 0) $errors[] = '選択式質問には選択肢が必要です。';
+                $choiceIds = [];
+                foreach ($choices ?? [] as $choice) {
+                    $cid = trim((string)($choice['id'] ?? ''));
+                    $label = trim((string)($choice['label'] ?? ''));
+                    if ($cid === '' || isset($choiceIds[$cid])) $errors[] = '選択肢IDが不正または重複しています。';
+                    $choiceIds[$cid] = true;
+                    if ($label === '') $errors[] = '選択肢名を入力してください。';
+                }
+            }
+            if ($type !== 'single' && !empty($q['branch'])) $errors[] = '分岐を設定できるのは単一選択質問だけです。';
+            if ($type === 'single') {
+                foreach (($q['branch'] ?? []) as $choiceId => $target) {
+                    $target = (string)$target;
+                    $choiceIds = array_column($q['choices'] ?? [], 'id');
+                    if (!in_array((string)$choiceId, $choiceIds, true)) $errors[] = '分岐元の選択肢が存在しません。';
+                    if (!($target === 'next' || $target === 'end' || str_starts_with($target, 'question:'))) $errors[] = '分岐先の形式が不正です。';
+                    if (str_starts_with($target, 'question:')) {
+                        $targetId = substr($target, 9);
+                        if ($targetId === '' || $targetId === $qid || !in_array($targetId, array_keys($questionIds), true)) {
+                            /* 全質問走査後にも再検証するため後段で確認 */
+                        }
+                    }
+                }
+            }
+        }
+    }
+    $allIds = array_keys($questionIds);
+    foreach ($groups ?? [] as $group) {
+        foreach ($group['questions'] ?? [] as $q) {
+            if (($q['type'] ?? '') !== 'single') continue;
+            foreach (($q['branch'] ?? []) as $target) {
+                if (str_starts_with((string)$target, 'question:')) {
+                    $tid = substr((string)$target, 9);
+                    if (!in_array($tid, $allIds, true)) $errors[] = '分岐先の質問が存在しません。';
+                }
+            }
+        }
+    }
+    /* 分岐グラフの循環を検出 */
+    $edges = [];
+    foreach ($groups ?? [] as $group) {
+        foreach ($group['questions'] ?? [] as $q) {
+            $qid = (string)$q['id'];
+            foreach (($q['branch'] ?? []) as $target) {
+                if (str_starts_with((string)$target, 'question:')) $edges[$qid][] = substr((string)$target, 9);
+            }
+        }
+    }
+    $visiting = [];
+    $visited = [];
+    $dfs = function(string $id) use (&$dfs, &$visiting, &$visited, &$edges): bool {
+        if (isset($visiting[$id])) return true;
+        if (isset($visited[$id])) return false;
+        $visiting[$id] = true;
+        foreach ($edges[$id] ?? [] as $next) if ($dfs($next)) return true;
+        unset($visiting[$id]); $visited[$id] = true; return false;
+    };
+    foreach (array_keys($questionIds) as $qid) if ($dfs($qid)) { $errors[] = '分岐に循環があります。'; break; }
+    return array_values(array_unique($errors));
+}
+
+function find_survey(string $id, ?array $surveys = null): ?array {
+    $surveys ??= read_json_file('surveys');
+    foreach ($surveys as $survey) if ((string)($survey['id'] ?? '') === $id) return $survey;
+    return null;
+}
+
+function get_public_survey(string $surveyId): array {
+    $survey = find_survey($surveyId);
+    if (!$survey) api_response(false, [], 'NOT_FOUND', 'アンケートが見つかりません。');
+    if (($survey['status'] ?? '') !== 'published') api_response(false, [], 'SURVEY_ERROR', 'このアンケートは現在回答できません。');
+    $now = time();
+    $start = strtotime((string)($survey['startAt'] ?? ''));
+    $end = strtotime((string)($survey['endAt'] ?? ''));
+    if ($start === false || $end === false || $now < $start || $now > $end) api_response(false, [], 'SURVEY_ERROR', '回答期間外です。');
+    return $survey;
+}
+
+function find_token(string $token, ?array $tokens = null): ?array {
+    $tokens ??= read_json_file('answer_tokens');
+    foreach ($tokens as $row) if (hash_equals((string)($row['token'] ?? ''), $token)) return $row;
+    return null;
+}
+
+function smtp_cfg_from_settings(array $settings): array {
+    $smtp = $settings['smtp'] ?? [];
+    return [
+        'host' => trim((string)($smtp['host'] ?? '')),
+        'port' => (int)($smtp['port'] ?? 0),
+        'encryption' => strtolower((string)($smtp['encryption'] ?? 'none')),
+        'username' => trim((string)($smtp['username'] ?? '')),
+        'password' => (string)($smtp['password'] ?? ''),
+        'fromEmail' => trim((string)($smtp['fromEmail'] ?? '')),
+        'fromName' => trim((string)($smtp['fromName'] ?? APP_NAME))
+    ];
+}
+
+function smtp_read_response($socket): string {
+    $response = '';
+    while (($line = fgets($socket, 512)) !== false) {
+        $response .= $line;
+        if (strlen($line) < 4 || $line[3] !== '-') break;
+        if (strlen($response) > 65536) break;
+    }
+    return trim($response);
+}
+
+function smtp_expect($socket, array $codes, string $step): string {
+    $response = smtp_read_response($socket);
+    $code = (int)substr($response, 0, 3);
+    if (!in_array($code, $codes, true)) throw new RuntimeException($step . 'に失敗しました。SMTPサーバーからエラーが返されました。');
+    return $response;
+}
+
+function smtp_command($socket, string $command, array $codes, string $step): void {
+    fwrite($socket, $command . "\r\n");
+    smtp_expect($socket, $codes, $step);
+}
+
+function smtp_open(array $cfg) {
+    if ($cfg['host'] === '' || $cfg['port'] < 1 || $cfg['port'] > 65535) throw new RuntimeException('SMTPホストとポートを設定してください。');
+    if (!in_array($cfg['encryption'], ['none','ssl','tls'], true)) throw new RuntimeException('SMTP暗号化方式が不正です。');
+    $target = ($cfg['encryption'] === 'ssl' ? 'ssl://' : 'tcp://') . $cfg['host'] . ':' . $cfg['port'];
+    $context = stream_context_create(['ssl' => ['verify_peer'=>false,'verify_peer_name'=>false,'allow_self_signed'=>true]]);
+    $errno = 0; $errstr = '';
+    $socket = @stream_socket_client($target, $errno, $errstr, 15, STREAM_CLIENT_CONNECT, $context);
+    if ($socket === false) throw new RuntimeException('SMTPサーバーへ接続できませんでした。ホスト・ポート・ファイアウォール設定を確認してください。');
+    stream_set_timeout($socket, 20);
+    smtp_expect($socket, [220], 'SMTP接続');
+    $ehlo = preg_replace('/[^A-Za-z0-9.-]/', '', (string)($_SERVER['SERVER_NAME'] ?? 'localhost')) ?: 'localhost';
+    smtp_command($socket, 'EHLO ' . $ehlo, [250], 'EHLO');
+    if ($cfg['encryption'] === 'tls') {
+        smtp_command($socket, 'STARTTLS', [220], 'TLS開始');
+        if (!stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) throw new RuntimeException('TLS通信を開始できませんでした。');
+        smtp_command($socket, 'EHLO ' . $ehlo, [250], 'TLS後のEHLO');
+    }
+    return $socket;
+}
+
+function smtp_auth($socket, string $username, string $password): void {
+    if ($username === '') return;
+    smtp_command($socket, 'AUTH LOGIN', [334], 'SMTP認証開始');
+    smtp_command($socket, base64_encode($username), [334], 'SMTPユーザー認証');
+    smtp_command($socket, base64_encode($password), [235], 'SMTPパスワード認証');
+}
+
+function mime_header(string $value): string {
+    return '=?UTF-8?B?' . base64_encode($value) . '?=';
+}
+
+function smtp_send(array $cfg, string $to, string $subject, string $body): void {
+    if (!validate_email($to)) throw new RuntimeException('宛先メールアドレスが不正です。');
+    if (!validate_email($cfg['fromEmail'])) throw new RuntimeException('送信元メールアドレスが不正です。');
+    $socket = smtp_open($cfg);
+    try {
+        smtp_auth($socket, $cfg['username'], $cfg['password']);
+        smtp_command($socket, 'MAIL FROM:<' . $cfg['fromEmail'] . '>', [250], '送信元設定');
+        smtp_command($socket, 'RCPT TO:<' . $to . '>', [250,251], '宛先設定');
+        smtp_command($socket, 'DATA', [354], 'メール本文開始');
+        $from = $cfg['fromName'] !== '' ? mime_header($cfg['fromName']) . ' <' . $cfg['fromEmail'] . '>' : $cfg['fromEmail'];
+        $headers = 'From: ' . $from . "\r\n" . 'To: <' . $to . ">\r\n" . 'Subject: ' . mime_header($subject) . "\r\n" . 'MIME-Version: 1.0' . "\r\n" . 'Content-Type: text/plain; charset=UTF-8' . "\r\n" . 'Content-Transfer-Encoding: 8bit' . "\r\n\r\n";
+        $safeBody = preg_replace('/\r?\n/', "\r\n", $body);
+        $safeBody = preg_replace('/^\./m', '..', (string)$safeBody);
+        fwrite($socket, $headers . $safeBody . "\r\n.\r\n");
+        smtp_expect($socket, [250], 'メール送信');
+        smtp_command($socket, 'QUIT', [221,250], 'SMTP終了');
+    } finally { fclose($socket); }
+}
+
+function kintone_url(array $cfg, string $path): string {
+    $sub = strtolower(trim((string)($cfg['subdomain'] ?? '')));
+    $sub = preg_replace('#^https?://#', '', $sub);
+    $sub = preg_replace('#\.cybozu\.com.*$#', '', $sub);
+    $sub = trim($sub, '/');
+    if ($sub === '') throw new RuntimeException('kintoneサブドメインを設定してください。');
+    return 'https://' . $sub . '.cybozu.com' . (str_starts_with($path, '/') ? $path : '/' . $path);
+}
+
+function kintone_request(array $cfg, string $method, string $path, ?array $body = null): array {
+    $url = kintone_url($cfg, $path);
+    $login = trim((string)($cfg['login'] ?? ''));
+    $password = trim((string)($cfg['password'] ?? ''));
+    if ($login === '' || $password === '') throw new RuntimeException('kintoneログイン情報を設定してください。');
+    $auth = base64_encode($login . ':' . $password);
+    $headers = ['X-Cybozu-Authorization: ' . $auth, 'Accept: application/json'];
+    $content = null;
+    if ($body !== null && in_array($method, ['POST','PUT'], true)) {
+        $content = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $headers[] = 'Content-Type: application/json';
+    }
+    $proxy = trim((string)($cfg['proxyHostPort'] ?? ''));
+    $verify = (bool)($cfg['verifySsl'] ?? false);
+    $ssl = ['verify_peer'=>$verify,'verify_peer_name'=>$verify,'allow_self_signed'=>!$verify];
+    $http = ['method'=>$method,'header'=>implode("\r\n", $headers),'ignore_errors'=>true,'timeout'=>30,'ssl'=>$ssl];
+    if ($content !== null) $http['content'] = $content;
+    if ($proxy !== '') { $http['proxy'] = 'tcp://' . $proxy; $http['request_fulluri'] = true; }
+    $ctx = stream_context_create(['http'=>$http,'ssl'=>$ssl]);
+    $result = @file_get_contents($url, false, $ctx);
+    $headersRaw = function_exists('http_get_last_response_headers') ? http_get_last_response_headers() : [];
+    $status = 0;
+    foreach ($headersRaw as $line) { if (preg_match('#^HTTP/\S+\s+(\d+)#', $line, $m)) $status = (int)$m[1]; }
+    if ($result === false && $status === 0) throw new RuntimeException('kintoneへ接続できませんでした。');
+    $decoded = json_decode((string)$result, true);
+    if ($status >= 400 || !is_array($decoded)) {
+        if ($status === 401 || $status === 403) throw new RuntimeException('kintoneの認証またはアプリ権限を確認してください。');
+        throw new RuntimeException('kintone APIでエラーが発生しました。');
+    }
+    return $decoded;
+}
+
+function kintone_fields(array $cfg, string $appId): array {
+    if (!ctype_digit($appId) || (int)$appId < 1) throw new RuntimeException('kintoneアプリIDが不正です。');
+    return kintone_request($cfg, 'GET', '/k/v1/app/form/fields.json?app=' . rawurlencode($appId));
+}
+
+function kintone_schema(array $fields): string {
+    $items = [];
+    foreach ($fields as $code => $f) {
+        $items[] = [
+            'code'=>(string)$code,
+            'type'=>(string)($f['type'] ?? ''),
+            'label'=>(string)($f['label'] ?? ''),
+            'required'=>(bool)($f['required'] ?? false),
+            'options'=>$f['options'] ?? []
+        ];
+    }
+    usort($items, fn($a,$b)=>strcmp($a['code'],$b['code']));
+    return hash('sha256', json_encode($items, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+}
+
+function issue_token(string $surveyId, ?string $customerId, string $email): array {
+    if (!validate_email($email)) throw new RuntimeException('メールアドレスが不正です。');
+    $tokens = read_json_file('answer_tokens');
+    $token = bin2hex(random_bytes(32));
+    $row = ['tokenId'=>new_id('tok'),'token'=>$token,'surveyId'=>$surveyId,'customerId'=>$customerId,'email'=>$email,'issuedAt'=>now_iso(),'usedAt'=>null,'respondent'=>null];
+    $tokens[] = $row;
+    atomic_write_json('answer_tokens', $tokens);
+    return $row;
+}
+
+function answer_url(string $token): string {
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $base = rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/'), '/\\');
+    return $scheme . '://' . $host . ($base === '/' ? '' : $base) . '/index.php?token=' . rawurlencode($token);
+}
+
+function respondent_visible_questions(array $survey, array $answers): array {
+    $flat = survey_question_flat($survey);
+    $map = [];
+    foreach ($flat as $q) $map[$q['id']] = $q;
+    $visible = [];
+    $index = 0;
+    while ($index < count($flat)) {
+        $q = $flat[$index];
+        $visible[] = $q;
+        $next = $index + 1;
+        if (($q['type'] ?? '') === 'single') {
+            $value = $answers[$q['id']] ?? null;
+            $target = null;
+            if (is_string($value)) $target = $q['branch'][$value] ?? null;
+            if ($target === 'end') break;
+            if (is_string($target) && str_starts_with($target, 'question:')) {
+                $targetId = substr($target, 9);
+                foreach ($flat as $i => $candidate) if ((string)$candidate['id'] === $targetId) { $next = $i; break; }
+            }
+        }
+        $index = $next;
+    }
+    return $visible;
+}
+
+function validate_answers(array $survey, array $answers): array {
+    $visible = respondent_visible_questions($survey, $answers);
+    $errors = [];
+    $validIds = [];
+    foreach ($visible as $q) {
+        $qid = (string)$q['id']; $validIds[$qid] = true;
+        $value = $answers[$qid] ?? null;
+        $required = !empty($q['required']);
+        if ($required && ($value === null || $value === '' || $value === [])) { $errors[$qid] = '必須回答です。'; continue; }
+        if ($value === null || $value === '' || $value === []) continue;
+        $type = $q['type'] ?? '';
+        $choices = array_column($q['choices'] ?? [], 'id');
+        if ($type === 'text' && mb_strlen((string)$value) > 5000) $errors[$qid] = '回答は5000文字以内で入力してください。';
+        if ($type === 'single' && !in_array((string)$value, $choices, true)) $errors[$qid] = '選択肢が不正です。';
+        if ($type === 'multiple') {
+            if (!is_array($value)) { $errors[$qid] = '複数選択の回答形式が不正です。'; continue; }
+            if (count($value) !== count(array_unique($value))) { $errors[$qid] = '同じ選択肢が重複しています。'; continue; }
+            foreach ($value as $v) if (!in_array((string)$v, $choices, true)) { $errors[$qid] = '選択肢が不正です。'; break; }
+        }
+    }
+    foreach ($answers as $qid => $_) if (!isset($validIds[$qid])) unset($answers[$qid]);
+    return [$errors, $answers, $visible];
+}
+
+function require_admin_api(): void {
+    /* この環境では管理画面セッションを認証済みとして扱う。ログイン機能追加時もAPI入口はここに集約する。 */
+}
+
+ensure_data_files();
+
+$tokenParam = trim((string)($_GET['token'] ?? ''));
+$isApi = isset($_GET['api']) || ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['api']));
+
+if ($isApi) {
+    require_admin_api();
+    $api = (string)($_GET['api'] ?? $_POST['api'] ?? '');
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') require_csrf();
+
+    try {
+        switch ($api) {
+            case 'state':
+                $surveys=read_json_file('surveys'); $customers=read_json_file('customers'); $responses=read_json_file('responses'); $logs=read_json_file('send_logs'); $settings=read_json_file('settings'); $mapping=read_json_file('kintone_mapping');
+                $publicSettings=$settings;
+                if(isset($publicSettings['smtp']['password'])) $publicSettings['smtp']['password']='';
+                if(isset($publicSettings['kintone']['password'])) $publicSettings['kintone']['password']='';
+                api_response(true,['surveys'=>$surveys,'customers'=>$customers,'responses'=>$responses,'sendLogs'=>$logs,'settings'=>$publicSettings,'mapping'=>$mapping,'csrf'=>$_SESSION['survey_csrf']]);
+            case 'survey_get':
+                $s=find_survey((string)($_GET['id']??'')); if(!$s) api_response(false,[],'NOT_FOUND','アンケートが見つかりません。'); api_response(true,['survey'=>$s]);
+            case 'customer_list':
+                api_response(true,['customers'=>read_json_file('customers')]);
+            case 'stats':
+                $sid=(string)($_GET['surveyId']??''); $responses=read_json_file('responses'); $tokens=read_json_file('answer_tokens'); $rows=array_values(array_filter($responses,fn($r)=>(string)($r['surveyId']??'')===$sid)); $ts=array_values(array_filter($tokens,fn($r)=>(string)($r['surveyId']??'')===$sid)); api_response(true,['answerCount'=>count($rows),'issuedCount'=>count($ts),'unanswered'=>max(0,count($ts)-count($rows)),'responses'=>$rows]);
+            case 'survey_save':
+                $p=request_json();
+                $survey=$p['survey']??[]; if(!is_array($survey)) api_response(false,[],'VALIDATION_ERROR','アンケートデータが不正です。');
+                $surveys=read_json_file('surveys'); $id=trim((string)($survey['id']??'')); $isNew=$id==='';
+                if($isNew){$survey['id']=new_id('survey');$survey['status']='draft';$survey['createdAt']=now_iso();}
+                else { $old=find_survey($id,$surveys); if(!$old) api_response(false,[],'NOT_FOUND','アンケートが見つかりません。'); $survey['status']=$old['status']??'draft'; $survey['createdAt']=$old['createdAt']??now_iso(); }
+                $survey['name']=trim((string)($survey['name']??'')); $survey['description']=(string)($survey['description']??''); $survey['startAt']=(string)($survey['startAt']??''); $survey['endAt']=(string)($survey['endAt']??''); $survey['numberingFormat']=in_array(($survey['numberingFormat']??'group'),['group','global'],true)?$survey['numberingFormat']:'group'; $survey['groups']=is_array($survey['groups']??null)?$survey['groups']:[]; $survey['updatedAt']=now_iso();
+                foreach($survey['groups'] as &$g){ if(empty($g['id']))$g['id']=new_id('grp'); $g['name']=trim((string)($g['name']??'グループ')); $g['questions']=is_array($g['questions']??null)?$g['questions']:[]; foreach($g['questions'] as &$q){if(empty($q['id']))$q['id']=new_id('q'); $q['title']=(string)($q['title']??''); $q['type']=in_array(($q['type']??'text'),['text','single','multiple'],true)?$q['type']:'text'; $q['required']=(bool)($q['required']??false); $q['choices']=is_array($q['choices']??null)?$q['choices']:[]; $q['branch']=is_array($q['branch']??null)?$q['branch']:[]; }} unset($g,$q);
+                $errors=validate_survey($survey); if($errors) api_response(false,[],'SURVEY_ERROR',implode("\n",$errors));
+                $found=false; foreach($surveys as $i=>$old){if((string)$old['id']===$id){$surveys[$i]=$survey;$found=true;break;}} if(!$found)$surveys[]=$survey; atomic_write_json('surveys',$surveys); api_response(true,['survey'=>$survey]);
+            case 'survey_delete':
+                $p=request_json(); $id=(string)($p['surveyId']??''); $surveys=read_json_file('surveys'); $new=array_values(array_filter($surveys,fn($s)=>(string)$s['id']!==$id)); if(count($new)===count($surveys))api_response(false,[],'NOT_FOUND','アンケートが見つかりません。'); atomic_write_json('surveys',$new); api_response(true,[],'','アンケートを削除しました。');
+            case 'survey_publish':
+                $p=request_json(); $id=(string)($p['surveyId']??''); $surveys=read_json_file('surveys'); foreach($surveys as &$s)if((string)$s['id']===$id){$errors=validate_survey($s);if($errors)api_response(false,[],'SURVEY_PUBLISH_ERROR',implode("\n",$errors));$s['status']='published';$s['updatedAt']=now_iso();$found=true;break;} unset($s); if(empty($found))api_response(false,[],'NOT_FOUND','アンケートが見つかりません。'); atomic_write_json('surveys',$surveys); api_response(true,['survey'=>find_survey($id,$surveys)]);
+            case 'survey_close':
+                $p=request_json(); $id=(string)($p['surveyId']??''); $surveys=read_json_file('surveys'); $found=false; foreach($surveys as &$s)if((string)$s['id']===$id){$s['status']='closed';$s['updatedAt']=now_iso();$found=true;break;} unset($s);if(!$found)api_response(false,[],'NOT_FOUND','アンケートが見つかりません。');atomic_write_json('surveys',$surveys);api_response(true,['survey'=>find_survey($id,$surveys)]);
+            case 'customer_save':
+                $p=request_json(); $c=$p['customer']??[]; if(!is_array($c))api_response(false,[],'VALIDATION_ERROR','顧客データが不正です。'); $customers=read_json_file('customers'); $id=trim((string)($c['customerId']??'')); if($id===''){$id=new_id('cust');$c['customerId']=$id;$c['createdAt']=now_iso();} $c['name']=trim((string)($c['name']??''));$c['email']=trim((string)($c['email']??''));$c['status']=in_array(($c['status']??'active'),['active','inactive'],true)?$c['status']:'active';$c['updatedAt']=now_iso();if($c['name']===''||!validate_email($c['email']))api_response(false,[],'VALIDATION_ERROR','顧客名とメールアドレスを正しく入力してください。');$found=false;foreach($customers as $i=>$old)if((string)$old['customerId']===$id){$customers[$i]=array_merge($old,$c);$found=true;break;}if(!$found)$customers[]=$c;atomic_write_json('customers',$customers);api_response(true,['customer'=>end($customers)]);
+            case 'customer_delete':
+                $p=request_json();$id=(string)($p['customerId']??'');$customers=read_json_file('customers');$found=false;foreach($customers as &$c)if((string)$c['customerId']===$id){$c['status']='inactive';$c['updatedAt']=now_iso();$found=true;break;}unset($c);if(!$found)api_response(false,[],'NOT_FOUND','顧客が見つかりません。');atomic_write_json('customers',$customers);api_response(true);
+            case 'issue_token':
+                $p=request_json();$sid=(string)($p['surveyId']??'');$survey=get_public_survey($sid);$customerId=$p['customerId']??null;$email=trim((string)($p['email']??''));if($customerId){$customers=read_json_file('customers');foreach($customers as $c)if((string)$c['customerId']===(string)$customerId){$email=(string)$c['email'];break;}}$row=issue_token($sid,$customerId,$email);api_response(true,['token'=>$row,'url'=>answer_url($row['token'])]);
+            case 'send_mail':
+                $p=request_json();$sid=(string)($p['surveyId']??'');$survey=get_public_survey($sid);$settings=read_json_file('settings');$cfg=smtp_cfg_from_settings($settings);$recipients=$p['recipients']??[];if(!is_array($recipients)||!$recipients)api_response(false,[],'VALIDATION_ERROR','送信対象を選択してください。');$customers=read_json_file('customers');$tokens=read_json_file('answer_tokens');$logs=read_json_file('send_logs');$sent=0;$failed=0;$errors=[];foreach($recipients as $cid){$customer=null;foreach($customers as $c)if((string)$c['customerId']===(string)$cid){$customer=$c;break;}if(!$customer||($customer['status']??'')!=='active'){continue;}$already=false;foreach($logs as $l)if((string)($l['surveyId']??'')===$sid&&(string)($l['customerId']??'')===(string)$cid&&($l['status']??'')==='sent'){$already=true;break;}if($already){$errors[]=$customer['email'].'：送信済みのためスキップ';continue;}try{$token=issue_token($sid,$cid,(string)$customer['email']);$url=answer_url($token['token']);$body=$survey['name']."\n\n以下のURLから回答してください。\n".$url."\n\n回答期限：".date('Y/m/d H:i',strtotime((string)$survey['endAt']));smtp_send($cfg,(string)$customer['email'],'【回答依頼】'.$survey['name'],$body);$logs[]=['logId'=>new_id('send'),'surveyId'=>$sid,'customerId'=>$cid,'email'=>$customer['email'],'sentAt'=>now_iso(),'status'=>'sent','error'=>'','tokenId'=>$token['tokenId']];$sent++;}catch(Throwable $e){$logs[]=['logId'=>new_id('send'),'surveyId'=>$sid,'customerId'=>$cid,'email'=>$customer['email'],'sentAt'=>now_iso(),'status'=>'error','error'=>$e->getMessage(),'tokenId'=>null];$failed++;}}atomic_write_json('send_logs',$logs);api_response(true,['sent'=>$sent,'failed'=>$failed,'errors'=>$errors]);
+            case 'resend_failed':
+                $p=request_json();$logId=(string)($p['logId']??'');$logs=read_json_file('send_logs');$target=null;foreach($logs as $l)if((string)$l['logId']===$logId){$target=$l;break;}if(!$target||($target['status']??'')!=='error')api_response(false,[],'NOT_FOUND','再送対象が見つかりません。');$survey=find_survey((string)$target['surveyId']);$customers=read_json_file('customers');$customer=null;foreach($customers as $c)if((string)$c['customerId']===(string)$target['customerId']){$customer=$c;break;}if(!$survey||!$customer)api_response(false,[],'NOT_FOUND','再送対象の情報が見つかりません。');$token=issue_token((string)$survey['id'],(string)$customer['customerId'],(string)$customer['email']);$settings=read_json_file('settings');$url=answer_url($token['token']);smtp_send(smtp_cfg_from_settings($settings),(string)$customer['email'],'【回答依頼】'.$survey['name'],$survey['name']."\n\n以下のURLから回答してください。\n".$url);foreach($logs as &$l)if((string)$l['logId']===$logId){$l['status']='sent';$l['sentAt']=now_iso();$l['error']='';$l['tokenId']=$token['tokenId'];}unset($l);atomic_write_json('send_logs',$logs);api_response(true);
+            case 'smtp_save':
+                $p=request_json();$cfg=$p['smtp']??[];$cfg['host']=trim((string)($cfg['host']??''));$cfg['port']=(string)($cfg['port']??'');$cfg['encryption']=strtolower((string)($cfg['encryption']??'none'));$cfg['username']=trim((string)($cfg['username']??''));$incomingPassword=(string)($cfg['password']??'');$cfg['password']=$incomingPassword;$cfg['fromEmail']=trim((string)($cfg['fromEmail']??''));$cfg['fromName']=trim((string)($cfg['fromName']??''));if($cfg['host']===''||!ctype_digit($cfg['port'])||(int)$cfg['port']<1||(int)$cfg['port']>65535||!in_array($cfg['encryption'],['none','ssl','tls'],true)||!validate_email($cfg['fromEmail']))api_response(false,[],'SMTP_ERROR','SMTP設定を正しく入力してください。');$settings=read_json_file('settings');
+                if($cfg['password']==='' && !empty($settings['smtp']['password'])) $cfg['password']=$settings['smtp']['password'];
+                $settings['smtp']=$cfg;atomic_write_json('settings',$settings);api_response(true);
+            case 'smtp_test':
+                $p=request_json();$cfg=$p['smtp']??[];$to=trim((string)($p['to']??''));$socket=smtp_open($cfg);smtp_command($socket,'QUIT',[221,250],'SMTP終了');fclose($socket);if($to!=='')smtp_send($cfg,$to,'SMTP接続テスト',"SMTP接続・認証テストが成功しました。\n\n".now_iso());api_response(true,['mailSent'=>$to!=='']);
+            case 'kintone_save':
+                $p=request_json();$cfg=$p['kintone']??[];$cfg['subdomain']=trim((string)($cfg['subdomain']??''));$cfg['appId']=trim((string)($cfg['appId']??''));$cfg['login']=trim((string)($cfg['login']??''));$cfg['password']=(string)($cfg['password']??'');$cfg['proxyHostPort']=trim((string)($cfg['proxyHostPort']??''));$cfg['verifySsl']=(bool)($cfg['verifySsl']??false);if($cfg['subdomain']===''||!ctype_digit($cfg['appId'])||$cfg['login']===''||$cfg['password']==='')api_response(false,[],'KINTONE_ERROR','kintone設定を正しく入力してください。');$settings=read_json_file('settings');
+                if($cfg['password']==='' && !empty($settings['kintone']['password'])) $cfg['password']=$settings['kintone']['password'];
+                $settings['kintone']=$cfg;atomic_write_json('settings',$settings);api_response(true);
+            case 'kintone_test':
+                $settings=read_json_file('settings');$cfg=$settings['kintone']??[];kintone_fields($cfg,(string)$cfg['appId']);api_response(true,['message'=>'kintoneへの接続と対象アプリの利用確認に成功しました。']);
+            case 'kintone_fields':
+                $p=request_json();$settings=read_json_file('settings');$cfg=$settings['kintone']??[];$appId=trim((string)($p['appId']??$cfg['appId']??''));$result=kintone_fields($cfg,$appId);$fields=$result['properties']??[];$schema=kintone_schema($fields);$mapping=read_json_file('kintone_mapping');$mapping=['appId'=>$appId,'fetchedAt'=>now_iso(),'schemaHash'=>$schema,'fields'=>$fields,'mappings'=>$mapping['mappings']??[],'syncKey'=>'kintoneRecordId','mappingVersion'=>(int)($mapping['mappingVersion']??0),'updatedAt'=>now_iso()];atomic_write_json('kintone_mapping',$mapping);api_response(true,['mapping'=>$mapping]);
+            case 'kintone_mapping_get': api_response(true,['mapping'=>read_json_file('kintone_mapping')]);
+            case 'kintone_mapping_save':
+                $p=request_json();$mapping=$p['mapping']??[];$saved=read_json_file('kintone_mapping');if((string)($mapping['appId']??'')!==(string)($saved['appId']??''))api_response(false,[],'KINTONE_MAPPING_INVALID','最新のkintone項目を取得してから保存してください。');$fields=$saved['fields']??[];$m=$mapping['mappings']??[];if(!isset($m['name'])||!isset($m['email'])||!isset($fields[$m['name']])||!isset($fields[$m['email']]))api_response(false,[],'KINTONE_MAPPING_INVALID','顧客名とメールアドレスのマッピングは必須です。');$saved['mappings']=$m;$saved['mappingVersion']=(int)($saved['mappingVersion']??0)+1;$saved['updatedAt']=now_iso();atomic_write_json('kintone_mapping',$saved);api_response(true,['mapping'=>$saved]);
+            case 'kintone_sync_preview':
+            case 'kintone_sync_execute':
+                $settings=read_json_file('settings');$cfg=$settings['kintone']??[];$mapping=read_json_file('kintone_mapping');$latest=kintone_fields($cfg,(string)($cfg['appId']??''));$fields=$latest['properties']??[];$hash=kintone_schema($fields);if((string)($mapping['appId']??'')!==(string)($cfg['appId']??'')||(string)($mapping['schemaHash']??'')!==$hash)api_response(false,[],'KINTONE_SCHEMA_CHANGED','kintoneの項目構成が変更されています。最新の項目を取得してマッピングを再確認してください。');$customers=read_json_file('customers');$resp=kintone_request($cfg,'GET','/k/v1/records.json?app='.rawurlencode((string)$cfg['appId']).'&totalCount=true&query='.rawurlencode('order by $id asc limit 500'));$records=$resp['records']??[];$created=0;$updated=0;$unchanged=0;$incoming=[];$nameCode=(string)$mapping['mappings']['name'];$emailCode=(string)$mapping['mappings']['email'];foreach($records as $record){$rid=(string)($record['$id']['value']??'');$name=(string)($record[$nameCode]['value']??'');$email=(string)($record[$emailCode]['value']??'');if($rid==='')continue;$incoming[$rid]=['customerId'=>new_id('cust'),'name'=>$name,'email'=>$email,'status'=>'active','kintoneRecordId'=>$rid,'kintoneUpdatedAt'=>now_iso(),'syncStatus'=>'synced','syncError'=>''];$existing=null;foreach($customers as $c)if((string)($c['kintoneRecordId']??'')===$rid){$existing=$c;break;}if(!$existing)$created++;elseif((string)$existing['name']===$name&&(string)$existing['email']===$email)$unchanged++;else$updated++;}if($api==='kintone_sync_preview')api_response(true,['totalCount'=>count($records),'createdCount'=>$created,'updatedCount'=>$updated,'unchangedCount'=>$unchanged,'errorCount'=>0]);$lockKey='kintone_sync_logs';$result=with_file_lock($lockKey,function()use($customers,$incoming,$records,$mapping,$cfg){$existingByRid=[];foreach($customers as $c){$rid=(string)($c['kintoneRecordId']??'');if($rid!=='')$existingByRid[$rid]=$c;}$out=$customers;$created=0;$updated=0;$unchanged=0;foreach($incoming as $rid=>$row){if(isset($existingByRid[$rid])){$old=$existingByRid[$rid];if($old['name']===$row['name']&&$old['email']===$row['email']){$unchanged++;continue;}$row=array_merge($old,$row,['updatedAt'=>now_iso()]);foreach($out as $i=>$c)if((string)($c['kintoneRecordId']??'')===$rid)$out[$i]=$row;$updated++;}else{$row['updatedAt']=now_iso();$out[]=$row;$created++;}}atomic_write_json('customers',$out);return[$created,$updated,$unchanged];});$logs=read_json_file('kintone_sync_logs');[$created,$updated,$unchanged]=$result;$logs[]=['syncId'=>new_id('sync'),'startedAt'=>now_iso(),'finishedAt'=>now_iso(),'appId'=>(string)$cfg['appId'],'schemaHash'=>(string)$mapping['schemaHash'],'mappingVersion'=>(int)$mapping['mappingVersion'],'totalCount'=>count($records),'createdCount'=>$created,'updatedCount'=>$updated,'unchangedCount'=>$unchanged,'inactiveCount'=>0,'skippedCount'=>0,'errorCount'=>0,'status'=>'success','errorSummary'=>''];atomic_write_json('kintone_sync_logs',$logs);api_response(true,['createdCount'=>$created,'updatedCount'=>$updated,'unchangedCount'=>$unchanged]);
+            case 'answer_start':
+                $token=trim((string)($_GET['token']??''));$tokens=read_json_file('answer_tokens');$row=find_token($token,$tokens);if(!$row)api_response(false,[],'TOKEN_ERROR','回答URLが正しくありません。');if(!empty($row['usedAt']))api_response(false,[],'TOKEN_ALREADY_USED','この回答URLはすでに回答済みです。');$survey=get_public_survey((string)$row['surveyId']);api_response(true,['survey'=>$survey,'token'=>$row]);
+            case 'answer_submit':
+                $p=request_json();$token=trim((string)($p['token']??''));$answers=$p['answers']??[];$respondent=$p['respondent']??[];if(!is_array($answers)||!is_array($respondent))api_response(false,[],'RESPONSE_ERROR','回答データが不正です。');$tokens=read_json_file('answer_tokens');$row=null;$idx=-1;foreach($tokens as $i=>$t)if(hash_equals((string)$t['token'],$token)){$row=$t;$idx=$i;break;}if(!$row)api_response(false,[],'TOKEN_ERROR','回答URLが正しくありません。');if(!empty($row['usedAt']))api_response(false,[],'TOKEN_ALREADY_USED','この回答URLはすでに回答済みです。');$survey=get_public_survey((string)$row['surveyId']);[$errors,$answers,$visible]=validate_answers($survey,$answers);if($errors)api_response(false,['fields'=>$errors],'VALIDATION_ERROR','未回答または入力内容に誤りがあります。',$errors);$name=trim((string)($respondent['name']??''));$department=trim((string)($respondent['department']??''));$email=trim((string)($respondent['email']??$row['email']??''));$organization=trim((string)($respondent['organization']??''));if($row['customerId']===null&&($organization===''||$email===''||!validate_email($email)))api_response(false,[],'VALIDATION_ERROR','組織名とメールアドレスを入力してください。');$responses=read_json_file('responses');$response=['responseId'=>new_id('resp'),'surveyId'=>$survey['id'],'tokenId'=>$row['tokenId'],'customerId'=>$row['customerId'],'respondent'=>['organization'=>$organization,'name'=>$name,'department'=>$department,'email'=>$email],'answers'=>$answers,'visibleQuestionIds'=>array_values(array_map(fn($q)=>(string)$q['id'],$visible)),'answeredAt'=>now_iso()];$responses[]=$response;$tokens[$idx]['usedAt']=now_iso();$tokens[$idx]['respondent']=$response['respondent'];atomic_write_json('responses',$responses);atomic_write_json('answer_tokens',$tokens);api_response(true,['responseId'=>$response['responseId']]);
+            default: api_response(false,[],'NOT_FOUND','指定された処理は存在しません。');
+        }
+    } catch (Throwable $e) {
+        api_response(false,[], 'SYSTEM_ERROR', $e->getMessage());
+    }
+}
+
+if ($tokenParam !== '') {
+    $csrf = h($_SESSION['survey_csrf']);
+    ?><!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?=h(APP_NAME)?> - 回答</title><style>
+    *{box-sizing:border-box}body{margin:0;background:#f5f6f8;color:#222;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Yu Gothic",Meiryo,sans-serif}.respondent{max-width:780px;margin:35px auto;padding:28px;background:#fff;border:1px solid #ddd;border-radius:8px}.q{padding:18px 0;border-bottom:1px solid #eee}.q:last-child{border-bottom:0}.q-title{font-weight:700;margin-bottom:10px}.required{color:#d33;font-size:12px;margin-left:5px}.field{width:100%;padding:10px;border:1px solid #bbb;border-radius:5px;font:inherit}.choice{display:block;margin:9px 0}.btn{border:1px solid #2788d9;background:#2788d9;color:#fff;border-radius:5px;padding:10px 16px;font:inherit;cursor:pointer}.btn:disabled{opacity:.6;cursor:not-allowed}.notice{padding:12px;border:1px solid #ddd;border-radius:5px;margin:15px 0}.error{border-color:#d9534f;color:#9e2420;background:#fff}.success{border-color:#39a866;color:#196d3b}.actions{text-align:right;margin-top:20px}</style></head><body><main class="respondent"><div id="app"><p>回答画面を読み込んでいます。</p></div></main><script>document.addEventListener('DOMContentLoaded',function(){const csrf='<?=$csrf?>',token=<?=json_encode($tokenParam,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)?>,app=document.getElementById('app');let survey=null;let respondentRequired=false;function esc(v){const d=document.createElement('div');d.textContent=String(v??'');return d.innerHTML}async function post(api,payload){const f=new FormData();f.set('api',api);f.set('csrf',csrf);f.set('payload',JSON.stringify(payload||{}));const r=await fetch(location.href,{method:'POST',body:f});const j=await r.json();if(!j.ok)throw j;return j.data}function render(){let html='<h1>'+esc(survey.name)+'</h1><p>'+esc(survey.description||'')+'</p>';html+='<div id="info"><h2>回答者情報</h2><p class="notice">顧客登録済みの場合はメールアドレスが設定済みです。個別回答URLの場合は回答者情報を入力してください。</p><label>組織名<input id="org" class="field"></label><br><label>部署名<input id="dept" class="field"></label><br><label>氏名<input id="person" class="field"></label><br><label>メールアドレス<input id="mail" type="email" class="field"></label></div>';let n=0;for(const g of survey.groups||[]){html+='<h2>'+esc(g.name)+'</h2>';for(const q of g.questions||[]){n++;html+='<div class="q" data-q="'+esc(q.id)+'"><div class="q-title">'+esc(q.title)+(q.required?'<span class="required">必須</span>':'')+'</div>';if(q.type==='text')html+='<textarea class="field" data-answer="'+esc(q.id)+'"></textarea>';else for(const c of q.choices||[])html+='<label class="choice"><input type="'+(q.type==='single'?'radio':'checkbox')+'" name="q_'+esc(q.id)+'" value="'+esc(c.id)+'" data-answer="'+esc(q.id)+'"> '+esc(c.label)+'</label>';html+='</div>'}}html+='<div id="msg"></div><div class="actions"><button id="submit" class="btn">回答を送信する</button></div>';app.innerHTML=html;const btn=document.getElementById('submit');if(btn)btn.addEventListener('click',submit)}function collect(){const answers={};for(const q of survey.groups.flatMap(g=>g.questions||[])){if(q.type==='text'){const el=document.querySelector('[data-answer="'+CSS.escape(q.id)+'"]');answers[q.id]=el?el.value:''}else if(q.type==='single'){const el=document.querySelector('input[name="q_'+CSS.escape(q.id)+'"]:checked');answers[q.id]=el?el.value:''}else answers[q.id]=Array.from(document.querySelectorAll('input[name="q_'+CSS.escape(q.id)+'"]:checked')).map(x=>x.value)}return answers}async function submit(){const btn=document.getElementById('submit');if(!btn)return;btn.disabled=true;btn.textContent='送信中…';try{const data={token,answers:collect(),respondent:{organization:document.getElementById('org')?.value||'',department:document.getElementById('dept')?.value||'',name:document.getElementById('person')?.value||'',email:document.getElementById('mail')?.value||''}};await post('answer_submit',data);app.innerHTML='<div class="notice success"><h1>回答を受け付けました</h1><p>ご回答ありがとうございました。</p></div>'}catch(e){const m=document.getElementById('msg');if(m)m.innerHTML='<div class="notice error">'+esc(e?.error?.message||'回答の送信に失敗しました。')+'</div>';btn.disabled=false;btn.textContent='回答を送信する'}}post('answer_start',{}).then(d=>{survey=d.survey;respondentRequired=d.token.customerId===null;render()}).catch(e=>{app.innerHTML='<div class="notice error">'+esc(e?.error?.message||'回答画面を表示できません。')+'</div>'})});</script></body></html><?php exit;
+}
+
+$csrf = h($_SESSION['survey_csrf']);
+$settings = read_json_file('settings');
+?><!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?=h(APP_NAME)?></title><style>
+*{box-sizing:border-box}html,body{margin:0;background:#f5f6f8;color:#222;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Yu Gothic",Meiryo,sans-serif;font-size:14px}button,input,textarea,select{font:inherit}button{cursor:pointer}.header{position:sticky;top:0;z-index:20;background:#243447;color:#fff;min-height:62px;display:flex;align-items:center;gap:26px;padding:0 22px;box-shadow:0 2px 8px #0002}.logo{font-weight:700;white-space:nowrap}.nav{display:flex;gap:3px;align-self:stretch}.nav button{border:0;background:transparent;color:#dce5ed;padding:0 16px;border-bottom:3px solid transparent}.nav button.active,.nav button:hover{background:#30485d;color:#fff}.page{display:none;max-width:1280px;margin:auto;padding:26px 26px 80px}.page.active{display:block}.title{font-size:25px;margin:0 0 18px}.toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px}.card{background:#fff;border:1px solid #ddd;border-radius:7px;padding:18px;margin-bottom:16px}.grid{display:grid;grid-template-columns:180px 1fr;gap:11px 18px;align-items:center}.grid>label{font-weight:700}.grid input,.grid textarea,.grid select,.field{width:100%;padding:9px;border:1px solid #ccc;border-radius:5px;background:#fff}.grid textarea{min-height:90px}.btn{border:1px solid #2788d9;background:#2788d9;color:#fff;border-radius:5px;padding:8px 14px;min-height:36px}.btn:hover{background:#176faf}.btn.secondary{background:#fff;color:#333;border-color:#bbb}.btn.success{background:#198754;border-color:#198754}.btn.warning{background:#e08a00;border-color:#e08a00}.btn.danger{background:#d9534f;border-color:#d9534f}.btn:disabled{opacity:.55;cursor:not-allowed}.btn.loading:before{content:' ';display:inline-block;width:12px;height:12px;border:2px solid #fff;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;margin-right:6px;vertical-align:-2px}@keyframes spin{to{transform:rotate(360deg)}}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd}th,td{padding:10px;border-bottom:1px solid #e6e6e6;text-align:left;vertical-align:middle}th{background:#f7f8fa;white-space:nowrap}.badge{display:inline-block;padding:4px 8px;border-radius:12px;font-size:12px}.draft{background:#eee;color:#555}.open{background:#d9f4e3;color:#18733c}.closed{background:#e5e5e5;color:#666}.sent{background:#dbeeff;color:#176da8}.error{background:#ffe0de;color:#a52d28}.pending{background:#fff0c9;color:#8a6200}.actions{display:flex;gap:6px;flex-wrap:wrap}.message{padding:12px;border:1px solid #d9534f;color:#8e211d;background:#fff;margin-bottom:15px;white-space:pre-line}.message.success{border-color:#39a866;color:#196d3b}.group{border:1px solid #ccc;border-radius:7px;margin-bottom:14px;overflow:hidden}.group-head{display:flex;justify-content:space-between;align-items:center;padding:12px;background:#f2f5f8}.q{margin:12px;border:1px solid #ddd;border-radius:6px;padding:12px}.qhead{display:flex;gap:8px;align-items:center}.qbody{padding-top:10px}.choice-row{display:flex;gap:7px;margin:6px 0}.choice-row input{flex:1}.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat{background:#fff;border:1px solid #ddd;border-radius:7px;padding:15px}.stat .n{font-size:27px;font-weight:700;margin-top:4px}.tabs{display:flex;gap:3px;border-bottom:1px solid #ccc;margin-bottom:16px}.tab{padding:10px 16px;border:1px solid #ddd;border-bottom:0;background:#eee;border-radius:5px 5px 0 0;cursor:pointer}.tab.active{background:#fff;color:#1673b8;font-weight:700}.hidden{display:none!important}.modal{display:none;position:fixed;inset:0;background:#0007;z-index:50;align-items:center;justify-content:center;padding:20px}.modal.show{display:flex}.modal-box{background:#fff;border-radius:8px;padding:22px;width:min(650px,100%);max-height:90vh;overflow:auto}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.url{display:flex;gap:8px}.url input{flex:1;padding:9px}.toast{position:fixed;left:20px;right:20px;bottom:20px;z-index:100;max-width:850px;margin:auto;background:#fff;border:2px solid #d9534f;padding:12px 15px;border-radius:6px;box-shadow:0 4px 15px #0002}.toast.ok{border-color:#39a866}.small{font-size:12px;color:#666}.empty{text-align:center;color:#777;padding:35px}.log-error{background:#fff7f6}@media(max-width:900px){.header{flex-wrap:wrap;padding:9px 12px}.nav{width:100%;overflow:auto;height:43px}.nav button{padding:0 12px}.page{padding:18px 12px 60px}.grid,.two{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}table{font-size:12px}}
+</style></head><body>
+<header class="header"><div class="logo">📋 <?=h(APP_NAME)?></div><nav class="nav"><button data-page="surveys" class="active">アンケート一覧</button><button data-page="customers">顧客一覧</button><button data-page="settings">設定</button></nav></header>
+<main>
+<section class="page active" id="page-surveys"><div class="toolbar"><h1 class="title">アンケート一覧</h1><button class="btn" id="newSurvey">＋ 新規アンケート作成</button></div><div id="surveyTable"></div></section>
+<section class="page" id="page-editor"><div class="toolbar"><h1 class="title" id="editorTitle">アンケート作成</h1><div class="actions"><button class="btn secondary" id="backList">一覧へ戻る</button><button class="btn" id="saveSurvey">下書き保存</button><button class="btn success" id="publishEditor">公開する</button></div></div><div id="editorMsg"></div><div class="card"><h2>基本情報</h2><div class="grid"><label>アンケート名</label><input id="sName"><label>説明</label><textarea id="sDesc"></textarea><label>開始日時</label><input id="sStart" type="datetime-local"><label>終了日時</label><input id="sEnd" type="datetime-local"><label>質問番号形式</label><select id="sNumber"><option value="group">グループごとに Q1-1、Q1-2</option><option value="global">全体で Q1、Q2</option></select></div></div><div class="card"><div class="toolbar"><h2>質問・グループ</h2><button class="btn secondary" id="addGroup">＋ グループを追加</button></div><div id="groups"></div></div></section>
+<section class="page" id="page-detail"><div class="toolbar"><div><h1 class="title" id="detailTitle"></h1><div id="detailStatus"></div></div><div class="actions"><button class="btn secondary" id="detailEdit">編集</button><button class="btn warning" id="detailClose">終了する</button></div></div><div class="tabs"><button class="tab active" data-tab="content">アンケート内容</button><button class="tab" data-tab="send">回答依頼</button><button class="tab" data-tab="status">回答状況</button><button class="tab" data-tab="result">回答結果</button><button class="tab" data-tab="summary">集計</button></div><div id="detailContent"></div></section>
+<section class="page" id="page-customers"><div class="toolbar"><h1 class="title">顧客一覧</h1><button class="btn" id="addCustomer">＋ 顧客を追加</button></div><div class="card"><input id="customerSearch" class="field" placeholder="顧客名・メールアドレスで検索"></div><div id="customerTable"></div></section>
+<section class="page" id="page-settings"><h1 class="title">設定</h1><div class="tabs"><button class="tab active" data-setting="smtp">SMTP設定</button><button class="tab" data-setting="kintone">kintone設定</button><button class="tab" data-setting="mapping">kintone項目マッピング</button></div><div id="settingsContent"></div></section>
+</main><div id="modal" class="modal"><div class="modal-box" id="modalBox"></div></div><div id="toast" class="toast hidden"></div>
 <script>
-document.addEventListener('DOMContentLoaded',()=>{
-'use strict';
-window.APP_CONTEXT=<?=$ctx?>;window.APP_MODE=<?=json_encode($mode,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)?>;window.APP_MESSAGE=<?=json_encode($message,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)?>;
-const app=document.getElementById('app'),toastEl=document.getElementById('toast'),modal=document.getElementById('modal');const fileMode=location.protocol==='file:';const API=location.href.split('?')[0];
-const st={page:'surveys',sid:'',tab:'content',csrf:'',surveys:[],customers:[],sd:[],settings:null,kmap:null,kpreview:null,editor:null,dirty:false,csearch:'',selected:[],subject:'アンケートご協力のお願い',body:'いつもありがとうございます。\n以下のURLからアンケートへのご回答をお願いいたします。\n\n{{ANSWER_URL}}\n\nよろしくお願いいたします。'};
-const esc=v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
-const toast=(m,err=false)=>{if(!toastEl)return;clearTimeout(toast.t);toastEl.className='toast show '+(err?'error':'ok');toastEl.textContent='';const head=document.createElement('div');head.className='toast-head';const title=document.createElement('div');title.className='toast-title';title.textContent=err?'エラーが発生しました':'処理が完了しました';const close=document.createElement('button');close.type='button';close.className='toast-close';close.textContent='閉じる';close.addEventListener('click',()=>{toastEl.className='toast';toastEl.textContent=''});head.append(title,close);const body=document.createElement('div');body.className='toast-body';body.textContent=String(m||'');toastEl.append(head,body);if(!err)toast.t=setTimeout(()=>{toastEl.className='toast';toastEl.textContent=''},7000)};
-const fmt=v=>{if(!v)return '-';const d=new Date(v);return isNaN(d)?v:d.toLocaleString('ja-JP')};
-const sc=s=>({draft:'draft',published:'pub',closed:'closed'})[s]||'draft';const sl=s=>({draft:'下書き',published:'公開中',closed:'終了'})[s]||s;const typeLabel=t=>({text:'自由記述',single:'単一選択',multiple:'複数選択'})[t]||t;const uid=p=>p+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
-const badge=s=>`<span class="badge ${sc(s)}">${esc(sl(s))}</span>`;
-function qs(s){return (s?.groups||[]).flatMap(g=>(g.questions||[]));}
-function nums(s){const r={};let n=1,g=1;for(const gr of s.groups||[]){let q=1;for(const x of gr.questions||[]){r[x.id]=s.numberingFormat==='global'?`Q${n}`:`Q${g}-${q}`;n++;q++;}g++;}return r;}
-function survey(id=st.sid){return st.surveys.find(x=>String(x.id)===String(id))||null;}
-function sd(id=st.sid){return st.sd.find(x=>String(x.survey?.id)===String(id))||null;}
-function showConnectionResult(kind,type,title,detail=''){const el=document.getElementById(kind+'-result');if(!el)return;el.textContent='';el.className='connection-result show '+type;const titleEl=document.createElement('div');titleEl.className='result-title';titleEl.textContent=String(title||'');el.appendChild(titleEl);if(detail){const detailEl=document.createElement('div');detailEl.className='result-detail';detailEl.textContent=String(detail);el.appendChild(detailEl)}}
-function friendlyKintoneError(message){const m=String(message||'');if(/X-Cybozu-Authorization|パスワード認証に失敗|認証に失敗|password/i.test(m)){const safe=m.replace(/X-Cybozu-Authorization:\s*[^\s\n]*/ig,'X-Cybozu-Authorization: [非表示]');return {title:'kintoneへの接続に失敗しました。',detail:'ログイン名またはパスワードを確認してください。\n\n詳細：'+safe}}return {title:'kintoneへの接続に失敗しました。',detail:m}}
-function api(name,payload=null,btn=null){if(fileMode){toast('Apache経由でindex.phpを開いてください。',true);return Promise.resolve(null)}if(btn){btn.disabled=true;btn.dataset.old=btn.textContent;btn.classList.add('loading');btn.textContent='処理中…';}const o={method:payload===null?'GET':'POST',headers:{Accept:'application/json'}};if(payload!==null){o.headers['Content-Type']='application/json';o.headers['X-CSRF-Token']=st.csrf;o.body=JSON.stringify(payload)}return fetch(API+'?api='+encodeURIComponent(name),o).then(r=>r.json()).then(x=>{if(!x.ok){const f=x.error?.fields?Object.values(x.error.fields).join('\n'):'';throw new Error(f?(x.error?.message||'エラー')+'\n'+f:(x.error?.message||'処理に失敗しました。'))}return x.data}).catch(e=>{const message=e.message||'通信エラー';if(name==='smtp_test'){showConnectionResult('smtp','error','SMTP接続に失敗しました。',message)}else if(name==='kintone_test'){const k=friendlyKintoneError(message);showConnectionResult('kintone','error',k.title,k.detail)}else toast(message,true);return null}).finally(()=>{if(btn){btn.disabled=false;btn.classList.remove('loading');btn.textContent=btn.dataset.old||btn.textContent}})}
-async function reload(){const d=await api('bootstrap');if(!d)return false;st.csrf=d.csrfToken||st.csrf;st.surveys=d.surveys||[];st.customers=d.customers||[];st.sd=d.surveyData||[];st.settings=d.settings||st.settings;st.kmap=d.kintoneMapping||st.kmap||null;return true}
-function confirmBox(title,msg,yes,label='実行する',danger=false){modal.innerHTML=`<div class="modalbg"><div class="modal"><h3>${esc(title)}</h3><div style="white-space:pre-wrap">${esc(msg)}</div><div class="mact"><button class="btn" data-mcancel>キャンセル</button><button class="btn ${danger?'danger':'primary'}" data-myes>${esc(label)}</button></div></div></div>`;const c=modal.querySelector('[data-mcancel]'),y=modal.querySelector('[data-myes]');if(c)c.onclick=()=>modal.innerHTML='';if(y)y.onclick=async()=>{await yes(y);modal.innerHTML=''};}
-function navigate(page,sid='',tab='content'){if(st.dirty&&page!=='editor'&&!confirm('保存していない変更があります。このまま移動しますか？'))return;st.dirty=false;st.page=page;st.sid=sid;st.tab=tab;st.selected=[];if(page!=='editor')st.editor=null;const p=new URLSearchParams();if(page==='editor')p.set('page','editor');else if(page==='survey'){p.set('page','survey');p.set('id',sid);p.set('tab',tab)}else if(page!=='surveys')p.set('page',page);history.replaceState(null,'',API+(p.toString()?'?'+p.toString():''));render();}
-function shell(body,on){return `<header class="hdr"><div class="hdrin"><div class="logo" data-nav=surveys>アンケート業務運営アプリ</div><nav class="nav"><button class="${on==='surveys'?'on':''}" data-nav=surveys>アンケート一覧</button><button class="${on==='editor'?'on':''}" data-nav=new>新規アンケート作成</button><button class="${on==='customers'?'on':''}" data-nav=customers>顧客一覧</button><button class="${on==='settings'?'on':''}" data-nav=settings>設定</button></nav></div></header>${body}`}
-function surveysPage(){const rows=st.surveys.map(s=>{const d=sd(s.id),stats=d?.stats||{};const ops=[`<button class="btn" data-act=open data-id="${esc(s.id)}">内容</button>`,`<button class="btn" data-act=send-direct data-id="${esc(s.id)}">送信</button>`,`<button class="btn" data-act=status-direct data-id="${esc(s.id)}">回答状況</button>`,`<button class="btn" data-act=result-direct data-id="${esc(s.id)}">集計</button>`,`<button class="btn" data-act=preview data-id="${esc(s.id)}">回答画面</button>`,`<button class="btn" data-act=edit data-id="${esc(s.id)}">編集</button>`];if(s.status==='draft')ops.push(`<button class="btn success" data-act=publish data-id="${esc(s.id)}">公開する</button>`);if(s.status==='published')ops.push(`<button class="btn warning" data-act=close data-id="${esc(s.id)}">終了する</button>`);if(s.status==='draft')ops.push(`<button class="btn" data-act=delete data-id="${esc(s.id)}">削除</button>`);return `<tr><td><b>${esc(s.name||'(無題)')}</b><div class="small muted">ID: ${esc(s.id)}</div></td><td>${badge(s.status)}</td><td>${esc(fmt(s.createdAt))}<br>${esc(fmt(s.updatedAt))}</td><td>${esc(fmt(s.startAt))}<br>～ ${esc(fmt(s.endAt))}</td><td>${stats.responseCount||0} 件</td><td><div class="actions">${ops.join('')}</div></td></tr>`}).join('');return shell(`<main class="page"><div class="bar"><div><h1 class="title">アンケート一覧</h1><div class="sub">内容・送信・回答状況・集計・回答画面をここから直接確認できます。</div></div><button class="btn primary" data-nav=new>＋ 新規アンケートを作成</button></div><div class="card"><div class="a-info alert"><b>画面確認：</b>各アンケートの「送信」「回答状況」「集計」「回答画面」ボタンから、それぞれの画面を直接開けます。</div><div class="wrap"><table><thead><tr><th>アンケート名</th><th>状態</th><th>作成 / 更新</th><th>公開期間</th><th>回答数</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="6"><div class="empty">アンケートはまだありません。</div></td></tr>'}</tbody></table></div></div></main>`,'surveys')}
-function emptySurvey(){const a=new Date(),b=new Date(Date.now()+30*86400000);const d=x=>{const p=n=>String(n).padStart(2,'0');return `${x.getFullYear()}-${p(x.getMonth()+1)}-${p(x.getDate())}T${p(x.getHours())}:${p(x.getMinutes())}`};return{id:uid('sv_'),name:'',description:'',status:'draft',startAt:d(a),endAt:d(b),numberingFormat:'group',groups:[{id:uid('g_'),name:'基本情報',questions:[{id:uid('q_'),text:'',type:'single',required:true,choices:[{id:uid('c_'),label:'選択肢1'},{id:uid('c_'),label:'選択肢2'}],branches:{}}]}],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};}
-function editorPage(){if(!st.editor)st.editor=emptySurvey();const s=st.editor,n=nums(s),all=qs(s);const gs=(s.groups||[]).map((g,gi)=>{const qh=(g.questions||[]).map((q,qi)=>{const ch=(q.choices||[]).map((c,ci)=>`<div class="choice"><input class="ctl" data-ed=choice data-gi=${gi} data-qi=${qi} data-ci=${ci} value="${esc(c.label)}"><button class="btn" data-act=rmchoice data-gi=${gi} data-qi=${qi} data-ci=${ci}>削除</button></div>`).join('');const br=q.type==='single'?(q.choices||[]).map(c=>{const cur=q.branches?.[c.id]||'next';let op=`<option value=next ${cur==='next'?'selected':''}>次の質問</option>`;for(const t of all)if(t.id!==q.id){const tg=(s.groups||[]).find(gr=>(gr.questions||[]).some(qq=>qq.id===t.id));const groupName=(tg?.name||'グループ名未設定').trim()||'グループ名未設定';const qText=(t.text||'').trim()||'質問文未入力';const label=`${n[t.id]||t.id}：${qText}（${groupName}）`;op+=`<option value="question:${esc(t.id)}" ${cur===`question:${t.id}`?'selected':''}>${esc(label)}</option>`;}op+=`<option value=end ${cur==='end'?'selected':''}>アンケートを終了</option>`;return `<div class=branch><span>${esc(c.label)}</span><select class=ctl data-ed=branch data-gi=${gi} data-qi=${qi} data-cid="${esc(c.id)}">${op}</select></div>`}).join(''):'';return `<div class="q" data-dq data-gi=${gi} data-qi=${qi}><div class="qgrid"><div class="drag-handle" data-dq-handle data-gi=${gi} data-qi=${qi} draggable=true title="ドラッグして質問を移動" aria-label="質問をドラッグして移動">☷<span>移動</span></div><div><div style="display:flex;align-items:center;gap:9px;margin-bottom:8px"><span class="qnum">${esc(n[q.id]||'Q')}</span><span class="small muted">質問番号</span></div><input class="ctl" data-ed=qtext data-gi=${gi} data-qi=${qi} value="${esc(q.text)}" placeholder="質問文を入力してください"><div class="grid2" style="margin-top:9px"><div class=fg><label>回答形式</label><select class=ctl data-ed=type data-gi=${gi} data-qi=${qi}><option value=single ${q.type==='single'?'selected':''}>単一選択</option><option value=multiple ${q.type==='multiple'?'selected':''}>複数選択</option><option value=text ${q.type==='text'?'selected':''}>自由記述</option></select></div><div class=fg><label>必須</label><label style="font-weight:400;padding-top:9px"><input type=checkbox data-ed=req data-gi=${gi} data-qi=${qi} ${q.required?'checked':''}> 回答必須</label></div></div>${q.type!=='text'?`<div class="small muted" style="margin:7px 0">選択肢</div>${ch}<button class="btn" data-act=addchoice data-gi=${gi} data-qi=${qi}>＋ 選択肢を追加</button>`:''}${q.type==='single'?`<div class="small muted" style="margin:13px 0 7px">回答による分岐</div>${br}`:''}</div><div class="q-actions"><button class="btn danger" data-act=rmq data-gi=${gi} data-qi=${qi}>質問を削除</button></div></div></div>`}).join('');return `<div class="group" data-dg data-gi=${gi}><div class=gh><span class="drag-handle group-drag-handle" data-dg-handle data-gi=${gi} draggable=true title="ドラッグしてグループを移動">☷<span>移動</span></span><b>グループ ${gi+1}</b><input class=ctl style="max-width:380px" data-ed=gname data-gi=${gi} value="${esc(g.name)}"><div style="margin-left:auto" class=actions><button class=btn data-act=rmg data-gi=${gi}>グループ削除</button></div></div><div class=gb data-qgroupdrop data-gi=${gi}>${qh||'<div class=empty style="padding:20px">質問がありません。ここへ質問をドラッグできます。</div>'}<button class=btn data-act=addq data-gi=${gi}>＋ 質問を追加</button></div></div>`}).join('');return shell(`<main class=page><div class=bar><div><h1 class=title>${getSurveyName(s.id)?'アンケート編集':'新規アンケート作成'}</h1><div class=sub>基本情報・グループ・質問・分岐を1画面で編集します。</div></div><div class=actions><button class=btn data-act=cancel>キャンセル</button><button class="btn" data-act=save>下書き保存</button>${s.status==='draft'?'<button class="btn success" data-act=publish-editor>公開する</button>':''}</div></div><div class=card><div class=grid2><div class=fg><label>アンケート名 <span class=req>*</span></label><input class=ctl data-ed=name value="${esc(s.name)}"></div><div class=fg><label>質問番号</label><select class=ctl data-ed=num><option value=group ${s.numberingFormat==='group'?'selected':''}>グループ別</option><option value=global ${s.numberingFormat==='global'?'selected':''}>全体通番</option></select></div></div><div class=fg><label>説明文 / 案内文</label><textarea class=ctl rows=3 data-ed=desc>${esc(s.description)}</textarea></div><div class=grid2><div class=fg><label>公開開始日時</label><input class=ctl type=datetime-local data-ed=start value="${esc(String(s.startAt||'').slice(0,16))}"></div><div class=fg><label>公開終了日時</label><input class=ctl type=datetime-local data-ed=end value="${esc(String(s.endAt||'').slice(0,16))}"></div></div><div class=a-info alert>状態：${badge(s.status)}<div class="small" style="margin-top:5px">未完成でも「下書き保存」できます。公開するときは「公開する」を押してください。</div></div></div><div class=card><div class=bar><div><h2 style="margin:0">質問グループ</h2><div class="small muted">質問の移動は「移動」部分をドラッグ＆ドロップしてください。グループをまたいだ移動や、空のグループへの移動にも対応しています。</div></div></div><div id=groups>${gs||'<div class=empty>グループがありません。</div>'}</div><div class=actions style="justify-content:flex-end;margin-top:12px;padding-top:12px;border-top:1px solid var(--b)"><button class="btn primary" data-act=addg>＋ グループを追加</button></div></div><div class=actions style="justify-content:flex-end"><button class=btn data-act=cancel>キャンセル</button><button class="btn" data-act=save>下書き保存</button>${s.status==='draft'?'<button class="btn success" data-act=publish-editor>公開する</button>':''}</div></main>`,'editor');
-}
-function getSurveyName(id){return st.surveys.some(x=>String(x.id)===String(id))}
-function detail(s){const n=nums(s);const body=(s.groups||[]).map(g=>`<div style="margin:0 0 18px"><h3 style="margin:0 0 7px">📁 ${esc(g.name||'(無題のグループ)')}</h3>${(g.questions||[]).map(q=>`<div style="border-bottom:1px dashed var(--b);padding:9px 0"><b style="color:var(--p)">${esc(n[q.id]||'')}</b> <b>${esc(q.text||'(無題)')}</b> <span class="badge info">${esc(typeLabel(q.type))}</span> <span class="small ${q.required?'req':'muted'}">${q.required?'*必須':'任意'}</span>${q.choices?.length?`<ul>${q.choices.map(c=>`<li>${esc(c.label||'(未設定)')}${q.branches?.[c.id]&&q.branches[c.id]!=='next'?` <span class=small style="color:var(--p)">→ ${esc(q.branches[c.id]==='end'?'終了':(n[q.branches[c.id].replace(/^question:/,'')]||q.branches[c.id]))}</span>`:''}</li>`).join('')}</ul>`:''}</div>`).join('')}</div>`).join('');const publishBtn=s.status==='draft'?`<button class="btn success" data-act=publish data-id="${esc(s.id)}">公開する</button>`:'';return `<div class=card><div class=bar><div><h2 style="margin:0">${esc(s.name||'(無題のアンケート)')}</h2><div class="small muted">${esc(fmt(s.startAt)||'-')} ～ ${esc(fmt(s.endAt)||'-')}　${badge(s.status)}</div></div><div class=actions>${publishBtn}<button class="btn primary" data-act=edit data-id="${esc(s.id)}">内容を編集する</button><button class="btn" data-act=publicurl data-id="${esc(s.id)}">回答URLを発行</button><button class="btn" data-act=preview data-id="${esc(s.id)}">回答者プレビュー</button></div></div><p style="white-space:pre-wrap">${esc(s.description||'')}</p>${body||'<div class=empty>質問がありません。</div>'}</div>`;}
-function sendPage(s){const d=sd(s.id),logs=d?.logs||[],q=st.csearch.toLowerCase(),cs=st.customers.filter(c=>`${c.name} ${c.email} ${c.company}`.toLowerCase().includes(q));const list=cs.map(c=>`<label style="display:flex;gap:8px;padding:8px;border:1px solid var(--b);border-radius:8px;margin:5px 0"><input type=checkbox data-act=customer data-id="${esc(c.id)}" ${st.selected.includes(c.id)?'checked':''}><span><b>${esc(c.name)}</b><br><span class=small muted>${esc(c.email)}${c.company?' / '+esc(c.company):''}</span></span></label>`).join('');const fail=logs.filter(x=>x.status==='failed').length;const canSend=s.status==='published';return `<div class=card><div class=bar><div><h2 style="margin:0">送信</h2><div class="small muted">対象者を選択して回答依頼を送信します。</div></div><b>${st.selected.length}名選択中</b></div>${canSend?'':'<div class="a-info alert"><b>このアンケートはまだ公開されていません。</b><br>送信画面は確認できますが、メール送信は公開後に実行できます。上部の「公開する」から公開してください。</div>'}<div class=actions><input id=cs class=ctl style="max-width:420px" placeholder="氏名・メールアドレス・会社名で検索" value="${esc(st.csearch)}"><button class=btn data-act=all>全選択</button><button class=btn data-act=none>全解除</button></div><div style="margin-top:12px;max-height:300px;overflow:auto">${list||'<div class=empty>顧客がありません。顧客一覧から顧客を確認してください。</div>'}</div><div class=grid2 style="margin-top:15px"><div class=fg><label>件名</label><input id=sub class=ctl value="${esc(st.subject)}"></div><div class=fg><label>回答URL</label><input class=ctl value="{{ANSWER_URL}}" readonly></div></div><div class=fg><label>本文</label><textarea id=mb class=ctl rows=9>${esc(st.body)}</textarea></div><div class=a-info alert><b>{{ANSWER_URL}}</b> は送信時に対象者ごとの回答URLへ自動置換されます。</div><div class=actions style="justify-content:flex-end"><button class=btn data-act=mailpreview>送信プレビュー</button><button class="btn primary" data-act=send ${canSend?'':'disabled'}>送信する</button></div></div><div class=card><div class=bar><h2 style="margin:0">送信履歴</h2>${fail?'<button class="btn primary" data-act=resend>失敗者に再送</button>':''}</div><div class=wrap><table><thead><tr><th>対象者</th><th>メール</th><th>状態</th><th>送信日時</th><th>エラー</th></tr></thead><tbody>${logs.map(l=>`<tr><td>${esc(l.name)}</td><td>${esc(l.email)}</td><td>${l.status==='failed'?'<span class="badge closed">送信失敗</span>':l.status==='answered'?'<span class="badge pub">回答済み</span>':'<span class="badge pub">送信済み</span>'}</td><td>${esc(l.sentAt||'-')}</td><td>${esc(l.error||'')}</td></tr>`).join('')||'<tr><td colspan=5><div class=empty>まだ送信履歴はありません。</div></td></tr>'}</tbody></table></div></div>`}
-
-function statusPage(s){const x=sd(s.id)?.stats||{responseCount:0,sentCount:0,responseRate:0,unansweredCount:0,daily:{},recipientStatuses:[]};const ds=Object.entries(x.daily||{}),mx=Math.max(1,...ds.map(a=>Number(a[1])));return `<div class=card><div class=bar><h2 style="margin:0">回答状況ダッシュボード</h2><button class=btn data-act=refresh>最新情報に更新</button></div><div class=grid4><div class=stat><span class=small muted>総回答件数</span><b>${x.responseCount}</b></div><div class=stat><span class=small muted>メール送信数</span><b>${x.sentCount}</b></div><div class=stat><span class=small muted>回答率</span><b>${x.responseRate}%</b></div><div class=stat><span class=small muted>未回答者数</span><b>${x.unansweredCount}</b></div></div></div><div class=card><h2 style="margin-top:0">日別回答受付件数</h2>${ds.length?ds.map(([d,n])=>`<div style="display:grid;grid-template-columns:110px 50px 1fr;gap:8px;align-items:center;margin:8px 0"><span class=small>${esc(d)}</span><b>${n}</b><div class=barbg><i style="width:${Math.round(Number(n)/mx*100)}%"></i></div></div>`).join(''):'<div class=empty>回答データはまだありません。</div>'}</div><div class=card><h2 style="margin-top:0">対象者ステータス</h2><div class=wrap><table><thead><tr><th>対象者</th><th>メール</th><th>状態</th><th>送信日時</th></tr></thead><tbody>${(x.recipientStatuses||[]).map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(r.email)}</td><td>${r.status==='answered'?'<span class="badge pub">回答済み</span>':'<span class="badge info">送信済み・未回答</span>'}</td><td>${esc(r.sentAt||'-')}</td></tr>`).join('')||'<tr><td colspan=4><div class=empty>対象者データはありません。</div></td></tr>'}</tbody></table></div></div>`}
-function resultPage(s){const data=sd(s.id)||{},rs=data.results||[],logs=data.logs||[],x=data.stats||{responseCount:0,sentCount:0,responseRate:0,unansweredCount:0},n=nums(s);const statusLabel=v=>v==='answered'?'<span class="badge pub">回答済み</span>':v==='failed'?'<span class="badge closed">送信失敗</span>':'<span class="badge info">送信済み・未回答</span>';const recipientRows=logs.map(l=>`<tr><td>${esc(l.name||'-')}</td><td>${esc(l.email||'-')}</td><td>${statusLabel(l.status||'sent')}</td><td>${esc(l.sentAt||'-')}</td><td>${esc(l.answeredAt||'-')}</td><td>${esc(l.error||'')}</td></tr>`).join('');return `<div class=card><div class=bar><div><h2 style="margin:0">回答結果</h2><div class="small muted">分岐でスキップされた質問は集計母数から除外しています。</div></div><button class=btn data-act=refresh>最新情報に更新</button></div><div class=grid4 style="margin-top:14px"><div class=stat><span class=small muted>送信先数</span><b>${x.sentCount}</b></div><div class=stat><span class=small muted>回答済み</span><b>${x.responseCount}</b></div><div class=stat><span class=small muted>回答率</span><b>${x.responseRate}%</b></div><div class=stat><span class=small muted>未回答</span><b>${x.unansweredCount}</b></div></div></div><div class=card><div class=bar><div><h2 style="margin:0">送信先一覧・回答状況</h2><div class="small muted">回答依頼を送った相手ごとの送信・回答状況を確認できます。</div></div></div><div class=wrap><table><thead><tr><th>送信先</th><th>メール</th><th>回答状況</th><th>送信日時</th><th>回答日時</th><th>エラー</th></tr></thead><tbody>${recipientRows||'<tr><td colspan=6><div class=empty>まだ送信履歴はありません。</div></td></tr>'}</tbody></table></div></div>${rs.map(r=>{const q=qs(s).find(x=>x.id===r.questionId);if(r.type==='text')return `<div class=card><h3>${esc(n[r.questionId])} ${esc(q?.text||r.questionId)}</h3><div class=small muted>回答対象 ${r.targetCount} 件 / 回答 ${r.answeredCount} 件</div>${r.texts.length?r.texts.map(t=>`<div style="border:1px solid var(--b);padding:10px;border-radius:7px;margin:7px 0;white-space:pre-wrap">${esc(t.text)}<div class=small muted>${esc(fmt(t.answeredAt))}</div></div>`).join(''):'<div class=empty>回答はありません。</div>'}</div>`;return `<div class=card><h3>${esc(n[r.questionId])} ${esc(q?.text||r.questionId)}</h3><div class=small muted>回答対象 ${r.targetCount} 件</div>${(r.choices||[]).map(c=>`<div style="display:grid;grid-template-columns:180px 55px 1fr 55px;gap:8px;align-items:center;margin:8px 0"><span>${esc(c.label)}</span><b>${c.count}</b><div class=barbg><i style="width:${Math.min(100,Number(c.percentage)||0)}%"></i></div><span class=small>${c.percentage}%</span></div>`).join('')}</div>`}).join('')||'<div class=card><div class=empty>回答データがまだありません。</div></div>'}`}
-function surveyPage(){const s=survey();if(!s)return surveysPage();const tabs=[['content','アンケート内容'],['send','送信'],['status','回答状況'],['result','集計・回答結果']].map(a=>`<button class="tab ${st.tab===a[0]?'on':''}" data-tab="${a[0]}">${a[1]}</button>`).join('');const quick=`<div class="card"><div class="bar"><div><h2 style="margin:0">画面確認</h2><div class="small muted">このアンケートに関する主要画面を直接開けます。</div></div></div><div class="actions"><button class="btn ${st.tab==='content'?'primary':''}" data-tab="content">アンケート内容</button><button class="btn ${st.tab==='send'?'primary':''}" data-tab="send">送信画面</button><button class="btn ${st.tab==='status'?'primary':''}" data-tab="status">回答状況画面</button><button class="btn ${st.tab==='result'?'primary':''}" data-tab="result">集計・回答結果画面</button><button class="btn" data-act=preview data-id="${esc(s.id)}">回答画面を確認</button>${s.status==='draft'?`<button class="btn success" data-act=publish data-id="${esc(s.id)}">公開する</button>`:''}</div></div>`;let b=st.tab==='content'?detail(s):st.tab==='send'?sendPage(s):st.tab==='status'?statusPage(s):resultPage(s);return shell('', 'surveys')+`<div class=subnav><div class=subnavin><div class=subname>${esc(s.name||'(無題)')}</div>${tabs}<button class=btn data-act=back>一覧へ戻る</button></div></div><main class=page>${quick}${b}</main>`}
-function kFieldOptions(fields,selected,target){const opts=['<option value="">選択してください</option>'];for(const f of fields||[]){const type=String(f.type||'').toUpperCase(),protocol=String(f.protocol||'').toUpperCase();let ok=false;if(target==='email')ok=type==='EMAIL'||type==='SINGLE_LINE_TEXT'||(type==='LINK'&&protocol==='MAIL');else if(target==='phone')ok=type==='SINGLE_LINE_TEXT'||(type==='LINK'&&protocol==='TEL');else ok=['SINGLE_LINE_TEXT','MULTI_LINE_TEXT'].includes(type);if(f.lookup)ok=false;if(!ok)continue;opts.push(`<option value="${esc(f.code)}" ${selected===f.code?'selected':''}>${esc(f.label||f.code)}（${esc(f.code)} / ${esc(type)}${protocol?' / '+esc(protocol):''}）</option>`)}return opts.join('')}
-function syncKintoneMappingInputs(){const el=document.getElementById('map-address');if(el){const vals=[...document.querySelectorAll('[data-address-map]')].map(x=>String(x.value||'').trim()).filter(Boolean);el.value=JSON.stringify(vals);if(st.kmap){st.kmap.mappings=st.kmap.mappings||{};st.kmap.mappings.address=vals;}}}
-function mappingStatus(){const m=st.kmap||{};if(!m.fields?.length)return 'フィールド定義未取得';if(!m.mappings?.name||!m.mappings?.email)return '必須マッピング未完了';const ac=Array.isArray(m.mappings?.address)?m.mappings.address.length:0;return ac?`マッピング済み（住所${ac}項目）`:'マッピング済み';}
-function customersPage(){
-  const q=st.csearch.toLowerCase();const cs=st.customers.filter(c=>`${c.name||''} ${c.email||''} ${c.company||''} ${c.phone||''} ${c.address||''}`.toLowerCase().includes(q));
-  const km=st.kmap||{fields:[],mappings:{name:'',email:'',company:'',phone:'',address:[]}};const map=km.mappings||{name:'',email:'',company:'',phone:'',address:[]};const address=Array.isArray(map.address)?map.address:[];const preview=st.kpreview;
-  const addressRows=address.map((code,i)=>`<div class="mapping-row"><div class="fg" style="margin:0;flex:1"><select class="ctl" data-address-map>${kFieldOptions(km.fields||[],String(code||''),'address')}</select></div><div class="actions"><button class="btn" data-act=address-up data-ai=${i} ${i===0?'disabled':''}>↑</button><button class="btn" data-act=address-down data-ai=${i} ${i===address.length-1?'disabled':''}>↓</button><button class="btn danger" data-act=address-remove data-ai=${i}>削除</button></div></div>`).join('');
-  const previewHtml=preview?`<div class="card"><div class="bar"><div><h2 style="margin:0">同期プレビュー</h2><div class="small muted">現在のフィールド定義とマッピングで確認した結果です。</div></div><button class="btn primary" data-act=ksync ${preview.errorCount?'disabled':''}>この内容で同期する</button></div><div class="grid4"><div class=stat>対象件数<b>${preview.totalCount}</b></div><div class=stat>新規<b>${preview.newCount}</b></div><div class=stat>更新<b>${preview.updatedCount}</b></div><div class=stat>変更なし<b>${preview.unchangedCount}</b></div></div><div class="grid2" style="margin-top:12px"><div class=stat>kintone側から見つからない既存顧客<b>${preview.inactiveCount}</b></div><div class=stat>エラー<b>${preview.errorCount}</b></div></div>${preview.errorCount?`<div class="a-ng alert"><b>同期できないデータがあります。</b><div style="white-space:pre-wrap;margin-top:6px">${esc((preview.errors||[]).join('\n'))}</div></div>`:''}<div class=wrap style="margin-top:12px"><table><thead><tr><th>状態</th><th>kintoneレコード番号</th><th>顧客名</th><th>メールアドレス</th><th>電話番号</th><th>住所</th><th>会社名</th><th>内容</th></tr></thead><tbody>${(preview.rows||[]).map(r=>`<tr><td>${r.status==='new'?'<span class="badge pub">新規</span>':r.status==='updated'?'<span class="badge info">更新</span>':r.status==='unchanged'?'<span class="badge draft">変更なし</span>':'<span class="badge closed">エラー</span>'}</td><td>${esc(r.kintoneRecordId)}</td><td>${esc(r.name)}</td><td>${esc(r.email)}</td><td>${esc(r.phone||'')}</td><td>${esc(r.address||'')}</td><td>${esc(r.company||'')}</td><td>${esc(r.error||'')}</td></tr>`).join('')||'<tr><td colspan=8><div class=empty>確認対象がありません。</div></td></tr>'}</tbody></table></div></div>`:'';
-  return shell(`<main class=page><div class=bar><div><h1 class=title>顧客一覧・kintone同期</h1><div class=sub>kintoneの顧客アプリの項目を取得し、本システムの顧客項目へ対応付けてから同期します。</div></div></div><div class=card><div class=bar><div><h2 style="margin:0">同期準備</h2><div class=small>状態：<b>${esc(mappingStatus())}</b></div></div><div class=actions><button class="btn" data-act=kfields>フィールド定義を取得</button><button class="btn" data-act=kvalidate ${!km.fields?.length?'disabled':''}>マッピングを検証</button><button class="btn" data-act=kpreview ${!km.fields?.length?'disabled':''}>同期プレビュー</button></div></div><div class="a-info alert">kintoneへの接続確認だけでは顧客同期は実行できません。最新のフィールド定義を取得し、顧客名・メールアドレス・電話番号・住所・会社名の対応付けを確認してから同期してください。</div>${km.fetchedAt?`<div class="small muted">対象アプリ：${esc(km.appId||'-')}　フィールド取得日時：${esc(fmt(km.fetchedAt))}　定義ハッシュ：${esc((km.schemaHash||'').slice(0,16))}…</div>`:'<div class="small muted">まだフィールド定義を取得していません。</div>'}</div><div class="card"><div class=bar><div><h2 style="margin:0">顧客項目のマッピング</h2><div class=small muted>顧客名とメールアドレスは必須です。電話番号・会社名・住所は任意で指定できます。住所は複数項目を順番に指定できます。</div></div><button class="btn primary" data-act=ksave ${!km.fields?.length?'disabled':''}>マッピングを保存</button></div><div class=grid2><div class=fg><label>顧客名 <span class=req>*</span></label><select class=ctl data-map=name>${kFieldOptions(km.fields||[],String(map.name||''),'name')}</select></div><div class=fg><label>メールアドレス <span class=req>*</span></label><select class=ctl data-map=email>${kFieldOptions(km.fields||[],String(map.email||''),'email')}</select></div></div><div class=grid2><div class=fg><label>電話番号</label><select class=ctl data-map=phone>${kFieldOptions(km.fields||[],String(map.phone||''),'phone')}</select></div><div class=fg><label>会社名</label><select class=ctl data-map=company>${kFieldOptions(km.fields||[],String(map.company||''),'company')}</select></div></div><div class=fg><label>住所</label><input type=hidden id=map-address data-map=address value="${esc(JSON.stringify(address))}"><div class=small muted style="margin-bottom:8px">郵便番号、都道府県、市区町村、番地、建物名など、kintone側で分かれている住所項目を複数指定できます。上から順番に連結して顧客住所として保存します。</div><div id=address-mapping-list>${addressRows||'<div class=empty style="padding:15px">住所項目はまだ指定されていません。</div>'}</div><button class="btn" data-act=address-add>＋ 住所項目を追加</button></div>${km.fields?.length?`<div class=wrap style="margin-top:14px"><table><thead><tr><th>field code</th><th>表示名</th><th>種類</th><th>設定</th><th>必須</th></tr></thead><tbody>${km.fields.map(f=>`<tr><td>${esc(f.code)}</td><td>${esc(f.label)}</td><td>${esc(f.type)}${f.protocol?` / ${esc(f.protocol)}`:''}</td><td>${f.lookup?'ルックアップ':''}</td><td>${f.required?'はい':'いいえ'}</td></tr>`).join('')}</tbody></table></div>`:'<div class=empty style="padding:22px">フィールド定義を取得すると、ここにkintoneの項目一覧が表示されます。</div>'}</div>${previewHtml}<div class="card"><div class=bar><div><h2 style="margin:0">顧客一覧</h2><div class=small muted>同期後の送信対象者を確認します。</div></div><button class="btn" data-act=refresh>最新表示</button></div><input id=cmains class=ctl style="max-width:420px" placeholder="氏名・メールアドレス・電話番号・住所・会社名で検索" value="${esc(st.csearch)}"><div class=wrap style="margin-top:10px"><table><thead><tr><th>顧客名</th><th>メールアドレス</th><th>電話番号</th><th>住所</th><th>会社名</th><th>同期状態</th><th>更新日時</th></tr></thead><tbody>${cs.map(c=>`<tr><td>${esc(c.name||'')}</td><td>${esc(c.email||'')}</td><td>${esc(c.phone||'')}</td><td>${esc(c.address||'')}</td><td>${esc(c.company||'')}</td><td>${c.status==='inactive'?'<span class="badge closed">非アクティブ</span>':c.syncStatus==='synced'?'<span class="badge pub">同期済み</span>':'<span class="badge draft">未同期</span>'}${c.syncError?`<div class=small style="color:var(--ng);margin-top:4px">${esc(c.syncError)}</div>`:''}</td><td>${esc(fmt(c.updatedAt))}</td></tr>`).join('')||'<tr><td colspan=7><div class=empty>顧客データがありません。</div></td></tr>'}</tbody></table></div></div></main>`,'customers');
-}
-function settingsPage(){const s=st.settings||{smtp:{},kintone:{}},m=s.smtp||{},k=s.kintone||{};return shell(`<main class=page><div class=bar><div><h1 class=title>設定</h1><div class=sub>SMTPとkintoneの接続設定を管理します。</div></div><button class="btn primary" data-act=savesettings>設定を保存</button></div><div class=card><div class=bar><div><h2 style="margin:0">SMTP</h2><div class="small muted">メール送信に使用するSMTPサーバーの設定です。</div></div><div class=actions><button class=btn data-act=smtptest>SMTP接続確認</button><button class=btn data-act=smtptestmail>テストメール送信</button></div></div><div class=grid2><div class=fg><label>SMTPサーバ</label><input class=ctl data-set=smtp.host value="${esc(m.host||'')}"></div><div class=fg><label>ポート</label><input class=ctl type=number data-set=smtp.port value="${esc(m.port||587)}"></div></div><div class=grid2><div class=fg><label>暗号化</label><select class=ctl data-set=smtp.secure><option value=none ${m.secure==='none'?'selected':''}>None</option><option value=ssl ${m.secure==='ssl'?'selected':''}>SSL</option><option value=tls ${m.secure==='tls'?'selected':''}>TLS</option></select></div><div class=fg><label>認証ユーザー名</label><input class=ctl data-set=smtp.username value="${esc(m.username||'')}"></div></div><div class=grid2><div class=fg><label>認証パスワード</label><input class=ctl type=password data-set=smtp.password placeholder="変更時のみ入力"></div><div class=fg><label>送信元メールアドレス</label><input class=ctl data-set=smtp.fromEmail value="${esc(m.fromEmail||'')}"></div></div><div class=fg><label>送信元表示名</label><input class=ctl data-set=smtp.fromName value="${esc(m.fromName||'')}"></div><div class=fg><label>テスト送信先メールアドレス</label><input id=smtp-test-to class=ctl placeholder="例：your@example.com"></div><div class=small muted>パスワード設定済み：${m.passwordSet?'はい':'いいえ'}</div><div id=smtp-result class="connection-result" role=alert aria-live=polite></div><div class="small muted" style="margin-top:7px">「テストメール送信」は実際に1通送ります。</div></div><div class=card><div class=bar><div><h2 style="margin:0">kintone</h2><div class="small muted">接続情報だけをここで管理します。顧客項目の対応付けと同期は「顧客一覧・kintone同期」で行います。</div></div><button class=btn data-act=ktest>kintone接続確認</button></div><div class=grid2><div class=fg><label>サブドメイン</label><input class=ctl data-set=kintone.subdomain value="${esc(k.subdomain||'')}"></div><div class=fg><label>アプリID</label><input class=ctl data-set=kintone.appId value="${esc(k.appId||'')}"></div></div><div class=grid2><div class=fg><label>ログイン名</label><input class=ctl data-set=kintone.login value="${esc(k.login||'')}"></div><div class=fg><label>パスワード</label><input class=ctl type=password data-set=kintone.password placeholder="変更時のみ入力"></div></div><div class=grid2><div class=fg><label>プロキシ host:port</label><input class=ctl data-set=kintone.proxyHostPort value="${esc(k.proxyHostPort||'')}"></div><div class=fg><label>SSL証明書検証</label><label style="font-weight:400;padding-top:9px"><input type=checkbox data-set=kintone.verifySsl ${k.verifySsl?'checked':''}> 有効にする</label></div></div><div class="a-info alert">顧客名・メールアドレス等のフィールドコードをこの画面へ直接入力する必要はありません。顧客一覧画面で最新のフィールド定義を取得してマッピングします。</div><div id=kintone-result class="connection-result" role=alert aria-live=polite></div></div></main>`,'settings')}
-function render(){if(window.APP_MODE==='answer'||window.APP_MODE==='preview'){renderRespondent();return}if(st.page==='editor')app.innerHTML=editorPage();else if(st.page==='survey')app.innerHTML=surveyPage();else if(st.page==='customers')app.innerHTML=customersPage();else if(st.page==='settings')app.innerHTML=settingsPage();else app.innerHTML=surveysPage();bind();}
-function renderRespondent(){if(!window.APP_CONTEXT){app.innerHTML=`<div class=respond><div class=respondcard><h1>アンケート</h1><div class="a-ng alert">${esc(window.APP_MESSAGE||'回答画面を表示できません。')}</div></div></div>`;return}const c=window.APP_CONTEXT,s=c.survey,n=nums(s),preview=!!c.preview;app.innerHTML=`<div class=respond><div class=respondcard>${preview?'<div class=preview>回答者プレビューです。送信しても保存されません。</div>':''}<h1>${esc(s.name||'(無題のアンケート)')}</h1><p style="white-space:pre-wrap;color:var(--m)">${esc(s.description||'')}</p><form id=af>
-${qs(s).map(q=>{if(q.type==='text')return `<section class=rq data-qid="${esc(q.id)}"><div class=rqt>${esc(n[q.id])} ${esc(q.text)}${q.required?'<span class=req> *必須</span>':''}</div><textarea class=ctl name="q_${esc(q.id)}" rows=4></textarea></section>`;return `<section class=rq data-qid="${esc(q.id)}"><div class=rqt>${esc(n[q.id])} ${esc(q.text)}${q.required?'<span class=req> *必須</span>':''}</div>${(q.choices||[]).map(x=>q.type==='single'?`<label class=rchoice><input type=radio name="q_${esc(q.id)}" value="${esc(x.id)}"><span>${esc(x.label)}</span></label>`:`<label class=rchoice><input type=checkbox name="q_${esc(q.id)}" value="${esc(x.id)}"><span>${esc(x.label)}</span></label>`).join('')}</section>`}).join('')}<div id=ae></div><div style="display:flex;justify-content:flex-end;margin-top:18px"><button id=as class="btn primary" ${preview?'disabled':''}>${preview?'プレビュー中':'回答を送信する'}</button></div></form></div></div>`;bindRespondent();}
-function bindRespondent(){const f=document.getElementById('af');if(!f)return;const preview=window.APP_MODE==='preview';const update=()=>{const s=window.APP_CONTEXT.survey,a={};for(const q of qs(s)){const name='q_'+q.id;if(q.type==='multiple')a[q.id]=[...f.querySelectorAll(`input[name="${CSS.escape(name)}"]:checked`)].map(x=>x.value);else if(q.type==='single'){const x=f.querySelector(`input[name="${CSS.escape(name)}"]:checked`);a[q.id]=x?.value||''}else a[q.id]=f.querySelector(`[name="${CSS.escape(name)}"]`)?.value||''}const allow=new Set((()=>{const all=qs(s),ix=Object.fromEntries(all.map((q,i)=>[q.id,i]));let i=0,g=0,se=new Set(),o=[];while(all[i]&&g++<10000){const q=all[i];if(se.has(q.id))break;se.add(q.id);o.push(q.id);if(q.type!=='single'){i++;continue}const c=(q.choices||[]).find(x=>x.id===a[q.id]);const t=c?(q.branches?.[c.id]||'next'):'next';if(t==='end')break;if(t==='next'){i++;continue}const id=t.startsWith('question:')?t.slice(9):t;if(ix[id]===undefined)break;i=ix[id]}return o})());f.querySelectorAll('.rq').forEach(x=>x.style.display=allow.has(x.dataset.qid)?'':'none')};f.addEventListener('change',update);f.addEventListener('input',update);update();if(preview)return;f.addEventListener('submit',async e=>{e.preventDefault();const b=document.getElementById('as'),err=document.getElementById('ae');if(b){b.disabled=true;b.classList.add('loading');b.textContent='送信中…'}const s=window.APP_CONTEXT.survey,a={};for(const q of qs(s)){const name='q_'+q.id;if(q.type==='multiple')a[q.id]=[...f.querySelectorAll(`input[name="${CSS.escape(name)}"]:checked`)].map(x=>x.value);else if(q.type==='single'){const x=f.querySelector(`input[name="${CSS.escape(name)}"]:checked`);if(x)a[q.id]=x.value}else{const x=f.querySelector(`[name="${CSS.escape(name)}"]`);if(x&&x.value.trim()!=='')a[q.id]=x.value}}try{const r=await fetch(API+'?api=submit_answer',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({surveyId:s.id,token:window.APP_CONTEXT.token,answers:a})});const x=await r.json();if(!x.ok){const ff=x.error?.fields?Object.values(x.error.fields).join('\n'):'';throw new Error(ff?(x.error?.message||'入力内容を確認してください')+'\n'+ff:(x.error?.message||'回答送信に失敗しました。'))}app.innerHTML='<div class=respond><div class=respondcard><div class=done><h1>ご回答ありがとうございました</h1><p>回答を受け付けました。</p></div></div></div>'}catch(x){if(err)err.innerHTML=`<div class="a-ng alert">${esc(x.message)}</div>`;if(b){b.disabled=false;b.classList.remove('loading');b.textContent='回答を送信する'}}});}
-function bind(){
- document.querySelectorAll('[data-nav]').forEach(x=>{if(!x)return;x.addEventListener('click',()=>{const v=x.dataset.nav;if(v==='new'){st.editor=emptySurvey();navigate('editor')}else navigate(v)})});
- document.querySelectorAll('[data-tab]').forEach(x=>{if(!x)return;x.addEventListener('click',()=>navigate('survey',st.sid,x.dataset.tab))});
- document.querySelectorAll('[data-act]').forEach(x=>{if(!x)return;x.addEventListener('click',async()=>{const a=x.dataset.act,id=x.dataset.id||'';
-  if(a==='open'){navigate('survey',id,'content');return}if(a==='send-direct'){navigate('survey',id,'send');return}if(a==='status-direct'){navigate('survey',id,'status');return}if(a==='result-direct'){navigate('survey',id,'result');return}if(a==='edit'){st.editor=JSON.parse(JSON.stringify(survey(id)));navigate('editor');return}if(a==='back'){navigate('surveys');return}
-  if(a==='publicurl'){const d=await api('issue_answer_token',{surveyId:id},x);if(d)confirmBox('回答URL',d.url,async()=>{},'閉じる');return}if(a==='publish-editor'){confirmBox('アンケートを公開','内容を確認した上で公開します。公開後は送信画面からメール送信できます。',async()=>{await publishEditor(x)},'公開する');return}if(a==='preview'){location.href=API+'?preview='+encodeURIComponent(id);return}if(a==='refresh'){if(await reload())render();return}
-  if(a==='publish'){confirmBox('アンケートを公開','内容を確認した上で公開します。',async()=>{if(await api('publish',{surveyId:id},x)){await reload();toast('公開しました');render()}},'公開する');return}
-  if(a==='close'){confirmBox('アンケートを終了','回答受付を終了します。',async()=>{if(await api('close',{surveyId:id},x)){await reload();toast('終了しました');render()}},'終了する',true);return}
-  if(a==='delete'){confirmBox('アンケートを削除','下書きと関連データを削除します。',async()=>{if(await api('delete_survey',{surveyId:id},x)){await reload();toast('削除しました');navigate('surveys')}},'削除する',true);return}
-  if(a==='cancel'){if(st.dirty&&!confirm('保存していない変更があります。破棄しますか？'))return;navigate('surveys');return}if(a==='save'){await saveEditor(x);return}
-  if(a==='addg'){syncEditorInputs();st.editor.groups.push({id:uid('g_'),name:'新しいグループ',questions:[newQ()]});st.dirty=true;render();return}
-  const gi=Number(x.dataset.gi),qi=Number(x.dataset.qi),ci=Number(x.dataset.ci);
-  if(a==='rmg'){syncEditorInputs();if(st.editor.groups[gi].questions.length&&!confirm('このグループの質問も削除されます。よろしいですか？'))return;st.editor.groups.splice(gi,1);st.dirty=true;render();return}
-  if(a==='upg'||a==='downg'){syncEditorInputs();const to=a==='upg'?gi-1:gi+1;if(to>=0&&to<st.editor.groups.length)[st.editor.groups[gi],st.editor.groups[to]]=[st.editor.groups[to],st.editor.groups[gi]];st.dirty=true;render();return}
-  if(a==='addq'){syncEditorInputs();st.editor.groups[gi].questions.push(newQ());st.dirty=true;render();return}
-  if(a==='rmq'){syncEditorInputs();st.editor.groups[gi].questions.splice(qi,1);st.dirty=true;render();return}
-  if(a==='addchoice'){syncEditorInputs();st.editor.groups[gi].questions[qi].choices.push({id:uid('c_'),label:'新規選択肢'});st.dirty=true;render();return}
-  if(a==='rmchoice'){syncEditorInputs();st.editor.groups[gi].questions[qi].choices.splice(ci,1);st.dirty=true;render();return}
-  if(a==='all'){st.selected=st.customers.map(c=>c.id);render();return}if(a==='none'){st.selected=[];render();return}
-  if(a==='customer'){const v=id;if(st.selected.includes(v))st.selected=st.selected.filter(x=>x!==v);else st.selected.push(v);render();return}
-  if(a==='mailpreview'){const sub=document.getElementById('sub'),mb=document.getElementById('mb');if(sub)st.subject=sub.value;if(mb)st.body=mb.value;confirmBox('送信プレビュー',`対象者数：${st.selected.length}\n\n件名：\n${st.subject}\n\n本文：\n${st.body.replaceAll('{{ANSWER_URL}}','(対象者ごとの回答URL)')}`,async()=>{},'閉じる');return}
-  if(a==='send'){const sub=document.getElementById('sub'),mb=document.getElementById('mb');if(sub)st.subject=sub.value;if(mb)st.body=mb.value;if(!st.selected.length){toast('送信対象者を選択してください。',true);return}confirmBox('送信の最終確認',`対象者数：${st.selected.length}\n件名：${st.subject}\n\n送信しますか？`,async()=>{const d=await api('send_mail',{surveyId:st.sid,customerIds:st.selected,subject:st.subject,body:st.body},x);if(d){st.selected=[];await reload();toast(`送信完了：成功 ${d.success} 件 / 失敗 ${d.failed} 件`,d.failed>0);render()}},'送信する');return}
-  if(a==='resend'){const logs=sd(st.sid)?.logs||[],ids=logs.filter(l=>l.status==='failed').map(l=>l.id);confirmBox('失敗者に再送',`${ids.length}件を再送します。`,async()=>{const d=await api('resend_failed',{logIds:ids},x);if(d){await reload();toast(`再送：成功 ${d.success} 件 / 失敗 ${d.failed} 件`,d.failed>0);render()}},'再送する');return}
-  if(a==='sync'){const d=await api('kintone_sync_preview',{},x);if(d){st.kpreview=d.preview||null;render()}return}
-  if(a==='kfields'){const d=await api('kintone_fields',{},x);if(d){st.kmap={appId:d.appId,fetchedAt:d.fetchedAt,schemaHash:d.schemaHash,fields:d.fields||[],mappings:d.mappings||{name:'',email:'',company:'',phone:'',address:[]},mappingVersion:d.mappingVersion||0};st.kpreview=null;toast('kintoneのフィールド定義を取得しました');render()}return}
-  if(a==='kvalidate'){syncKintoneMappingInputs();const m={};document.querySelectorAll('[data-map]').forEach(el=>{if(el.dataset.map!=='address')m[el.dataset.map]=el.value});try{m.address=JSON.parse(String(document.getElementById('map-address')?.value||'[]'))}catch(_){m.address=[]}const d=await api('kintone_mapping_validate',{mappings:m},x);if(d)toast('マッピングに問題はありません。');return}
-  if(a==='ksave'){syncKintoneMappingInputs();const m={};document.querySelectorAll('[data-map]').forEach(el=>{if(el.dataset.map!=='address')m[el.dataset.map]=el.value});try{m.address=JSON.parse(String(document.getElementById('map-address')?.value||'[]'))}catch(_){m.address=[]}const d=await api('kintone_mapping_save',{mappings:m},x);if(d){st.kmap=d.mapping;st.kpreview=null;toast('マッピングを保存しました');render()}return}
-  if(a==='address-add'){syncKintoneMappingInputs();st.kmap=st.kmap||{mappings:{}};st.kmap.mappings=st.kmap.mappings||{};st.kmap.mappings.address=Array.isArray(st.kmap.mappings.address)?st.kmap.mappings.address.slice():[];st.kmap.mappings.address.push('');render();return}
-  if(a==='address-remove'){syncKintoneMappingInputs();const i=Number(x.dataset.ai);st.kmap.mappings.address=Array.isArray(st.kmap.mappings.address)?st.kmap.mappings.address.slice():[];if(i>=0&&i<st.kmap.mappings.address.length)st.kmap.mappings.address.splice(i,1);render();return}
-  if(a==='address-up'||a==='address-down'){syncKintoneMappingInputs();const i=Number(x.dataset.ai),j=a==='address-up'?i-1:i+1;st.kmap.mappings.address=Array.isArray(st.kmap.mappings.address)?st.kmap.mappings.address.slice():[];if(i>=0&&j>=0&&j<st.kmap.mappings.address.length)[st.kmap.mappings.address[i],st.kmap.mappings.address[j]]=[st.kmap.mappings.address[j],st.kmap.mappings.address[i]];render();return}
-  if(a==='kpreview'){const d=await api('kintone_sync_preview',{},x);if(d){st.kpreview=d.preview||null;render()}return}
-  if(a==='ksync'){confirmBox('kintone同期の最終確認','現在のフィールド定義とマッピングを使用して顧客情報を同期します。実行しますか？',async()=>{const d=await api('kintone_sync_execute',{},x);if(d){st.customers=d.customers||[];st.kpreview=null;await reload();toast(`同期完了：新規 ${d.result?.createdCount||0} 件 / 更新 ${d.result?.updatedCount||0} 件 / 非アクティブ ${d.result?.inactiveCount||0} 件`);render()}},'同期する');return}
-  if(a==='savesettings'){const set={smtp:{},kintone:{}};document.querySelectorAll('[data-set]').forEach(i=>{const [ss,k]=i.dataset.set.split('.');set[ss][k]=i.type==='checkbox'?i.checked:i.value});set.smtp.port=Number(set.smtp.port||587);const d=await api('save_settings',{settings:set},x);if(d){st.settings=d.settings;toast('設定を保存しました');render()}return}
-  if(a==='smtptest'){showConnectionResult('smtp','success','SMTP接続確認中…');const d=await api('smtp_test',{},x);if(d)showConnectionResult('smtp','success','SMTP接続と認証に成功しました。','SMTPサーバーへの接続と認証が完了しています。');return}
-  if(a==='smtptestmail'){const to=document.getElementById('smtp-test-to');const address=to?.value?.trim()||'';if(!address){showConnectionResult('smtp','error','テストメールを送信できません。','テスト送信先メールアドレスを入力してください。');return}showConnectionResult('smtp','success','SMTPテストメール送信中…');const d=await api('smtp_test_mail',{to:address},x);if(d)showConnectionResult('smtp','success','SMTPテストメールを送信しました。','送信先：'+address+'\n受信側の受信箱も確認してください。');return}
-  if(a==='ktest'){showConnectionResult('kintone','success','kintone接続確認中…');const d=await api('kintone_test',{},x);if(d)showConnectionResult('kintone','success','kintoneへの接続に成功しました。','接続設定と認証を確認できました。');return}
- })});
- document.querySelectorAll('[data-ed]').forEach(x=>{if(!x)return;const ev=x.tagName==='SELECT'||x.type==='checkbox'?'change':'input';x.addEventListener(ev,()=>{if(!st.editor)return;const k=x.dataset.ed,gi=Number(x.dataset.gi??-1),qi=Number(x.dataset.qi??-1),ci=Number(x.dataset.ci??-1);if(k==='name')st.editor.name=x.value;else if(k==='desc')st.editor.description=x.value;else if(k==='start')st.editor.startAt=x.value;else if(k==='end')st.editor.endAt=x.value;else if(k==='num')st.editor.numberingFormat=x.value;else if(k==='gname')st.editor.groups[gi].name=x.value;else if(k==='qtext')st.editor.groups[gi].questions[qi].text=x.value;else if(k==='req')st.editor.groups[gi].questions[qi].required=x.checked;else if(k==='choice')st.editor.groups[gi].questions[qi].choices[ci].label=x.value;else if(k==='branch'){const q=st.editor.groups[gi].questions[qi];if(!q.branches||Array.isArray(q.branches))q.branches={};if(x.value==='next')delete q.branches[x.dataset.cid];else q.branches[x.dataset.cid]=x.value}else if(k==='type'){const q=st.editor.groups[gi].questions[qi];q.type=x.value;if(x.value==='text'){q.choices=[];q.branches={}}else{q.branches={};if(!q.choices.length)q.choices=[{id:uid('c_'),label:'選択肢1'},{id:uid('c_'),label:'選択肢2'}]}st.dirty=true;render();return}st.dirty=true})});
- const cs=document.getElementById('cs');if(cs)cs.addEventListener('input',()=>{st.csearch=cs.value;render()});const cms=document.getElementById('cmains');if(cms)cms.addEventListener('input',()=>{st.csearch=cms.value;render()});
- const groups=document.getElementById('groups');if(groups){let dg=null,dq=null;groups.querySelectorAll('[data-dg]').forEach(e=>{if(!e)return;e.addEventListener('dragover',ev=>{if(dg!==null)ev.preventDefault()});e.addEventListener('drop',ev=>{ev.preventDefault();const to=Number(e.dataset.gi);if(dg===null||dg===to)return;syncEditorInputs();const g=st.editor.groups.splice(dg,1)[0];st.editor.groups.splice(to,0,g);dg=null;st.dirty=true;render()})});groups.querySelectorAll('[data-dg-handle]').forEach(e=>{if(!e)return;e.addEventListener('dragstart',()=>{syncEditorInputs();dg=Number(e.dataset.gi)});e.addEventListener('dragend',()=>{dg=null})});groups.querySelectorAll('[data-dq-handle]').forEach(e=>{if(!e)return;e.addEventListener('dragstart',ev=>{syncEditorInputs();dq={gi:Number(e.dataset.gi),qi:Number(e.dataset.qi)};ev.dataTransfer.effectAllowed='move'});e.addEventListener('dragend',()=>{dq=null;groups.querySelectorAll('.drop-target').forEach(z=>z.classList.remove('drop-target'))})});groups.querySelectorAll('[data-dq]').forEach(e=>{if(!e)return;e.addEventListener('dragenter',()=>{if(dq)e.classList.add('drop-target')});e.addEventListener('dragover',ev=>{if(dq)ev.preventDefault()});e.addEventListener('dragleave',()=>e.classList.remove('drop-target'));e.addEventListener('drop',ev=>{ev.preventDefault();e.classList.remove('drop-target');if(!dq)return;const tg=Number(e.dataset.gi),tq=Number(e.dataset.qi);syncEditorInputs();const q=st.editor.groups[dq.gi].questions.splice(dq.qi,1)[0];let pos=tq;if(dq.gi===tg&&dq.qi<tq)pos--;st.editor.groups[tg].questions.splice(Math.max(0,pos),0,q);dq=null;st.dirty=true;render()})});groups.querySelectorAll('[data-qgroupdrop]').forEach(e=>{if(!e)return;e.addEventListener('dragenter',()=>{if(dq)e.classList.add('drop-target')});e.addEventListener('dragover',ev=>{if(dq)ev.preventDefault()});e.addEventListener('dragleave',()=>e.classList.remove('drop-target'));e.addEventListener('drop',ev=>{ev.preventDefault();e.classList.remove('drop-target');if(!dq)return;const tg=Number(e.dataset.gi);syncEditorInputs();const q=st.editor.groups[dq.gi].questions.splice(dq.qi,1)[0];st.editor.groups[tg].questions.push(q);dq=null;st.dirty=true;render()})})}
-}
-function newQ(){return{id:uid('q_'),text:'',type:'single',required:true,choices:[{id:uid('c_'),label:'選択肢1'},{id:uid('c_'),label:'選択肢2'}],branches:{}}}
-function syncEditorInputs(){if(!st.editor)return;const g=[...document.querySelectorAll('[data-ed]')];for(const x of g){const k=x.dataset.ed,gi=Number(x.dataset.gi??-1),qi=Number(x.dataset.qi??-1),ci=Number(x.dataset.ci??-1);if(k==='name')st.editor.name=x.value;else if(k==='desc')st.editor.description=x.value;else if(k==='start')st.editor.startAt=x.value;else if(k==='end')st.editor.endAt=x.value;else if(k==='num')st.editor.numberingFormat=x.value;else if(k==='gname')st.editor.groups[gi].name=x.value;else if(k==='qtext')st.editor.groups[gi].questions[qi].text=x.value;else if(k==='req')st.editor.groups[gi].questions[qi].required=x.checked;else if(k==='choice')st.editor.groups[gi].questions[qi].choices[ci].label=x.value;else if(k==='branch'){const q=st.editor.groups[gi].questions[qi];if(!q.branches||Array.isArray(q.branches))q.branches={};if(x.value==='next')delete q.branches[x.dataset.cid];else q.branches[x.dataset.cid]=x.value;}}}
-async function saveEditor(btn){syncEditorInputs();const d=await api('save_survey',{survey:st.editor},btn);if(!d)return;await reload();st.sid=d.survey.id;st.editor=JSON.parse(JSON.stringify(d.survey));st.dirty=false;toast('下書きを保存しました');render()}
-async function publishEditor(btn){syncEditorInputs();if(!st.editor)return;const saved=await api('save_survey',{survey:st.editor},btn);if(!saved)return;await reload();st.sid=saved.survey.id;st.editor=JSON.parse(JSON.stringify(saved.survey));const published=await api('publish',{surveyId:saved.survey.id},btn);if(!published){st.dirty=false;render();return}await reload();st.sid=published.survey.id;st.editor=JSON.parse(JSON.stringify(published.survey));st.dirty=false;toast('アンケートを公開しました');render()}
-async function init(){if(window.APP_MODE==='answer'||window.APP_MODE==='preview'){renderRespondent();return}if(fileMode){app.innerHTML='<div class=respond><div class=respondcard><h1>Apache経由で開いてください</h1><div class="a-info alert">index.phpをブラウザから直接開かず、Apacheで公開されているURLから開いてください。</div></div></div>';return}if(!await reload()){app.innerHTML='<div class=page><div class="a-ng alert">初期データを取得できませんでした。</div></div>';return}const p=new URLSearchParams(location.search);if(p.get('page')==='editor'){st.page='editor';st.editor=emptySurvey()}else if(p.get('page')==='survey'&&p.get('id')){st.page='survey';st.sid=p.get('id');st.tab=p.get('tab')||'content'}else st.page=p.get('page')||'surveys';render()}
-window.addEventListener('beforeunload',e=>{if(window.APP_MODE==='admin'&&st.dirty){e.preventDefault();e.returnValue=''}});init();
+document.addEventListener('DOMContentLoaded',function(){
+const CSRF='<?=$csrf?>';let state={surveys:[],customers:[],responses:[],sendLogs:[],settings:{},mapping:{}};let currentSurveyId=null;let editorSurvey=null;let detailTab='content';let settingTab='smtp';
+const $=id=>document.getElementById(id);function esc(v){const d=document.createElement('div');d.textContent=String(v??'');return d.innerHTML}function toast(msg,ok=false){const t=$('toast');if(!t)return;t.textContent=msg;t.className='toast'+(ok?' ok':'');clearTimeout(window.__toast);window.__toast=setTimeout(()=>t.className='toast hidden',4500)}
+async function api(apiName,payload={},method='POST'){const f=new FormData();f.set('api',apiName);f.set('csrf',CSRF);if(method==='POST')f.set('payload',JSON.stringify(payload));const url=method==='GET'?location.pathname+'?api='+encodeURIComponent(apiName)+(payload.query||''):'?api='+encodeURIComponent(apiName);const r=await fetch(url,{method,body:method==='POST'?f:undefined});let j;try{j=await r.json()}catch(_){throw {error:{message:'サーバーから正しい応答を受信できませんでした。'}}}if(!j.ok)throw j;return j.data}
+function setLoading(btn,on){if(!btn)return;btn.disabled=on;btn.classList.toggle('loading',on)}function showPage(name){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));const p=$('page-'+name);if(p)p.classList.add('active');document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.page===name))}
+async function loadState(){try{const d=await api('state',{},'GET');state=d;renderSurveys();renderCustomers();if(settingTab)renderSettings()}catch(e){toast(e?.error?.message||'データを読み込めませんでした。')}}
+function statusBadge(s){return '<span class="badge '+(s==='published'?'open':s==='closed'?'closed':'draft')+'">'+(s==='published'?'公開中':s==='closed'?'終了':'下書き')+'</span>'}
+function renderSurveys(){const box=$('surveyTable');if(!box)return;if(!state.surveys.length){box.innerHTML='<div class="card empty">アンケートはまだありません。</div>';return}let h='<table><thead><tr><th>アンケート名</th><th>状態</th><th>開始</th><th>終了</th><th>回答数</th><th>操作</th></tr></thead><tbody>';for(const s of state.surveys){const count=state.responses.filter(r=>r.surveyId===s.id).length;h+='<tr><td>'+esc(s.name)+'</td><td>'+statusBadge(s.status)+'</td><td>'+esc(fmt(s.startAt))+'</td><td>'+esc(fmt(s.endAt))+'</td><td>'+count+'</td><td class="actions"><button class="btn small secondary" data-act="detail" data-id="'+esc(s.id)+'">詳細</button><button class="btn small secondary" data-act="edit" data-id="'+esc(s.id)+'">編集</button>'+(s.status==='draft'?'<button class="btn small success" data-act="publish" data-id="'+esc(s.id)+'">公開</button>':'')+(s.status==='published'?'<button class="btn small warning" data-act="close" data-id="'+esc(s.id)+'">終了</button>':'')+'<button class="btn small danger" data-act="delete" data-id="'+esc(s.id)+'">削除</button></td></tr>'}h+='</tbody></table>';box.innerHTML=h}
+function fmt(v){if(!v)return '';const d=new Date(v);return isNaN(d)?v:d.toLocaleString('ja-JP',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
+function blankSurvey(){return {id:'',name:'',description:'',status:'draft',startAt:'',endAt:'',numberingFormat:'group',groups:[{id:'',name:'グループ1',questions:[]}],createdAt:'',updatedAt:''}}
+function openEditor(id=''){editorSurvey=id?JSON.parse(JSON.stringify(state.surveys.find(s=>s.id===id))):blankSurvey();currentSurveyId=id||null;$('editorTitle').textContent=id?'アンケート編集':'アンケート作成';$('sName').value=editorSurvey.name||'';$('sDesc').value=editorSurvey.description||'';$('sStart').value=(editorSurvey.startAt||'').slice(0,16);$('sEnd').value=(editorSurvey.endAt||'').slice(0,16);$('sNumber').value=editorSurvey.numberingFormat||'group';renderGroups();$('editorMsg').innerHTML='';showPage('editor')}
+function renderGroups(){const box=$('groups');if(!box)return;let h='';editorSurvey.groups.forEach((g,gi)=>{h+='<div class="group" data-gi="'+gi+'"><div class="group-head"><input class="field gname" value="'+esc(g.name)+'" data-gi="'+gi+'"><div class="actions"><button class="btn small secondary" data-act="addq" data-gi="'+gi+'">＋ 質問</button><button class="btn small danger" data-act="delg" data-gi="'+gi+'">削除</button></div></div>';if(!g.questions.length)h+='<div class="empty">質問はありません。</div>';g.questions.forEach((q,qi)=>{h+='<div class="q" data-gi="'+gi+'" data-qi="'+qi+'"><div class="qhead"><strong>Q'+(qi+1)+'</strong><span class="small">'+esc(q.type)+'</span><div style="margin-left:auto" class="actions"><button class="btn small danger" data-act="delq">削除</button></div></div><div class="qbody"><input class="field qtitle" value="'+esc(q.title)+'" placeholder="質問文"><label><input type="checkbox" class="qreq" '+(q.required?'checked':'')+'> 必須回答</label>';if(q.type!=='text'){h+='<div class="choices">';(q.choices||[]).forEach((c,ci)=>{h+='<div class="choice-row"><input class="field cid" value="'+esc(c.id)+'" placeholder="choiceId"><input class="field clabel" value="'+esc(c.label)+'" placeholder="選択肢"><button class="btn small danger" data-act="delc">削除</button></div>'});h+='<button class="btn small secondary" data-act="addc">＋ 選択肢</button></div>'}h+='<div style="margin-top:9px"><select class="qtype"><option value="text" '+(q.type==='text'?'selected':'')+'>自由記述</option><option value="single" '+(q.type==='single'?'selected':'')+'>単一選択</option><option value="multiple" '+(q.type==='multiple'?'selected':'')+'>複数選択</option></select></div>';if(q.type==='single'){h+='<div style="margin-top:9px"><strong>分岐</strong><div class="small">選択肢ごとに next / end / question:質問ID を指定</div>';for(const c of q.choices||[]){h+='<div class="choice-row"><span style="width:120px">'+esc(c.label)+'</span><input class="field branch" data-choice="'+esc(c.id)+'" value="'+esc(q.branch?.[c.id]||'next')+'"></div>'}h+='</div>'}h+='</div></div>'});h+='</div>'});box.innerHTML=h}
+function collectEditor(){const groups=[];document.querySelectorAll('#groups .group').forEach((ge,gi)=>{const g=editorSurvey.groups[gi];const ng={...g,name:ge.querySelector('.gname')?.value.trim()||'グループ',questions:[]};ge.querySelectorAll('.q').forEach((qe,qi)=>{const old=g.questions[qi]||{id:'',type:'text',choices:[],branch:{}};const type=qe.querySelector('.qtype')?.value||'text';const q={...old,title:qe.querySelector('.qtitle')?.value.trim()||'',required:!!qe.querySelector('.qreq')?.checked,type,choices:[],branch:{}};qe.querySelectorAll('.choice-row').forEach(row=>{const cid=row.querySelector('.cid');const cl=row.querySelector('.clabel');if(cid&&cl)q.choices.push({id:cid.value.trim(),label:cl.value.trim()})});qe.querySelectorAll('.branch').forEach(b=>q.branch[b.dataset.choice]=b.value.trim());ng.questions.push(q)});groups.push(ng)});return {...editorSurvey,name:$('sName').value.trim(),description:$('sDesc').value,startAt:$('sStart').value,endAt:$('sEnd').value,numberingFormat:$('sNumber').value,groups}}
+async function saveSurvey(publish=false){const btn=publish?$('publishEditor'):$('saveSurvey');setLoading(btn,true);try{const survey=collectEditor();const d=await api('survey_save',{survey});editorSurvey=d.survey;currentSurveyId=editorSurvey.id;if(publish){await api('survey_publish',{surveyId:editorSurvey.id})}await loadState();toast(publish?'アンケートを公開しました。':'下書きを保存しました。',true);if(publish)openDetail(editorSurvey.id,'content');else openEditor(editorSurvey.id)}catch(e){$('editorMsg').innerHTML='<div class="message">'+esc(e?.error?.message||'保存に失敗しました。')+'</div>'}finally{setLoading(btn,false)}}
+function openDetail(id,tab='content'){currentSurveyId=id;detailTab=tab;const s=state.surveys.find(x=>x.id===id);if(!s)return;$('detailTitle').textContent=s.name;$('detailStatus').innerHTML=statusBadge(s.status);$('detailClose').classList.toggle('hidden',s.status!=='published');renderDetail();showPage('detail')}
+function renderDetail(){document.querySelectorAll('#page-detail .tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===detailTab));const s=state.surveys.find(x=>x.id===currentSurveyId);const box=$('detailContent');if(!s||!box)return;let h='';if(detailTab==='content'){h='<div class="card"><p>'+esc(s.description||'')+'</p>';for(const g of s.groups||[]){h+='<h2>'+esc(g.name)+'</h2>';for(const q of g.questions||[]){h+='<div class="q"><strong>'+esc(q.title)+'</strong> <span class="small">'+esc(q.type)+(q.required?'・必須':'')+'</span>';if(q.choices?.length)h+='<ul>'+q.choices.map(c=>'<li>'+esc(c.label)+'</li>').join('')+'</ul>';h+='</div>'}}h+='</div>'}else if(detailTab==='send'){h=sendView(s)}else if(detailTab==='status'){h=statusView(s)}else if(detailTab==='result'){h=resultView(s)}else{h=summaryView(s)}box.innerHTML=h}
+function sendView(s){const active=state.customers.filter(c=>c.status==='active');let h='<div class="card"><h2>通常回答者への回答依頼</h2><div class="small">送信済みの対象には二重送信しません。</div><div style="max-height:300px;overflow:auto;border:1px solid #ddd;margin-top:12px">';for(const c of active)h+='<label style="display:block;padding:9px;border-bottom:1px solid #eee"><input type="checkbox" class="sendCustomer" value="'+esc(c.customerId)+'"> '+esc(c.name)+' / '+esc(c.email)+'</label>';h+='</div><div style="margin-top:12px"><button class="btn" id="sendSelected">回答依頼を送信する</button> <button class="btn secondary" id="issueIndividual">個別回答URLを発行</button></div></div><div class="card"><h2>送信ログ</h2><div id="sendLogs">'+sendLogsTable(s.id)+'</div></div>';return h}
+function sendLogsTable(sid){const logs=state.sendLogs.filter(l=>l.surveyId===sid);if(!logs.length)return '<div class="empty">送信ログはありません。</div>';let h='<table><thead><tr><th>メール</th><th>送信日時</th><th>結果</th><th>エラー</th><th>操作</th></tr></thead><tbody>';for(const l of logs){h+='<tr class="'+(l.status==='error'?'log-error':'')+'"><td>'+esc(l.email)+'</td><td>'+esc(fmt(l.sentAt))+'</td><td><span class="badge '+(l.status==='sent'?'sent':'error')+'">'+(l.status==='sent'?'送信済み':'送信失敗')+'</span></td><td>'+esc(l.error||'—')+'</td><td>'+(l.status==='error'?'<button class="btn small" data-resend="'+esc(l.logId)+'">再送</button>':'—')+'</td></tr>'}return h+'</tbody></table>'}
+function statusView(s){const logs=state.sendLogs.filter(l=>l.surveyId===s.id);const responses=state.responses.filter(r=>r.surveyId===s.id);const answered=new Set(responses.map(r=>r.customerId||r.tokenId));let h='<div class="stats"><div class="stat"><div>送信対象</div><div class="n">'+logs.length+'</div></div><div class="stat"><div>送信済み</div><div class="n">'+logs.filter(l=>l.status==='sent').length+'</div></div><div class="stat"><div>回答済み</div><div class="n">'+responses.length+'</div></div><div class="stat"><div>未回答</div><div class="n">'+Math.max(0,logs.filter(l=>l.status==='sent').length-responses.length)+'</div></div></div><div class="card"><table><thead><tr><th>対象者</th><th>メール</th><th>送信</th><th>回答</th></tr></thead><tbody>';for(const l of logs){const r=responses.find(x=>x.customerId===l.customerId||x.tokenId===l.tokenId);h+='<tr><td>'+esc((state.customers.find(c=>c.customerId===l.customerId)?.name)||l.email)+'</td><td>'+esc(l.email)+'</td><td>'+esc(fmt(l.sentAt))+'</td><td>'+(r?'<span class="badge open">回答済み</span> '+esc(fmt(r.answeredAt)):'<span class="badge pending">未回答</span>')+'</td></tr>'}h+='</tbody></table></div>';return h}
+function resultView(s){const rows=state.responses.filter(r=>r.surveyId===s.id);if(!rows.length)return '<div class="card empty">回答結果はまだありません。</div>';let h='<div class="card"><table><thead><tr><th>回答者</th><th>組織</th><th>メール</th><th>回答日時</th><th>回答内容</th></tr></thead><tbody>';for(const r of rows){h+='<tr><td>'+esc(r.respondent?.name||'—')+'</td><td>'+esc(r.respondent?.organization||'—')+'</td><td>'+esc(r.respondent?.email||'—')+'</td><td>'+esc(fmt(r.answeredAt))+'</td><td><button class="btn small secondary" data-response="'+esc(r.responseId)+'">表示</button></td></tr>'}return h+'</tbody></table></div>'}
+function summaryView(s){const rows=state.responses.filter(r=>r.surveyId===s.id);const flat=s.groups.flatMap(g=>g.questions||[]);let h='<div class="stats"><div class="stat"><div>回答数</div><div class="n">'+rows.length+'</div></div><div class="stat"><div>送信済み</div><div class="n">'+state.sendLogs.filter(l=>l.surveyId===s.id&&l.status==='sent').length+'</div></div><div class="stat"><div>未回答</div><div class="n">'+Math.max(0,state.sendLogs.filter(l=>l.surveyId===s.id&&l.status==='sent').length-rows.length)+'</div></div><div class="stat"><div>回答率</div><div class="n">'+(state.sendLogs.filter(l=>l.surveyId===s.id&&l.status==='sent').length?Math.round(rows.length/state.sendLogs.filter(l=>l.surveyId===s.id&&l.status==='sent').length*100):0)+'%</div></div></div>';for(const q of flat){if(q.type==='text')continue;const counts={};for(const c of q.choices||[])counts[c.id]=0;for(const r of rows){const v=r.answers?.[q.id];const vals=Array.isArray(v)?v:[v];for(const x of vals)if(Object.prototype.hasOwnProperty.call(counts,x))counts[x]++}h+='<div class="card"><h3>'+esc(q.title)+'</h3>';for(const c of q.choices||[])h+='<div style="margin:7px 0">'+esc(c.label)+'：'+counts[c.id]+'件</div>';h+='</div>'}return h}
+function renderCustomers(){const box=$('customerTable');const kw=($('customerSearch')?.value||'').toLowerCase();const rows=state.customers.filter(c=>(c.name+' '+c.email).toLowerCase().includes(kw));if(!rows.length){box.innerHTML='<div class="card empty">顧客はありません。</div>';return}let h='<table><thead><tr><th>顧客名</th><th>メール</th><th>状態</th><th>kintoneレコード</th><th>操作</th></tr></thead><tbody>';for(const c of rows)h+='<tr><td>'+esc(c.name)+'</td><td>'+esc(c.email)+'</td><td>'+esc(c.status==='active'?'有効':'無効')+'</td><td>'+esc(c.kintoneRecordId||'—')+'</td><td class="actions"><button class="btn small secondary" data-customer-edit="'+esc(c.customerId)+'">編集</button><button class="btn small danger" data-customer-del="'+esc(c.customerId)+'">無効化</button></td></tr>';box.innerHTML=h+'</tbody></table>'}
+function renderSettings(){const box=$('settingsContent');if(settingTab==='smtp'){const s=state.settings.smtp||{};box.innerHTML='<div class="card"><h2>SMTP設定</h2><div class="grid"><label>ホスト</label><input id="smtpHost" value="'+esc(s.host||'')+'"><label>ポート</label><input id="smtpPort" value="'+esc(s.port||'587')+'"><label>暗号化</label><select id="smtpEnc"><option value="none" '+(s.encryption==='none'?'selected':'')+'>なし</option><option value="tls" '+(s.encryption==='tls'?'selected':'')+'>TLS</option><option value="ssl" '+(s.encryption==='ssl'?'selected':'')+'>SSL</option></select><label>ユーザー名</label><input id="smtpUser" value="'+esc(s.username||'')+'"><label>パスワード</label><input id="smtpPass" type="password" value="" placeholder="保存済み（変更時のみ入力）"><label>送信元メール</label><input id="smtpFrom" value="'+esc(s.fromEmail||'')+'"><label>送信元名</label><input id="smtpFromName" value="'+esc(s.fromName||APP_NAME)+'"></div><div class="actions" style="margin-top:16px"><button class="btn" id="saveSmtp">保存する</button><button class="btn secondary" id="testSmtp">接続確認</button></div><div class="small" style="margin-top:10px">接続確認の宛先メールを指定すると、実際のテストメールも送信します。</div><input id="smtpTestTo" class="field" style="margin-top:7px" placeholder="テストメール宛先（任意）"></div>'}else if(settingTab==='kintone'){const k=state.settings.kintone||{};box.innerHTML='<div class="card"><h2>kintone設定</h2><div class="grid"><label>サブドメイン</label><input id="kSub" value="'+esc(k.subdomain||'')+'"><label>アプリID</label><input id="kApp" value="'+esc(k.appId||'')+'"><label>ログイン</label><input id="kLogin" value="'+esc(k.login||'')+'"><label>パスワード</label><input id="kPass" type="password" value="" placeholder="保存済み（変更時のみ入力）"><label>プロキシ host:port</label><input id="kProxy" value="'+esc(k.proxyHostPort||'')+'"><label>SSL証明書検証</label><label><input id="kVerify" type="checkbox" '+(k.verifySsl?'checked':'')+'> 検証する</label></div><div class="actions" style="margin-top:16px"><button class="btn" id="saveK">保存する</button><button class="btn secondary" id="testK">接続確認</button><button class="btn secondary" id="fieldsK">項目を取得</button></div></div>'}else{const m=state.mapping||{};const fields=m.fields||{};let opts='<option value="">選択してください</option>';for(const [code,f] of Object.entries(fields))opts+='<option value="'+esc(code)+'">'+esc(f.label||code)+' ['+esc(f.type||'')+']</option>';box.innerHTML='<div class="card"><h2>kintone項目マッピング</h2><p class="small">顧客名・メールアドレスは必須です。項目取得後、field codeを保存します。</p><div class="grid"><label>顧客名 *</label><select id="mapName">'+opts+'</select><label>メールアドレス *</label><select id="mapEmail">'+opts+'</select><label>住所</label><select id="mapAddress">'+opts+'</select><label>電話番号</label><select id="mapPhone">'+opts+'</select></div><div class="actions" style="margin-top:16px"><button class="btn" id="saveMap">マッピングを保存</button></div><p class="small">取得日時：'+esc(m.fetchedAt||'未取得')+' / schemaHash：'+esc(m.schemaHash||'未取得')+'</p></div>';setTimeout(()=>{if(m.mappings){for(const [id,key] of [['mapName','name'],['mapEmail','email'],['mapAddress','address'],['mapPhone','phone']])if($(id))$(id).value=m.mappings[key]||''}},0)}}
+function openModal(html){$('modalBox').innerHTML=html;$('modal').classList.add('show')}function closeModal(){$('modal').classList.remove('show')}
+function customerModal(c){openModal('<h2>顧客'+(c?'編集':'追加')+'</h2><div class="grid"><label>顧客名</label><input id="mcName" value="'+esc(c?.name||'')+'"><label>メール</label><input id="mcEmail" value="'+esc(c?.email||'')+'"></div><div class="modal-actions"><button class="btn secondary" id="mcCancel">キャンセル</button><button class="btn" id="mcSave">保存</button></div>');$('mcCancel').addEventListener('click',closeModal);$('mcSave').addEventListener('click',async()=>{const b=$('mcSave');setLoading(b,true);try{await api('customer_save',{customer:{customerId:c?.customerId||'',name:$('mcName').value,email:$('mcEmail').value,status:c?.status||'active'}});closeModal();await loadState();toast('顧客を保存しました。',true)}catch(e){toast(e?.error?.message||'顧客保存に失敗しました。')}finally{setLoading(b,false)}})}
+$('newSurvey').addEventListener('click',()=>openEditor());$('backList').addEventListener('click',()=>{showPage('surveys');loadState()});$('saveSurvey').addEventListener('click',()=>saveSurvey(false));$('publishEditor').addEventListener('click',()=>saveSurvey(true));$('addGroup').addEventListener('click',()=>{editorSurvey.groups.push({id:'',name:'新しいグループ',questions:[]});renderGroups()});
+$('groups').addEventListener('input',e=>{if(e.target.classList.contains('gname')){}});$('groups').addEventListener('change',e=>{if(e.target.classList.contains('qtype')){const q=e.target.closest('.q');const gi=+q.dataset.gi,qi=+q.dataset.qi;editorSurvey.groups[gi].questions[qi].type=e.target.value;renderGroups()}});$('groups').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const act=b.dataset.act;if(act==='addq'){editorSurvey.groups[+b.dataset.gi].questions.push({id:'q_'+Date.now()+Math.random().toString(16).slice(2),title:'',type:'text',required:false,choices:[],branch:{}});renderGroups()}else if(act==='delg'){const gi=+b.dataset.gi;if(editorSurvey.groups.length>1){editorSurvey.groups.splice(gi,1);renderGroups()}}else if(act==='delq'){const q=b.closest('.q');editorSurvey.groups[+q.dataset.gi].questions.splice(+q.dataset.qi,1);renderGroups()}else if(act==='addc'){const q=b.closest('.q');const qq=editorSurvey.groups[+q.dataset.gi].questions[+q.dataset.qi];qq.choices.push({id:'choice_'+Date.now(),label:''});renderGroups()}else if(act==='delc'){const row=b.closest('.choice-row');const q=b.closest('.q');const qq=editorSurvey.groups[+q.dataset.gi].questions[+q.dataset.qi];const ci=Array.from(q.querySelectorAll('.choice-row')).indexOf(row);qq.choices.splice(ci,1);renderGroups()}});
+$('surveyTable').addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;const id=b.dataset.id;if(b.dataset.act==='detail')openDetail(id);if(b.dataset.act==='edit')openEditor(id);if(b.dataset.act==='publish'){try{await api('survey_publish',{surveyId:id});await loadState();toast('アンケートを公開しました。',true)}catch(x){toast(x?.error?.message||'公開に失敗しました。')}}if(b.dataset.act==='close'){try{await api('survey_close',{surveyId:id});await loadState();toast('アンケートを終了しました。',true)}catch(x){toast(x?.error?.message||'終了に失敗しました。')}}if(b.dataset.act==='delete'&&confirm('このアンケートを削除しますか？')){try{await api('survey_delete',{surveyId:id});await loadState();toast('アンケートを削除しました。',true)}catch(x){toast(x?.error?.message||'削除に失敗しました。')}}});
+$('page-detail').addEventListener('click',async e=>{const t=e.target.closest('.tab');if(t){detailTab=t.dataset.tab;renderDetail();return}const b=e.target.closest('button');if(!b)return;if(b.id==='sendSelected'){const ids=Array.from(document.querySelectorAll('.sendCustomer:checked')).map(x=>x.value);if(!ids.length){toast('送信対象を選択してください。');return}setLoading(b,true);try{const d=await api('send_mail',{surveyId:currentSurveyId,recipients:ids});await loadState();renderDetail();toast('送信済み '+d.sent+'件、失敗 '+d.failed+'件',d.failed===0)}catch(x){toast(x?.error?.message||'メール送信に失敗しました。')}finally{setLoading(b,false)}}if(b.id==='issueIndividual'){openModal('<h2>個別回答URLを発行</h2><div class="grid"><label>メールアドレス</label><input id="indMail" type="email"><label>URL</label><input id="indUrl" readonly></div><div class="modal-actions"><button class="btn secondary" id="indClose">閉じる</button><button class="btn" id="indIssue">発行</button></div>');$('indClose').addEventListener('click',closeModal);$('indIssue').addEventListener('click',async()=>{try{const d=await api('issue_token',{surveyId:currentSurveyId,email:$('indMail').value});$('indUrl').value=d.url;toast('個別回答URLを発行しました。',true)}catch(x){toast(x?.error?.message||'URL発行に失敗しました。')}})}if(b.dataset.resend){try{await api('resend_failed',{logId:b.dataset.resend});await loadState();renderDetail();toast('再送しました。',true)}catch(x){toast(x?.error?.message||'再送に失敗しました。')}}if(b.dataset.response){const r=state.responses.find(x=>x.responseId===b.dataset.response);if(r)openModal('<h2>回答内容</h2><pre style="white-space:pre-wrap">'+esc(JSON.stringify(r,null,2))+'</pre><div class="modal-actions"><button class="btn" id="respClose">閉じる</button></div>');$('respClose')?.addEventListener('click',closeModal)}});
+$('detailEdit').addEventListener('click',()=>openEditor(currentSurveyId));$('detailClose').addEventListener('click',async()=>{try{await api('survey_close',{surveyId:currentSurveyId});await loadState();openDetail(currentSurveyId)}catch(e){toast(e?.error?.message||'終了に失敗しました。')}});
+$('customerSearch').addEventListener('input',renderCustomers);$('addCustomer').addEventListener('click',()=>customerModal(null));$('customerTable').addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.customerEdit){const c=state.customers.find(x=>x.customerId===b.dataset.customerEdit);if(c)customerModal(c)}if(b.dataset.customerDel){if(!confirm('この顧客を無効化しますか？'))return;try{await api('customer_delete',{customerId:b.dataset.customerDel});await loadState();toast('顧客を無効化しました。',true)}catch(x){toast(x?.error?.message||'顧客更新に失敗しました。')}}});
+document.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>{showPage(b.dataset.page);if(b.dataset.page==='surveys')renderSurveys();if(b.dataset.page==='customers')renderCustomers();if(b.dataset.page==='settings')renderSettings()}));document.querySelectorAll('#page-settings .tab').forEach(b=>b.addEventListener('click',()=>{settingTab=b.dataset.setting;document.querySelectorAll('#page-settings .tab').forEach(x=>x.classList.toggle('active',x===b));renderSettings()}));
+$('settingsContent').addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;if(b.id==='saveSmtp'){setLoading(b,true);try{await api('smtp_save',{smtp:{host:$('smtpHost').value,port:$('smtpPort').value,encryption:$('smtpEnc').value,username:$('smtpUser').value,password:$('smtpPass').value,fromEmail:$('smtpFrom').value,fromName:$('smtpFromName').value}});await loadState();toast('SMTP設定を保存しました。',true)}catch(x){toast(x?.error?.message||'SMTP設定の保存に失敗しました。')}finally{setLoading(b,false)}}if(b.id==='testSmtp'){const smtp={host:$('smtpHost').value,port:$('smtpPort').value,encryption:$('smtpEnc').value,username:$('smtpUser').value,password:$('smtpPass').value,fromEmail:$('smtpFrom').value,fromName:$('smtpFromName').value};setLoading(b,true);try{const d=await api('smtp_test',{smtp,to:$('smtpTestTo').value.trim()});toast(d.mailSent?'SMTP接続・認証とテストメール送信に成功しました。':'SMTP接続・認証に成功しました。',true)}catch(x){toast(x?.error?.message||'SMTP接続確認に失敗しました。')}finally{setLoading(b,false)}}if(b.id==='saveK'){setLoading(b,true);try{await api('kintone_save',{kintone:{subdomain:$('kSub').value,appId:$('kApp').value,login:$('kLogin').value,password:$('kPass').value,proxyHostPort:$('kProxy').value,verifySsl:$('kVerify').checked}});await loadState();toast('kintone設定を保存しました。',true)}catch(x){toast(x?.error?.message||'kintone設定の保存に失敗しました。')}finally{setLoading(b,false)}}if(b.id==='testK'){setLoading(b,true);try{const d=await api('kintone_test');toast(d.message,true)}catch(x){toast(x?.error?.message||'kintone接続確認に失敗しました。')}finally{setLoading(b,false)}}if(b.id==='fieldsK'){setLoading(b,true);try{const d=await api('kintone_fields',{appId:$('kApp').value});state.mapping=d.mapping;renderSettings();toast('kintone項目を取得しました。',true)}catch(x){toast(x?.error?.message||'kintone項目取得に失敗しました。')}finally{setLoading(b,false)}}if(b.id==='saveMap'){setLoading(b,true);try{await api('kintone_mapping_save',{mapping:{appId:state.mapping.appId,mappings:{name:$('mapName').value,email:$('mapEmail').value,address:$('mapAddress').value,phone:$('mapPhone').value}}});await loadState();toast('kintone項目マッピングを保存しました。',true)}catch(x){toast(x?.error?.message||'マッピング保存に失敗しました。')}finally{setLoading(b,false)}}});
+loadState();
 });
-</script>
-</body>
-</html>
+</script></body></html>
