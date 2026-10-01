@@ -8,7 +8,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'health') {
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['ok' => true, 'version' => APP_VERSION], JSON_UNESCAPED_UNICODE);
+        echo json_encode([
+            'ok' => true,
+            'version' => APP_VERSION
+        ], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
@@ -19,12 +22,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($project === '' || !is_array($decoded)) {
             http_response_code(400);
             header('Content-Type: application/json; charset=utf-8');
-            echo json_encode(['ok' => false, 'error' => 'invalid json'], JSON_UNESCAPED_UNICODE);
+            echo json_encode([
+                'ok' => false,
+                'error' => 'invalid json'
+            ], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
         header('Content-Type: application/json; charset=utf-8');
-        header('Content-Disposition: attachment; filename="video-editor-project.json"');
+        header('Content-Disposition: attachment; filename="video-project.json"');
         echo json_encode($decoded, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         exit;
     }
@@ -35,216 +41,620 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>動画編集・注釈ツール</title>
+<title>動画注釈編集ツール</title>
 <style>
 :root{
-    --bg:#09111d;--panel:#111c2b;--panel2:#172438;--line:#334155;
-    --text:#e5e7eb;--muted:#94a3b8;--blue:#2563eb;--red:#ef4444;
-    --yellow:#fbbf24;--label:105px;--track:58px
+    --bg:#0b1220;
+    --panel:#111b2a;
+    --panel2:#182438;
+    --line:#334155;
+    --text:#e5e7eb;
+    --muted:#94a3b8;
+    --blue:#2563eb;
+    --red:#ef4444;
+    --comment:#60a5fa;
+    --highlight:#22c55e;
+    --skip:#f97316;
+    --label:110px;
+    --track:54px;
 }
 *{box-sizing:border-box}
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);
-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP",sans-serif}
+html,body{
+    margin:0;
+    width:100%;
+    height:100%;
+    overflow:hidden;
+    background:var(--bg);
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP",sans-serif
+}
 button,input,select,textarea{font:inherit}
 button{cursor:pointer}
 button:disabled{opacity:.45;cursor:not-allowed}
 .hidden{display:none!important}
 
-.app{height:100vh;display:flex;flex-direction:column}
-.topbar{
-    height:52px;flex:none;display:flex;align-items:center;gap:7px;padding:7px 10px;
-    background:#070e18;border-bottom:1px solid var(--line)
+.app{
+    height:100vh;
+    display:flex;
+    flex-direction:column
 }
-.brand{font-weight:700;margin-right:8px;white-space:nowrap}
+
+.topbar{
+    height:52px;
+    flex:none;
+    display:flex;
+    align-items:center;
+    gap:7px;
+    padding:7px 10px;
+    background:#080f1b;
+    border-bottom:1px solid var(--line)
+}
+.brand{
+    font-weight:700;
+    white-space:nowrap;
+    margin-right:8px
+}
 .btn{
-    border:1px solid #40516a;border-radius:6px;background:#243247;color:var(--text);
+    border:1px solid #40516a;
+    border-radius:6px;
+    background:#243247;
+    color:var(--text);
     padding:7px 11px
 }
 .btn:hover:not(:disabled){background:#304158}
-.btn.primary{background:var(--blue);border-color:#3b82f6}
-.btn.danger{background:#7f1d1d;border-color:#991b1b}
-.btn.small{padding:5px 8px;font-size:12px}
-.status{margin-left:auto;color:var(--muted);font-size:12px;white-space:nowrap}
+.btn.primary{
+    background:var(--blue);
+    border-color:#3b82f6
+}
+.btn.danger{
+    background:#7f1d1d;
+    border-color:#991b1b
+}
+.btn.small{
+    padding:5px 8px;
+    font-size:12px
+}
+.status{
+    margin-left:auto;
+    color:var(--muted);
+    font-size:12px;
+    white-space:nowrap
+}
 .file-input{display:none}
 
-.main{min-height:0;flex:1;display:flex;flex-direction:column}
-.video-area{
-    min-height:260px;flex:1;display:flex;align-items:center;justify-content:center;
-    padding:12px;background:#03070c;overflow:hidden
-}
-.video-wrap{
-    position:relative;width:min(1100px,100%);height:100%;
-    display:flex;align-items:center;justify-content:center
-}
-#video{display:block;max-width:100%;max-height:100%;background:#000}
-.video-overlay{position:absolute;inset:0;pointer-events:none}
-.overlay-element{
-    position:absolute;min-width:30px;min-height:20px;pointer-events:auto;
-    user-select:none;touch-action:none
-}
-.overlay-element.selected{outline:2px solid #60a5fa;outline-offset:1px}
-.overlay-element.active{filter:drop-shadow(0 0 7px #fbbf24)}
-.overlay-comment{
-    width:100%;height:100%;display:flex;align-items:center;justify-content:center;
-    padding:5px;overflow:hidden;white-space:pre-wrap;text-align:center;
-    text-shadow:0 2px 4px #000;font-weight:700
-}
-.overlay-shape{
-    width:100%;height:100%;border:3px solid currentColor;
-    background:color-mix(in srgb,currentColor 10%,transparent)
-}
-.shape-circle{border-radius:50%}
-.shape-ellipse{border-radius:50%}
-.shape-rect{border-radius:4px}
-.overlay-skip{
-    width:100%;height:100%;display:flex;align-items:center;justify-content:center;
-    border:2px dashed currentColor;color:#fb923c;background:#f973161c;
-    font-size:12px;font-weight:700
+.main{
+    flex:1;
+    min-height:0;
+    display:flex;
+    flex-direction:column
 }
 
-.connection-layer{
-    position:absolute;inset:0;width:100%;height:100%;
-    pointer-events:none;overflow:visible
+.video-area{
+    flex:1;
+    min-height:250px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:12px;
+    background:#050a11;
+    overflow:hidden
 }
+
+.video-wrap{
+    position:relative;
+    width:min(1100px,100%);
+    height:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center
+}
+
+#video{
+    display:block;
+    max-width:100%;
+    max-height:100%;
+    background:#000
+}
+
+.video-overlay{
+    position:absolute;
+    inset:0;
+    pointer-events:none
+}
+
+.overlay-svg{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    overflow:visible;
+    pointer-events:none;
+    z-index:20
+}
+
 .connection{
-    fill:none;stroke:var(--yellow);stroke-width:2.5;
-    stroke-dasharray:7 5;opacity:.95
+    fill:none;
+    stroke:#facc15;
+    stroke-width:2.5;
+    stroke-dasharray:7 5;
+    opacity:.95
 }
+
+.connection.active{
+    stroke:#fff;
+    stroke-width:4
+}
+
 .connection-dot{
-    fill:var(--yellow);stroke:#111827;stroke-width:2
+    fill:#facc15;
+    stroke:#111827;
+    stroke-width:2
+}
+
+.overlay-element{
+    position:absolute;
+    min-width:30px;
+    min-height:20px;
+    pointer-events:auto;
+    user-select:none;
+    z-index:10
+}
+
+.overlay-element.selected{
+    outline:2px solid #60a5fa;
+    outline-offset:2px
+}
+
+.overlay-comment{
+    width:100%;
+    height:100%;
+    padding:6px 9px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    text-align:center;
+    white-space:pre-wrap;
+    overflow:hidden;
+    background:#0009;
+    border:1px solid currentColor;
+    border-radius:4px;
+    line-height:1.25
+}
+
+.overlay-highlight{
+    width:100%;
+    height:100%;
+    border:3px solid currentColor;
+    background:transparent
+}
+
+.overlay-highlight.square{border-radius:0}
+.overlay-highlight.circle{
+    border-radius:50%
+}
+.overlay-highlight.ellipse{
+    border-radius:50%
+}
+
+.overlay-skip{
+    width:100%;
+    height:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border:2px dashed currentColor;
+    background:#f9731622;
+    color:#fdba74;
+    border-radius:4px;
+    font-size:12px;
+    font-weight:700
 }
 
 .empty-video{
-    position:absolute;text-align:center;color:#64748b;line-height:1.8;
+    position:absolute;
+    text-align:center;
+    color:#64748b;
+    line-height:1.8;
     pointer-events:none
 }
-.empty-video strong{display:block;color:#94a3b8;font-size:18px}
+.empty-video strong{
+    display:block;
+    color:#94a3b8;
+    font-size:18px
+}
 
 .bottom{
-    height:330px;flex:none;display:flex;min-height:0;
-    border-top:1px solid var(--line);background:#0d1724
+    height:330px;
+    flex:none;
+    display:flex;
+    min-height:0;
+    border-top:1px solid var(--line);
+    background:#0e1724
 }
-.timeline-panel{min-width:0;flex:1;display:flex;flex-direction:column}
+
+.timeline-panel{
+    min-width:0;
+    flex:1;
+    display:flex;
+    flex-direction:column
+}
+
 .timeline-toolbar{
-    height:43px;flex:none;display:flex;align-items:center;gap:7px;padding:5px 8px;
+    height:43px;
+    flex:none;
+    display:flex;
+    align-items:center;
+    gap:7px;
+    padding:5px 8px;
     border-bottom:1px solid var(--line)
 }
-.time-readout{min-width:120px;font-variant-numeric:tabular-nums;color:#dbeafe}
-.selection-hint{font-size:11px;color:#64748b}
+
+.time-readout{
+    min-width:150px;
+    font-variant-numeric:tabular-nums;
+    color:#dbeafe
+}
+
 .zoom-control{
-    margin-left:auto;display:flex;align-items:center;gap:6px;
-    color:var(--muted);font-size:12px
+    margin-left:auto;
+    display:flex;
+    align-items:center;
+    gap:6px;
+    color:var(--muted);
+    font-size:12px
 }
 .zoom-control input{width:120px}
 
-.timeline-scroll{position:relative;flex:1;min-height:0;overflow:auto}
-.timeline-content{position:relative;width:100%;min-width:650px}
-.axis-row{
-    position:sticky;top:0;z-index:30;height:34px;display:flex;
-    background:#131d29;border-bottom:1px solid var(--line)
-}
-.axis-label{
-    width:var(--label);min-width:var(--label);display:flex;align-items:center;
-    padding-left:8px;background:#131d29;border-right:1px solid var(--line);
-    font-size:12px;position:sticky;left:0;z-index:40
-}
-.axis-track{position:relative;height:100%;flex:1;min-width:0}
-.tick{
-    position:absolute;top:0;height:100%;border-left:1px solid #334155;
-    padding:5px 0 0 3px;font-size:10px;color:#64748b;
-    white-space:nowrap;pointer-events:none
+.timeline-scroll{
+    position:relative;
+    flex:1;
+    min-height:0;
+    overflow:auto
 }
 
-.track-row{height:var(--track);display:flex;border-bottom:1px solid #263445}
+.timeline-content{
+    position:relative;
+    min-width:700px;
+    width:100%
+}
+
+.axis-row{
+    position:sticky;
+    top:0;
+    z-index:50;
+    height:34px;
+    display:flex;
+    background:#131d29;
+    border-bottom:1px solid var(--line)
+}
+
+.axis-label{
+    width:var(--label);
+    min-width:var(--label);
+    display:flex;
+    align-items:center;
+    padding-left:8px;
+    background:#131d29;
+    border-right:1px solid var(--line);
+    font-size:12px;
+    position:sticky;
+    left:0;
+    z-index:60
+}
+
+.axis-track{
+    position:relative;
+    height:100%;
+    flex:1
+}
+
+.tick{
+    position:absolute;
+    top:0;
+    height:100%;
+    border-left:1px solid #334155;
+    padding:5px 0 0 3px;
+    font-size:10px;
+    color:#64748b;
+    white-space:nowrap;
+    pointer-events:none
+}
+
+.track-row{
+    height:var(--track);
+    display:flex;
+    border-bottom:1px solid #263445
+}
+
 .track-label{
-    width:var(--label);min-width:var(--label);display:flex;align-items:center;
-    gap:6px;padding:0 8px;background:#111b27;border-right:1px solid var(--line);
-    font-size:12px;position:sticky;left:0;z-index:20
+    width:var(--label);
+    min-width:var(--label);
+    display:flex;
+    align-items:center;
+    gap:6px;
+    padding:0 8px;
+    background:#111b27;
+    border-right:1px solid var(--line);
+    font-size:12px;
+    position:sticky;
+    left:0;
+    z-index:20
 }
-.type-dot{width:8px;height:8px;border-radius:50%;flex:none}
-.track-lane{position:relative;flex:1;min-width:0}
+
+.type-dot{
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    flex:none
+}
+
+.track-lane{
+    position:relative;
+    flex:1;
+    min-width:0
+}
+
 .track-grid{
-    position:absolute;inset:0;pointer-events:none;
-    background-image:linear-gradient(to right,rgba(148,163,184,.08) 1px,transparent 1px)
+    position:absolute;
+    inset:0;
+    pointer-events:none
 }
+
 .element-bar{
-    position:absolute;top:9px;height:39px;min-width:15px;
-    border:1px solid currentColor;border-radius:5px;display:flex;
-    align-items:center;overflow:visible;cursor:grab;user-select:none;
-    touch-action:none;z-index:5
+    position:absolute;
+    top:8px;
+    height:38px;
+    min-width:14px;
+    border:1px solid currentColor;
+    border-radius:5px;
+    display:flex;
+    align-items:center;
+    overflow:visible;
+    cursor:grab;
+    user-select:none;
+    touch-action:none;
+    z-index:5
 }
+
 .element-bar:active{cursor:grabbing}
-.element-bar.selected{box-shadow:0 0 0 2px #60a5fa}
-.element-bar .label{
-    padding:0 8px;overflow:hidden;text-overflow:ellipsis;
-    white-space:nowrap;font-size:11px;pointer-events:none
+.element-bar.selected{
+    box-shadow:0 0 0 2px #60a5fa
 }
-.element-bar .handle{
-    position:absolute;top:0;width:10px;height:100%;z-index:8
+
+.bar-label{
+    padding:0 8px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    font-size:11px;
+    pointer-events:none
 }
-.element-bar .handle.left{left:-5px;cursor:ew-resize}
-.element-bar .handle.right{right:-5px;cursor:ew-resize}
+
+.handle{
+    position:absolute;
+    top:0;
+    width:10px;
+    height:100%;
+    z-index:8
+}
+.handle.left{
+    left:-5px;
+    cursor:ew-resize
+}
+.handle.right{
+    right:-5px;
+    cursor:ew-resize
+}
 
 .playhead{
-    position:absolute;top:34px;bottom:0;width:3px;z-index:80;
-    background:var(--red);box-shadow:0 0 5px #ef444499;
-    cursor:ew-resize;touch-action:none
+    position:absolute;
+    top:34px;
+    bottom:0;
+    width:3px;
+    z-index:80;
+    pointer-events:auto;
+    background:var(--red);
+    box-shadow:0 0 5px #ef444499;
+    cursor:ew-resize;
+    touch-action:none
 }
-.playhead:before{
-    content:"";position:absolute;top:-1px;left:-5px;width:13px;height:13px;
-    background:var(--red);clip-path:polygon(0 0,100% 0,50% 100%)
+
+.playhead::before{
+    content:"";
+    position:absolute;
+    top:-1px;
+    left:-5px;
+    width:13px;
+    height:13px;
+    background:var(--red);
+    clip-path:polygon(0 0,100% 0,50% 100%)
 }
+
 .playhead-label{
-    position:absolute;top:12px;left:6px;padding:2px 4px;
-    background:var(--red);color:#fff;font-size:10px;white-space:nowrap;border-radius:3px
+    position:absolute;
+    top:12px;
+    left:6px;
+    padding:2px 4px;
+    background:var(--red);
+    color:#fff;
+    font-size:10px;
+    white-space:nowrap;
+    border-radius:3px
 }
 
 .context-menu{
-    position:fixed;display:none;z-index:2000;min-width:230px;padding:5px;
-    background:#172235;border:1px solid #475569;border-radius:6px;
+    position:fixed;
+    display:none;
+    z-index:2000;
+    min-width:210px;
+    padding:5px;
+    background:#172235;
+    border:1px solid #475569;
+    border-radius:6px;
     box-shadow:0 12px 30px #0008
 }
+
 .context-menu button{
-    display:block;width:100%;padding:8px;border:0;background:transparent;
-    color:var(--text);text-align:left;border-radius:4px
+    display:block;
+    width:100%;
+    padding:8px;
+    border:0;
+    background:transparent;
+    color:var(--text);
+    text-align:left;
+    border-radius:4px
 }
+
 .context-menu button:hover{background:#293a52}
 
 .modal-backdrop{
-    position:fixed;inset:0;z-index:3000;display:none;align-items:center;
-    justify-content:center;padding:20px;background:#000a
+    position:fixed;
+    inset:0;
+    z-index:3000;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+    background:#000a
 }
+
 .modal{
-    width:min(560px,100%);background:#182231;
-    border:1px solid #475569;border-radius:8px;overflow:hidden
+    width:min(570px,100%);
+    max-height:90vh;
+    display:flex;
+    flex-direction:column;
+    background:#182231;
+    border:1px solid #475569;
+    border-radius:8px;
+    overflow:hidden
 }
-.modal-head,.modal-foot{padding:12px 15px;border-color:var(--line)}
-.modal-head{display:flex;justify-content:space-between;border-bottom:1px solid var(--line)}
-.modal-body{padding:15px;display:grid;gap:11px;max-height:75vh;overflow:auto}
-.modal-foot{display:flex;justify-content:flex-end;gap:8px;border-top:1px solid var(--line)}
-.field{display:grid;gap:5px}
-.field label{font-size:12px;color:var(--muted)}
-.field input,.field select,.field textarea{
-    width:100%;padding:7px;background:#0f1722;color:var(--text);
-    border:1px solid #40516a;border-radius:5px
+
+.modal-head,
+.modal-foot{
+    padding:12px 15px;
+    border-color:var(--line)
 }
-.field textarea{min-height:100px;resize:vertical}
-.color-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:6px}
+
+.modal-head{
+    display:flex;
+    justify-content:space-between;
+    border-bottom:1px solid var(--line)
+}
+
+.modal-body{
+    padding:15px;
+    display:grid;
+    gap:11px;
+    overflow:auto
+}
+
+.modal-foot{
+    display:flex;
+    justify-content:flex-end;
+    gap:8px;
+    border-top:1px solid var(--line)
+}
+
+.field{
+    display:grid;
+    gap:5px
+}
+
+.field label{
+    font-size:12px;
+    color:var(--muted)
+}
+
+.field input,
+.field select,
+.field textarea{
+    width:100%;
+    padding:7px;
+    background:#0f1722;
+    color:var(--text);
+    border:1px solid #40516a;
+    border-radius:5px
+}
+
+.field textarea{
+    min-height:90px;
+    resize:vertical
+}
+
+.two{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:10px
+}
+
+.color-grid{
+    display:grid;
+    grid-template-columns:repeat(8,1fr);
+    gap:6px
+}
+
 .color-choice{
-    height:28px;border:2px solid transparent;border-radius:4px
+    height:28px;
+    border:2px solid transparent;
+    border-radius:4px
 }
-.color-choice.active{border-color:#fff;box-shadow:0 0 0 1px #60a5fa}
+
+.color-choice.active{
+    border-color:#fff;
+    box-shadow:0 0 0 1px #60a5fa
+}
+
+.storage-list{
+    padding:0!important;
+    gap:0!important
+}
+
+.storage-item{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:10px;
+    border-bottom:1px solid #334155
+}
+
+.storage-info{
+    min-width:0;
+    flex:1
+}
+
+.storage-name{
+    font-weight:600;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap
+}
+
+.storage-meta{
+    color:#64748b;
+    font-size:11px
+}
 
 .toast{
-    position:fixed;right:15px;bottom:15px;z-index:5000;display:none;
-    padding:10px 14px;background:#1e293b;border:1px solid #475569;
-    border-radius:6px;box-shadow:0 10px 30px #0006
+    position:fixed;
+    right:15px;
+    bottom:15px;
+    z-index:5000;
+    display:none;
+    padding:10px 14px;
+    background:#1e293b;
+    border:1px solid #475569;
+    border-radius:6px;
+    box-shadow:0 10px 30px #0006
 }
 
-@media(max-width:700px){
-    :root{--label:82px}
+@media(max-width:800px){
+    :root{--label:90px}
     .brand{display:none}
     .bottom{height:300px}
+}
+
+@media(max-width:600px){
+    .status{display:none}
 }
 </style>
 </head>
@@ -253,7 +663,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 <div class="app">
 
 <header class="topbar">
-    <div class="brand">動画編集・注釈</div>
+    <div class="brand">動画注釈編集</div>
 
     <button class="btn primary" id="openVideo">動画を読み込む</button>
     <input class="file-input" id="videoFile" type="file" accept="video/*">
@@ -261,10 +671,10 @@ button:disabled{opacity:.45;cursor:not-allowed}
     <button class="btn" id="newProject">新規</button>
     <button class="btn" id="saveProject" disabled>保存</button>
     <button class="btn" id="loadProject">保存データ</button>
-    <button class="btn" id="exportProject">書き出し</button>
+    <button class="btn" id="exportProject" disabled>JSON書出し</button>
 
     <label class="btn">
-        プロジェクト読込
+        JSON読込
         <input class="file-input" id="importProject" type="file" accept=".json,application/json">
     </label>
 
@@ -275,32 +685,27 @@ button:disabled{opacity:.45;cursor:not-allowed}
 
 <section class="video-area">
     <div class="video-wrap" id="videoWrap">
-
         <video id="video" preload="metadata" playsinline></video>
 
-        <!-- 接続線はここだけに描画する -->
-        <svg class="connection-layer" id="connectionLayer"
-             preserveAspectRatio="none"></svg>
-
-        <div class="video-overlay" id="videoOverlay"></div>
+        <div class="video-overlay" id="videoOverlay">
+            <svg class="overlay-svg" id="connectionSvg"></svg>
+        </div>
 
         <div class="empty-video" id="emptyVideo">
             <strong>動画を読み込んでください</strong>
             動画上で右クリックすると要素を追加できます
         </div>
-
     </div>
 </section>
 
 <section class="bottom">
+
 <section class="timeline-panel">
 
 <div class="timeline-toolbar">
     <button class="btn small" id="play" disabled>▶</button>
     <button class="btn small" id="stop" disabled>■</button>
-
     <span class="time-readout" id="readout">00:00.000 / 00:00.000</span>
-    <span class="selection-hint" id="selectionHint"></span>
 
     <div class="zoom-control">
         <span>時間スケール</span>
@@ -310,20 +715,20 @@ button:disabled{opacity:.45;cursor:not-allowed}
 </div>
 
 <div class="timeline-scroll" id="timelineScroll">
-<div class="timeline-content" id="timelineContent">
+    <div class="timeline-content" id="timelineContent">
 
-    <div class="axis-row">
-        <div class="axis-label">時間</div>
-        <div class="axis-track" id="axis"></div>
+        <div class="axis-row">
+            <div class="axis-label">時間</div>
+            <div class="axis-track" id="axisTrack"></div>
+        </div>
+
+        <div id="tracks"></div>
+
+        <div class="playhead" id="playhead">
+            <span class="playhead-label" id="playheadLabel">00:00.000</span>
+        </div>
+
     </div>
-
-    <div id="tracks"></div>
-
-    <div class="playhead" id="playhead">
-        <span class="playhead-label" id="playheadLabel">00:00.000</span>
-    </div>
-
-</div>
 </div>
 
 </section>
@@ -331,108 +736,105 @@ button:disabled{opacity:.45;cursor:not-allowed}
 </main>
 </div>
 
-<!-- 右クリックメニュー -->
 <div class="context-menu" id="contextMenu">
-    <button data-action="add-comment">コメントを追加</button>
-    <button data-action="add-box">強調枠を追加</button>
-    <button data-action="add-skip">スキップを追加</button>
-    <button data-action="edit">選択要素を編集</button>
-    <button data-action="connect">コメントと強調枠を接続</button>
-    <button data-action="disconnect">接続を解除</button>
-    <button data-action="delete">削除</button>
+    <button data-add="comment">＋ コメント</button>
+    <button data-add="highlight">＋ 強調枠</button>
+    <button data-add="skip">＋ スキップ</button>
+    <hr>
+    <button id="editContext">編集</button>
+    <button id="deleteContext">削除</button>
 </div>
 
-<!-- 要素編集 -->
 <div class="modal-backdrop" id="elementModal">
 <div class="modal">
 
 <div class="modal-head">
-    <strong id="elementModalTitle">要素を編集</strong>
-    <button class="btn small" id="elementClose">閉じる</button>
+    <strong id="modalTitle">要素編集</strong>
+    <button class="btn small" id="modalClose">閉じる</button>
 </div>
 
 <div class="modal-body">
 
     <div class="field">
         <label>要素名</label>
-        <input id="elementName">
+        <input id="fieldName">
     </div>
 
     <div class="field" id="commentTextField">
         <label>コメント</label>
-        <textarea id="elementText"
-                  placeholder="動画上に表示するコメントを入力してください"></textarea>
+        <textarea id="fieldText" placeholder="動画上に表示するコメント"></textarea>
     </div>
 
     <div class="field hidden" id="shapeField">
         <label>強調枠の形</label>
-        <select id="elementShape">
-            <option value="rect">四角</option>
+        <select id="fieldShape">
+            <option value="square">四角</option>
             <option value="circle">丸</option>
             <option value="ellipse">楕円</option>
         </select>
     </div>
 
-    <div class="field">
-        <label>開始時間（秒）</label>
-        <input id="elementStart" type="number" min="0" step=".001">
+    <div class="two">
+        <div class="field">
+            <label>開始時間</label>
+            <input id="fieldStart" type="number" min="0" step=".001">
+        </div>
+        <div class="field">
+            <label>終了時間</label>
+            <input id="fieldEnd" type="number" min="0" step=".001">
+        </div>
     </div>
 
-    <div class="field">
-        <label>終了時間（秒）</label>
-        <input id="elementEnd" type="number" min="0.001" step=".001">
+    <div class="two">
+        <div class="field">
+            <label>横位置 (%)</label>
+            <input id="fieldX" type="number" min="0" max="99" step=".1">
+        </div>
+        <div class="field">
+            <label>縦位置 (%)</label>
+            <input id="fieldY" type="number" min="0" max="99" step=".1">
+        </div>
     </div>
 
-    <div class="field">
-        <label>横位置（%）</label>
-        <input id="elementX" type="number" min="0" max="100" step=".1">
-    </div>
-
-    <div class="field">
-        <label>縦位置（%）</label>
-        <input id="elementY" type="number" min="0" max="100" step=".1">
-    </div>
-
-    <div class="field">
-        <label>幅（%）</label>
-        <input id="elementW" type="number" min="1" max="100" step=".1">
-    </div>
-
-    <div class="field">
-        <label>高さ（%）</label>
-        <input id="elementH" type="number" min="1" max="100" step=".1">
+    <div class="two">
+        <div class="field">
+            <label>幅 (%)</label>
+            <input id="fieldW" type="number" min="1" max="100" step=".1">
+        </div>
+        <div class="field">
+            <label>高さ (%)</label>
+            <input id="fieldH" type="number" min="1" max="100" step=".1">
+        </div>
     </div>
 
     <div class="field" id="fontField">
         <label>文字サイズ</label>
-        <input id="elementFontSize" type="number" min="8" max="100">
+        <input id="fieldFont" type="number" min="8" max="100" step="1">
     </div>
 
-    <div class="field" id="weightField">
-        <label>文字太さ</label>
-        <select id="elementFontWeight">
-            <option value="400">標準</option>
-            <option value="700">太字</option>
-            <option value="900">極太</option>
-        </select>
-    </div>
-
-    <div class="field">
+    <div class="field" id="colorField">
         <label>色</label>
         <div class="color-grid" id="colorGrid"></div>
+    </div>
+
+    <div class="field" id="targetField">
+        <label>接続する強調枠</label>
+        <select id="fieldTarget">
+            <option value="">接続しない</option>
+        </select>
     </div>
 
 </div>
 
 <div class="modal-foot">
-    <button class="btn" id="elementCancel">キャンセル</button>
-    <button class="btn primary" id="elementSave">保存</button>
+    <button class="btn danger" id="modalDelete">削除</button>
+    <button class="btn" id="modalCancel">キャンセル</button>
+    <button class="btn primary" id="modalSave">保存</button>
 </div>
 
 </div>
 </div>
 
-<!-- ローカル保存一覧 -->
 <div class="modal-backdrop" id="storageModal">
 <div class="modal">
 
@@ -441,7 +843,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
     <button class="btn small" id="storageClose">閉じる</button>
 </div>
 
-<div class="modal-body" id="storageList"></div>
+<div class="modal-body storage-list" id="storageList"></div>
 
 </div>
 </div>
@@ -453,64 +855,81 @@ button:disabled{opacity:.45;cursor:not-allowed}
 
 const $ = id => document.getElementById(id);
 
-const ui = {
+const UI = {
     video:$('video'),
-    wrap:$('videoWrap'),
+    videoWrap:$('videoWrap'),
     overlay:$('videoOverlay'),
-    connection:$('connectionLayer'),
+    connectionSvg:$('connectionSvg'),
     empty:$('emptyVideo'),
     file:$('videoFile'),
-    open:$('openVideo'),
-    newBtn:$('newProject'),
-    save:$('saveProject'),
-    load:$('loadProject'),
-    exportBtn:$('exportProject'),
-    import:$('importProject'),
+    openVideo:$('openVideo'),
+    newProject:$('newProject'),
+    saveProject:$('saveProject'),
+    loadProject:$('loadProject'),
+    exportProject:$('exportProject'),
+    importProject:$('importProject'),
     status:$('status'),
     play:$('play'),
     stop:$('stop'),
     readout:$('readout'),
-    hint:$('selectionHint'),
     zoom:$('zoom'),
     zoomValue:$('zoomValue'),
     scroll:$('timelineScroll'),
     content:$('timelineContent'),
-    axis:$('axis'),
+    axis:$('axisTrack'),
     tracks:$('tracks'),
     playhead:$('playhead'),
     playheadLabel:$('playheadLabel'),
     menu:$('contextMenu'),
     modal:$('elementModal'),
     storage:$('storageModal'),
-    storageList:$('storageList')
+    storageList:$('storageList'),
+    modalTitle:$('modalTitle'),
+    fieldName:$('fieldName'),
+    fieldText:$('fieldText'),
+    fieldShape:$('fieldShape'),
+    fieldStart:$('fieldStart'),
+    fieldEnd:$('fieldEnd'),
+    fieldX:$('fieldX'),
+    fieldY:$('fieldY'),
+    fieldW:$('fieldW'),
+    fieldH:$('fieldH'),
+    fieldFont:$('fieldFont'),
+    colorGrid:$('colorGrid'),
+    fieldTarget:$('fieldTarget'),
+    commentTextField:$('commentTextField'),
+    shapeField:$('shapeField'),
+    fontField:$('fontField'),
+    targetField:$('targetField'),
+    modalClose:$('modalClose'),
+    modalDelete:$('modalDelete'),
+    modalCancel:$('modalCancel'),
+    modalSave:$('modalSave'),
+    storageClose:$('storageClose'),
+    toast:$('toast')
 };
 
-const state = {
+const APP = {
+    version:'6.0.0',
     project:null,
     duration:0,
-    currentTime:0,
+    time:0,
     videoUrl:'',
-    videoFile:null,
     selected:new Set(),
-    contextId:null,
-    pendingXY:null,
     modalId:null,
-    drag:null,
+    contextId:null,
+    contextXY:null,
     dirty:false,
+    drag:null,
+    playheadDrag:false,
     colors:[
         '#60a5fa','#22c55e','#f59e0b','#ef4444',
         '#c084fc','#14b8a6','#f97316','#e879f9',
-        '#38bdf8','#a3e635','#fb7185','#facc15','#ffffff'
+        '#38bdf8','#a3e635','#fb7185','#facc15'
     ]
 };
 
-const typeColor = {
-    comment:'#60a5fa',
-    box:'#22c55e',
-    skip:'#f97316'
-};
-
-function uid(prefix='id'){
+function uid(prefix){
     return prefix+'-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8);
 }
 
@@ -518,202 +937,352 @@ function clamp(v,min,max){
     return Math.max(min,Math.min(max,v));
 }
 
-function formatTime(v){
-    v=Math.max(0,Number(v)||0);
-    return String(Math.floor(v/60)).padStart(2,'0')+':'+
-        String(Math.floor(v%60)).padStart(2,'0')+'.'+
-        String(Math.floor(v%1*1000)).padStart(3,'0');
+function fmt(sec){
+    sec=Math.max(0,Number(sec)||0);
+    const m=Math.floor(sec/60);
+    const s=Math.floor(sec%60);
+    const ms=Math.floor((sec%1)*1000);
+    return String(m).padStart(2,'0')+':'+
+           String(s).padStart(2,'0')+'.'+
+           String(ms).padStart(3,'0');
 }
 
-function shortTime(v){
-    return v<60 ? v.toFixed(v%1 ? 1 : 0)+'s' :
-        String(Math.floor(v/60)).padStart(2,'0')+':'+
-        String(Math.floor(v%60)).padStart(2,'0');
+function shortTime(sec){
+    sec=Number(sec)||0;
+    if(sec<60)return sec.toFixed(sec%1?1:0)+'s';
+    return String(Math.floor(sec/60)).padStart(2,'0')+':'+
+           String(Math.floor(sec%60)).padStart(2,'0');
 }
 
-function getElement(id){
-    return state.project?.elements.find(e=>e.id===id)||null;
+function typeColor(type){
+    return type==='comment'?'#60a5fa':
+           type==='highlight'?'#22c55e':'#f97316';
 }
 
-function canEdit(){
-    return !!state.project && state.duration>0;
-}
-
-function dirty(){
-    state.dirty=true;
-    ui.status.textContent='変更あり';
-}
-
-function clean(){
-    state.dirty=false;
-    ui.status.textContent=state.project ?
-        '編集中：'+state.project.name :
-        '動画を読み込んでください';
+function rgba(hex,alpha){
+    const n=parseInt(hex.slice(1),16);
+    return `rgba(${n>>16},${n>>8&255},${n&255},${alpha})`;
 }
 
 function toast(message,error=false){
-    ui.status.textContent=message;
-
-    const t=$('toast');
-    t.textContent=message;
-    t.style.display='block';
-    t.style.borderColor=error?'#ef4444':'#475569';
-
+    UI.status.textContent=message;
+    UI.toast.textContent=message;
+    UI.toast.style.display='block';
+    UI.toast.style.borderColor=error?'#ef4444':'#475569';
     clearTimeout(toast.timer);
-    toast.timer=setTimeout(()=>t.style.display='none',2200);
+    toast.timer=setTimeout(()=>UI.toast.style.display='none',2500);
 }
 
-/* =========================
-   プロジェクト
-========================= */
+function setStatus(message){
+    UI.status.textContent=message;
+}
 
-function newProject(name='新規プロジェクト'){
+function dirty(){
+    APP.dirty=true;
+    setStatus('変更あり');
+}
+
+function clean(){
+    APP.dirty=false;
+    setStatus(APP.project?'編集中：'+APP.project.name:'動画を読み込んでください');
+}
+
+function canEdit(){
+    return !!APP.project && APP.duration>0;
+}
+
+function getElement(id){
+    return APP.project?.elements.find(e=>e.id===id)||null;
+}
+
+function createProject(name='新規プロジェクト'){
     return {
-        version:APP_VERSION,
+        version:APP.version,
         name,
-        duration:state.duration,
-        videoName:state.videoFile?.name||'video',
+        videoName:'',
+        duration:APP.duration,
         elements:[]
     };
 }
 
-function normalizeProject(p){
-    if(!p || typeof p!=='object') throw Error('プロジェクト形式が不正です');
+/* ------------------------------
+   Project normalization
+------------------------------ */
 
-    const duration=Number(p.duration)||state.duration;
+function normalizeProject(input){
+    if(!input || typeof input!=='object'){
+        throw new Error('プロジェクト形式が不正です');
+    }
 
-    const elements=Array.isArray(p.elements) ? p.elements.map(e=>{
-        const type=['comment','box','skip'].includes(e.type) ? e.type : 'comment';
-        const start=clamp(Number(e.start)||0,0,duration);
-        const end=clamp(Number(e.end)||start+3,0,duration);
+    const duration=Number(input.duration)||APP.duration;
 
-        return {
-            id:String(e.id||uid('el')),
+    const p={
+        version:APP.version,
+        name:String(input.name||'プロジェクト'),
+        videoName:String(input.videoName||''),
+        duration,
+        elements:[]
+    };
+
+    const allowed=['comment','highlight','skip'];
+
+    for(const raw of Array.isArray(input.elements)?input.elements:[]){
+        const type=allowed.includes(raw.type)?raw.type:'comment';
+
+        const start=clamp(Number(raw.start)||0,0,duration);
+        const end=clamp(
+            Number(raw.end)||Math.min(duration,start+3),
+            0,
+            duration
+        );
+
+        const e={
+            id:String(raw.id||uid('el')),
             type,
-            name:String(e.name||(
+            name:String(raw.name||(
                 type==='comment'?'コメント':
-                type==='box'?'強調枠':'スキップ'
+                type==='highlight'?'強調枠':'スキップ'
             )),
-            text:String(e.text||''),
-            shape:['rect','circle','ellipse'].includes(e.shape) ? e.shape : 'rect',
+            text:String(raw.text||''),
             start,
             end:Math.max(start+.05,Math.min(duration,end)),
-            x:clamp(Number(e.x)||10,0,99),
-            y:clamp(Number(e.y)||10,0,99),
-            w:clamp(Number(e.w)||30,1,100),
-            h:clamp(Number(e.h)||18,1,100),
-            color:e.color||typeColor[type],
-            fontSize:clamp(Number(e.fontSize)||28,8,100),
-            fontWeight:String(e.fontWeight||'700')
+            x:clamp(Number(raw.x)||10,0,99),
+            y:clamp(Number(raw.y)||10,0,99),
+            w:clamp(Number(raw.w)||30,1,100),
+            h:clamp(Number(raw.h)||15,1,100),
+            color:typeof raw.color==='string'&&/^#[0-9a-f]{6}$/i.test(raw.color)
+                ?raw.color
+                :typeColor(type),
+            fontSize:clamp(Number(raw.fontSize)||28,8,100),
+            shape:['square','circle','ellipse'].includes(raw.shape)
+                ?raw.shape
+                :'square',
+            target:String(raw.target||'')
         };
-    }) : [];
+
+        if(e.type!=='comment')e.text='';
+        if(e.type!=='highlight')e.target='';
+
+        p.elements.push(e);
+    }
+
+    const ids=new Set(p.elements.map(e=>e.id));
+
+    for(const e of p.elements){
+        if(e.type==='comment' && e.target){
+            const target=getProjectElement(p,e.target);
+            if(!target || target.type!=='highlight')e.target='';
+        }
+    }
+
+    return p;
+}
+
+function getProjectElement(project,id){
+    return project.elements.find(e=>e.id===id)||null;
+}
+
+/* ------------------------------
+   Video
+------------------------------ */
+
+function loadVideo(file){
+    if(!file || !file.type.startsWith('video/')){
+        toast('動画ファイルを選択してください',true);
+        return;
+    }
+
+    if(APP.videoUrl){
+        URL.revokeObjectURL(APP.videoUrl);
+        APP.videoUrl='';
+    }
+
+    APP.videoUrl=URL.createObjectURL(file);
+    APP.project=createProject(file.name);
+    APP.project.videoName=file.name;
+    APP.duration=0;
+    APP.time=0;
+    APP.selected.clear();
+
+    UI.video.pause();
+    UI.video.src=APP.videoUrl;
+    UI.video.load();
+
+    setStatus('動画を読み込んでいます…');
+}
+
+function resetApplication(){
+    UI.video.pause();
+
+    if(APP.videoUrl){
+        URL.revokeObjectURL(APP.videoUrl);
+        APP.videoUrl='';
+    }
+
+    UI.video.removeAttribute('src');
+    UI.video.load();
+
+    APP.project=null;
+    APP.duration=0;
+    APP.time=0;
+    APP.selected.clear();
+    APP.modalId=null;
+    APP.contextId=null;
+    APP.dirty=false;
+
+    disableEditor();
+    renderAll();
+    setStatus('動画を読み込んでください');
+}
+
+function enableEditor(){
+    UI.play.disabled=false;
+    UI.stop.disabled=false;
+    UI.saveProject.disabled=false;
+    UI.exportProject.disabled=false;
+    UI.empty.style.display='none';
+}
+
+function disableEditor(){
+    UI.play.disabled=true;
+    UI.stop.disabled=true;
+    UI.saveProject.disabled=true;
+    UI.exportProject.disabled=true;
+    UI.empty.style.display='block';
+}
+
+/* ------------------------------
+   Timeline geometry
+------------------------------ */
+
+function visibleRange(){
+    if(!APP.duration)return {start:0,end:0};
+
+    const zoom=Number(UI.zoom.value)||1;
+    const span=APP.duration/zoom;
+
+    let start=APP.time-span/2;
+
+    start=clamp(
+        start,
+        0,
+        Math.max(0,APP.duration-span)
+    );
 
     return {
-        version:APP_VERSION,
-        name:String(p.name||'プロジェクト'),
-        duration,
-        videoName:String(p.videoName||'video'),
-        elements
+        start,
+        end:start+span
     };
 }
 
-/* =========================
-   タイムライン座標
-========================= */
-
-function visibleRange(){
-    if(!state.duration)return {start:0,end:0};
-
-    const zoom=Number(ui.zoom.value)||1;
-    const span=state.duration/zoom;
-
-    let start=state.currentTime-span/2;
-    start=clamp(start,0,Math.max(0,state.duration-span));
-
-    return {start,end:start+span};
-}
-
-function timePercent(t){
+function timePercent(time){
     const r=visibleRange();
-    if(r.end<=r.start)return 0;
-    return clamp((t-r.start)/(r.end-r.start),0,1)*100;
+
+    if(!r.end || r.end<=r.start)return 0;
+
+    return clamp(
+        (time-r.start)/(r.end-r.start)*100,
+        0,
+        100
+    );
 }
 
-function clientTime(x){
-    const rect=ui.axis.getBoundingClientRect();
+function clientToTime(clientX){
+    const rect=UI.axis.getBoundingClientRect();
     const r=visibleRange();
 
     if(!rect.width)return 0;
 
     return clamp(
-        r.start+(x-rect.left)/rect.width*(r.end-r.start),
-        0,state.duration
+        r.start+
+        ((clientX-rect.left)/rect.width)*(r.end-r.start),
+        0,
+        APP.duration
     );
 }
 
+/* ------------------------------
+   Timeline rendering
+------------------------------ */
+
 function renderAxis(){
-    ui.axis.innerHTML='';
-    if(!state.duration)return;
+    UI.axis.innerHTML='';
+
+    if(!APP.duration)return;
 
     const r=visibleRange();
-    const width=Math.max(1,ui.axis.clientWidth);
-    const approx=(r.end-r.start)/Math.max(1,width/80);
-    const steps=[.1,.25,.5,1,2,5,10,15,30,60,120,300];
-    const step=steps.find(s=>s>=approx)||600;
+    const span=r.end-r.start;
+    const width=Math.max(1,UI.axis.clientWidth);
 
-    for(let t=Math.ceil(r.start/step)*step;t<=r.end+.001;t+=step){
+    const approx=span/Math.max(1,width/80);
+    const steps=[
+        .1,.25,.5,1,2,5,10,15,30,60,
+        120,300,600
+    ];
+
+    const step=steps.find(v=>v>=approx)||600;
+    const first=Math.ceil(r.start/step)*step;
+
+    for(let t=first;t<=r.end+.0001;t+=step){
         const tick=document.createElement('div');
         tick.className='tick';
-        tick.style.left=((t-r.start)/(r.end-r.start)*100)+'%';
+        tick.style.left=((t-r.start)/span*100)+'%';
         tick.textContent=shortTime(t);
-        ui.axis.appendChild(tick);
+        UI.axis.appendChild(tick);
     }
 }
 
-/* =========================
-   タイムライン
-========================= */
-
 function renderTimeline(){
-    ui.tracks.innerHTML='';
-    if(!state.project)return;
+    UI.tracks.innerHTML='';
 
-    const groups=[
+    if(!APP.duration || !APP.project){
+        renderAxis();
+        return;
+    }
+
+    const rows=[
         ['comment','コメント'],
-        ['box','強調枠'],
+        ['highlight','強調枠'],
         ['skip','スキップ']
     ];
 
-    groups.forEach(([type,label])=>{
+    for(const [type,label] of rows){
         const row=document.createElement('div');
         row.className='track-row';
 
-        const title=document.createElement('div');
-        title.className='track-label';
+        const labelNode=document.createElement('div');
+        labelNode.className='track-label';
 
         const dot=document.createElement('span');
         dot.className='type-dot';
-        dot.style.background=typeColor[type];
+        dot.style.background=typeColor(type);
 
-        title.append(dot,document.createTextNode(label));
+        labelNode.append(
+            dot,
+            document.createTextNode(label)
+        );
 
         const lane=document.createElement('div');
         lane.className='track-lane';
 
         const grid=document.createElement('div');
         grid.className='track-grid';
+        grid.style.backgroundImage=
+            'linear-gradient(to right,rgba(148,163,184,.09) 1px,transparent 1px)';
         grid.style.backgroundSize=
-            `${Math.max(10,100/state.duration)}% 100%`;
+            Math.max(10,100/Math.max(1,APP.duration))+'% 100%';
 
         lane.appendChild(grid);
 
-        state.project.elements
-            .filter(e=>e.type===type)
-            .forEach(e=>lane.appendChild(createBar(e)));
+        for(const e of APP.project.elements){
+            if(e.type===type){
+                lane.appendChild(createBar(e));
+            }
+        }
 
-        row.append(title,lane);
-        ui.tracks.appendChild(row);
-    });
+        row.append(labelNode,lane);
+        UI.tracks.appendChild(row);
+    }
 
     renderAxis();
 }
@@ -723,32 +1292,38 @@ function createBar(e){
     bar.className='element-bar';
     bar.dataset.id=e.id;
 
-    if(state.selected.has(e.id))bar.classList.add('selected');
+    if(APP.selected.has(e.id)){
+        bar.classList.add('selected');
+    }
 
-    bar.style.left=timePercent(e.start)+'%';
-    bar.style.width=Math.max(.7,timePercent(e.end)-timePercent(e.start))+'%';
+    const left=timePercent(e.start);
+    const right=timePercent(e.end);
+
+    bar.style.left=left+'%';
+    bar.style.width=Math.max(.7,right-left)+'%';
     bar.style.color=e.color;
-    bar.style.background=hexAlpha(e.color,.18);
+    bar.style.background=rgba(e.color,.20);
 
     const label=document.createElement('span');
-    label.className='label';
-    label.textContent=e.name;
+    label.className='bar-label';
+    label.textContent=
+        `${e.name} ${fmt(e.start)}～${fmt(e.end)}`;
 
-    const left=document.createElement('span');
-    left.className='handle left';
-    left.dataset.edge='left';
+    const leftHandle=document.createElement('span');
+    leftHandle.className='handle left';
+    leftHandle.dataset.edge='left';
 
-    const right=document.createElement('span');
-    right.className='handle right';
-    right.dataset.edge='right';
+    const rightHandle=document.createElement('span');
+    rightHandle.className='handle right';
+    rightHandle.dataset.edge='right';
 
-    bar.append(label,left,right);
+    bar.append(label,leftHandle,rightHandle);
 
-    bar.addEventListener('pointerdown',startDrag);
+    bar.addEventListener('pointerdown',startElementDrag);
 
     bar.addEventListener('click',ev=>{
         ev.stopPropagation();
-        select(e.id,ev.shiftKey);
+        selectElement(e.id,ev.shiftKey);
     });
 
     bar.addEventListener('dblclick',ev=>{
@@ -759,414 +1334,341 @@ function createBar(e){
     bar.addEventListener('contextmenu',ev=>{
         ev.preventDefault();
         ev.stopPropagation();
-        select(e.id,false);
-        openMenu(ev.clientX,ev.clientY,e.id);
+
+        selectElement(e.id,false);
+        openContext(ev.clientX,ev.clientY,e.id);
     });
 
     return bar;
 }
 
-function select(id,add=false){
+/* ------------------------------
+   Selection
+------------------------------ */
+
+function selectElement(id,additive=false){
     if(!getElement(id))return;
 
-    if(!add)state.selected.clear();
+    if(!additive){
+        APP.selected.clear();
+    }
 
-    if(add && state.selected.has(id))state.selected.delete(id);
-    else state.selected.add(id);
-
-    ui.hint.textContent=state.selected.size ?
-        `${state.selected.size}要素選択中` : '';
+    if(additive && APP.selected.has(id)){
+        APP.selected.delete(id);
+    }else{
+        APP.selected.add(id);
+    }
 
     renderAll();
 }
 
-/* =========================
-   動画上の要素
-========================= */
+/* ------------------------------
+   Video overlay
+------------------------------ */
 
 function isVisible(e){
-    return state.currentTime>=e.start && state.currentTime<e.end;
+    return APP.time>=e.start && APP.time<e.end;
 }
 
 function renderOverlay(){
-    ui.overlay.innerHTML='';
+    UI.overlay.querySelectorAll('.overlay-element').forEach(n=>n.remove());
+
     if(!canEdit())return;
 
-    state.project.elements.filter(isVisible).forEach(e=>{
-        const el=document.createElement('div');
-        el.className='overlay-element';
-        el.dataset.id=e.id;
+    for(const e of APP.project.elements){
+        if(!isVisible(e))continue;
 
-        if(state.selected.has(e.id))el.classList.add('selected');
+        const node=document.createElement('div');
+        node.className='overlay-element';
+        node.dataset.id=e.id;
 
-        el.style.left=e.x+'%';
-        el.style.top=e.y+'%';
-        el.style.width=e.w+'%';
-        el.style.height=e.h+'%';
-        el.style.color=e.color;
+        if(APP.selected.has(e.id)){
+            node.classList.add('selected');
+        }
+
+        node.style.left=e.x+'%';
+        node.style.top=e.y+'%';
+        node.style.width=e.w+'%';
+        node.style.height=e.h+'%';
+        node.style.color=e.color;
 
         if(e.type==='comment'){
             const text=document.createElement('div');
             text.className='overlay-comment';
             text.textContent=e.text||e.name;
             text.style.fontSize=e.fontSize+'px';
-            text.style.fontWeight=e.fontWeight;
-            el.appendChild(text);
+            node.appendChild(text);
         }
 
-        if(e.type==='box'){
-            const shape=document.createElement('div');
-            shape.className='overlay-shape shape-'+e.shape;
-            el.appendChild(shape);
+        if(e.type==='highlight'){
+            const box=document.createElement('div');
+            box.className='overlay-highlight '+e.shape;
+            node.appendChild(box);
         }
 
         if(e.type==='skip'){
             const skip=document.createElement('div');
             skip.className='overlay-skip';
             skip.textContent='スキップ';
-            el.appendChild(skip);
+            node.appendChild(skip);
         }
 
-        el.addEventListener('pointerdown',ev=>{
+        node.addEventListener('pointerdown',ev=>ev.stopPropagation());
+
+        node.addEventListener('click',ev=>{
             ev.stopPropagation();
-            startVideoDrag(ev,e);
+            selectElement(e.id,ev.shiftKey);
         });
 
-        el.addEventListener('click',ev=>{
-            ev.stopPropagation();
-            select(e.id,ev.shiftKey);
-        });
-
-        el.addEventListener('dblclick',ev=>{
+        node.addEventListener('dblclick',ev=>{
             ev.stopPropagation();
             openElement(e.id);
         });
 
-        el.addEventListener('contextmenu',ev=>{
+        node.addEventListener('contextmenu',ev=>{
             ev.preventDefault();
             ev.stopPropagation();
-            select(e.id,false);
-            openMenu(ev.clientX,ev.clientY,e.id);
+
+            selectElement(e.id,false);
+            openContext(ev.clientX,ev.clientY,e.id);
         });
 
-        ui.overlay.appendChild(el);
-    });
-
-    renderConnections();
+        UI.overlay.appendChild(node);
+    }
 }
 
-/* =========================
-   動画上の接続線
-========================= */
+/* ------------------------------
+   Connection line on VIDEO
+------------------------------ */
 
 function renderConnections(){
-    ui.connection.innerHTML='';
+    UI.connectionSvg.innerHTML='';
 
     if(!canEdit())return;
 
-    const videoRect=ui.video.getBoundingClientRect();
-    const wrapRect=ui.wrap.getBoundingClientRect();
+    const overlayRect=UI.overlay.getBoundingClientRect();
 
-    if(!videoRect.width||!videoRect.height)return;
+    for(const comment of APP.project.elements){
+        if(comment.type!=='comment')continue;
+        if(!comment.target)continue;
 
-    ui.connection.setAttribute('viewBox',
-        `0 0 ${wrapRect.width} ${wrapRect.height}`);
+        const highlight=getElement(comment.target);
 
-    state.project.elements
-        .filter(e=>e.type==='comment')
-        .forEach(comment=>{
-            const targetId=comment.connectTo;
-            if(!targetId)return;
+        if(!highlight || highlight.type!=='highlight')continue;
+        if(!isVisible(comment) || !isVisible(highlight))continue;
 
-            const target=getElement(targetId);
-
-            if(!target || target.type!=='box')return;
-            if(!isVisible(comment)||!isVisible(target))return;
-
-            const a={
-                x:videoRect.left+(comment.x+comment.w/2)/100*videoRect.width-wrapRect.left,
-                y:videoRect.top+(comment.y+comment.h/2)/100*videoRect.height-wrapRect.top
-            };
-
-            const b={
-                x:videoRect.left+(target.x+target.w/2)/100*videoRect.width-wrapRect.left,
-                y:videoRect.top+(target.y+target.h/2)/100*videoRect.height-wrapRect.top
-            };
-
-            const dx=b.x-a.x;
-            const curve=Math.max(35,Math.abs(dx)*.3);
-
-            const path=document.createElementNS(
-                'http://www.w3.org/2000/svg','path'
+        const commentNode=
+            UI.overlay.querySelector(
+                `.overlay-element[data-id="${CSS.escape(comment.id)}"]`
             );
 
-            path.classList.add('connection');
-            path.setAttribute(
-                'd',
-                `M ${a.x} ${a.y}
-                 C ${a.x+curve} ${a.y},
-                   ${b.x-curve} ${b.y},
-                   ${b.x} ${b.y}`
+        const highlightNode=
+            UI.overlay.querySelector(
+                `.overlay-element[data-id="${CSS.escape(highlight.id)}"]`
             );
 
-            ui.connection.appendChild(path);
+        if(!commentNode || !highlightNode)continue;
 
-            const dot=document.createElementNS(
-                'http://www.w3.org/2000/svg','circle'
-            );
+        const a=commentNode.getBoundingClientRect();
+        const b=highlightNode.getBoundingClientRect();
 
-            dot.classList.add('connection-dot');
-            dot.setAttribute('cx',b.x);
-            dot.setAttribute('cy',b.y);
-            dot.setAttribute('r','5');
+        const ax=a.left+a.width/2-overlayRect.left;
+        const ay=a.top+a.height/2-overlayRect.top;
 
-            ui.connection.appendChild(dot);
-        });
+        const bx=b.left+b.width/2-overlayRect.left;
+        const by=b.top+b.height/2-overlayRect.top;
+
+        const dx=bx-ax;
+        const bend=Math.max(30,Math.abs(dx)*.25);
+
+        const path=document.createElementNS(
+            'http://www.w3.org/2000/svg',
+            'path'
+        );
+
+        path.classList.add('connection');
+
+        if(APP.selected.has(comment.id) ||
+           APP.selected.has(highlight.id)){
+            path.classList.add('active');
+        }
+
+        path.setAttribute(
+            'd',
+            `M ${ax} ${ay}
+             C ${ax+Math.sign(dx)*bend} ${ay},
+               ${bx-Math.sign(dx)*bend} ${by},
+               ${bx} ${by}`
+        );
+
+        UI.connectionSvg.appendChild(path);
+
+        const dot=document.createElementNS(
+            'http://www.w3.org/2000/svg',
+            'circle'
+        );
+
+        dot.classList.add('connection-dot');
+        dot.setAttribute('cx',bx);
+        dot.setAttribute('cy',by);
+        dot.setAttribute('r','5');
+
+        UI.connectionSvg.appendChild(dot);
+    }
 }
 
-/* =========================
-   再生位置
-========================= */
+/* ------------------------------
+   Playhead
+------------------------------ */
 
 function renderPlayhead(){
     if(!canEdit()){
-        ui.playhead.style.display='none';
+        UI.playhead.style.display='none';
         return;
     }
 
-    ui.playhead.style.display='block';
+    UI.playhead.style.display='block';
 
-    const p=timePercent(state.currentTime);
+    const p=timePercent(APP.time);
 
-    ui.playhead.style.left=
-        `calc(var(--label) + (100% - var(--label))*${p/100})`;
+    UI.playhead.style.left=
+        `calc(var(--label) + (100% - var(--label)) * ${p/100})`;
 
-    ui.playheadLabel.textContent=formatTime(state.currentTime);
-    ui.readout.textContent=
-        `${formatTime(state.currentTime)} / ${formatTime(state.duration)}`;
+    UI.playheadLabel.textContent=fmt(APP.time);
+    UI.readout.textContent=
+        `${fmt(APP.time)} / ${fmt(APP.duration)}`;
 }
 
-function seek(t){
-    state.currentTime=clamp(Number(t)||0,0,state.duration);
+/* ------------------------------
+   Seek
+------------------------------ */
 
-    if(Number.isFinite(ui.video.duration)){
-        try{ui.video.currentTime=state.currentTime}catch(_){}
+function seek(value){
+    if(!canEdit())return;
+
+    APP.time=clamp(Number(value)||0,0,APP.duration);
+
+    if(Math.abs(UI.video.currentTime-APP.time)>.001){
+        try{
+            UI.video.currentTime=APP.time;
+        }catch(_){}
     }
 
     renderAll();
 }
 
-/* =========================
-   ドラッグ
-========================= */
+/* ------------------------------
+   Element drag
+------------------------------ */
 
-function startDrag(ev){
-    const id=ev.currentTarget.dataset.id;
-    const e=getElement(id);
+function startElementDrag(ev){
+    const bar=ev.currentTarget;
+    const e=getElement(bar.dataset.id);
+
     if(!e)return;
 
     ev.preventDefault();
     ev.stopPropagation();
 
-    select(id,false);
-
     const handle=ev.target.closest('.handle');
-    const lane=ev.currentTarget.parentElement;
-    const range=visibleRange();
+    const lane=bar.parentElement;
 
-    state.drag={
-        id,
+    APP.drag={
+        id:e.id,
         mode:handle?'resize':'move',
         edge:handle?.dataset.edge||'',
-        x:ev.clientX,
-        width:lane.getBoundingClientRect().width,
-        range,
-        start:e.start,
-        end:e.end
+        startX:ev.clientX,
+        laneWidth:Math.max(1,lane.getBoundingClientRect().width),
+        originalStart:e.start,
+        originalEnd:e.end
     };
 
-    window.addEventListener('pointermove',moveDrag);
-    window.addEventListener('pointerup',endDrag,{once:true});
+    window.addEventListener('pointermove',moveElementDrag);
+    window.addEventListener('pointerup',stopElementDrag,{once:true});
 }
 
-function moveDrag(ev){
-    const d=state.drag;
+function moveElementDrag(ev){
+    const d=APP.drag;
+
     if(!d)return;
 
     const e=getElement(d.id);
+
     if(!e)return;
 
-    const dt=(ev.clientX-d.x)/Math.max(1,d.width)*
-        (d.range.end-d.range.start);
+    const r=visibleRange();
+    const delta=
+        (ev.clientX-d.startX)/
+        d.laneWidth*
+        (r.end-r.start);
 
-    const min=.05;
+    const minLength=.05;
 
     if(d.mode==='move'){
-        const len=d.end-d.start;
-        e.start=clamp(d.start+dt,0,state.duration-len);
-        e.end=e.start+len;
+        const length=d.originalEnd-d.originalStart;
+
+        e.start=clamp(
+            d.originalStart+delta,
+            0,
+            APP.duration-length
+        );
+
+        e.end=e.start+length;
     }else if(d.edge==='left'){
-        e.start=clamp(d.start+dt,0,d.end-min);
+        e.start=clamp(
+            d.originalStart+delta,
+            0,
+            d.originalEnd-minLength
+        );
     }else{
-        e.end=clamp(d.end+dt,d.start+min,state.duration);
+        e.end=clamp(
+            d.originalEnd+delta,
+            d.originalStart+minLength,
+            APP.duration
+        );
     }
 
     dirty();
-    renderAll();
-}
 
-function endDrag(){
-    state.drag=null;
-    window.removeEventListener('pointermove',moveDrag);
-    renderAll();
-}
-
-function startVideoDrag(ev,e){
-    ev.preventDefault();
-
-    const rect=ui.video.getBoundingClientRect();
-
-    state.drag={
-        id:e.id,
-        mode:'video',
-        x:ev.clientX,
-        y:ev.clientY,
-        originalX:e.x,
-        originalY:e.y,
-        rect
-    };
-
-    window.addEventListener('pointermove',moveVideoDrag);
-    window.addEventListener('pointerup',endVideoDrag,{once:true});
-}
-
-function moveVideoDrag(ev){
-    const d=state.drag;
-    if(!d||d.mode!=='video')return;
-
-    const e=getElement(d.id);
-    if(!e)return;
-
-    e.x=clamp(
-        d.originalX+(ev.clientX-d.x)/d.rect.width*100,
-        0,100-e.w
-    );
-
-    e.y=clamp(
-        d.originalY+(ev.clientY-d.y)/d.rect.height*100,
-        0,100-e.h
-    );
-
-    dirty();
+    renderTimeline();
     renderOverlay();
+    renderConnections();
+    renderPlayhead();
 }
 
-function endVideoDrag(){
-    state.drag=null;
-    window.removeEventListener('pointermove',moveVideoDrag);
+function stopElementDrag(){
+    APP.drag=null;
+    window.removeEventListener('pointermove',moveElementDrag);
     renderAll();
 }
 
-/* =========================
-   要素編集
-========================= */
+/* ------------------------------
+   Playhead drag
+------------------------------ */
 
-function openElement(id){
-    const e=getElement(id);
-    if(!e)return;
+UI.playhead.addEventListener('pointerdown',ev=>{
+    if(!canEdit())return;
 
-    state.modalId=id;
+    ev.preventDefault();
+    ev.stopPropagation();
 
-    $('elementModalTitle').textContent=
-        e.type==='comment'?'コメントを編集':
-        e.type==='box'?'強調枠を編集':'スキップを編集';
+    APP.playheadDrag=true;
+    seek(clientToTime(ev.clientX));
+});
 
-    $('elementName').value=e.name;
-    $('elementText').value=e.text;
-    $('elementStart').value=e.start;
-    $('elementEnd').value=e.end;
-    $('elementX').value=e.x;
-    $('elementY').value=e.y;
-    $('elementW').value=e.w;
-    $('elementH').value=e.h;
-    $('elementFontSize').value=e.fontSize;
-    $('elementFontWeight').value=e.fontWeight;
-    $('elementShape').value=e.shape;
-
-    $('commentTextField').classList.toggle('hidden',e.type!=='comment');
-    $('fontField').classList.toggle('hidden',e.type!=='comment');
-    $('weightField').classList.toggle('hidden',e.type!=='comment');
-    $('shapeField').classList.toggle('hidden',e.type!=='box');
-
-    buildColors(e.color);
-
-    ui.modal.style.display='flex';
-}
-
-function buildColors(active){
-    const grid=$('colorGrid');
-    grid.innerHTML='';
-
-    state.colors.forEach(color=>{
-        const b=document.createElement('button');
-        b.type='button';
-        b.className='color-choice'+(color===active?' active':'');
-        b.style.background=color;
-        b.dataset.color=color;
-
-        b.onclick=()=>{
-            grid.querySelectorAll('.active')
-                .forEach(x=>x.classList.remove('active'));
-            b.classList.add('active');
-        };
-
-        grid.appendChild(b);
-    });
-}
-
-function closeElement(){
-    ui.modal.style.display='none';
-    state.modalId=null;
-}
-
-function saveElement(){
-    const e=getElement(state.modalId);
-    if(!e)return;
-
-    const start=Number($('elementStart').value);
-    const end=Number($('elementEnd').value);
-
-    if(!Number.isFinite(start)||!Number.isFinite(end)||
-       start<0||end<=start||end>state.duration){
-        toast('開始・終了時間が不正です',true);
-        return;
+window.addEventListener('pointermove',ev=>{
+    if(APP.playheadDrag){
+        seek(clientToTime(ev.clientX));
     }
+});
 
-    e.name=$('elementName').value.trim()||(
-        e.type==='comment'?'コメント':
-        e.type==='box'?'強調枠':'スキップ'
-    );
+window.addEventListener('pointerup',()=>{
+    APP.playheadDrag=false;
+});
 
-    e.text=$('elementText').value;
-    e.start=start;
-    e.end=end;
-    e.x=clamp(Number($('elementX').value)||0,0,99);
-    e.y=clamp(Number($('elementY').value)||0,0,99);
-    e.w=clamp(Number($('elementW').value)||1,1,100);
-    e.h=clamp(Number($('elementH').value)||1,1,100);
-    e.fontSize=clamp(Number($('elementFontSize').value)||28,8,100);
-    e.fontWeight=$('elementFontWeight').value;
-    e.shape=$('elementShape').value;
-    e.color=$('colorGrid .active')?.dataset.color||e.color;
-
-    dirty();
-    closeElement();
-    renderAll();
-}
-
-/* =========================
-   追加
-========================= */
+/* ------------------------------
+   Add element
+------------------------------ */
 
 function addElement(type){
     if(!canEdit()){
@@ -1174,222 +1676,529 @@ function addElement(type){
         return;
     }
 
-    const start=clamp(state.currentTime,0,state.duration-.05);
+    const start=clamp(
+        APP.time,
+        0,
+        Math.max(0,APP.duration-.05)
+    );
+
+    const end=Math.min(
+        APP.duration,
+        start+3
+    );
+
+    const xy=APP.contextXY||{x:10,y:10};
 
     const e={
         id:uid('el'),
         type,
-        name:type==='comment'?'コメント':
-             type==='box'?'強調枠':'スキップ',
+        name:
+            type==='comment'?'コメント':
+            type==='highlight'?'強調枠':
+            'スキップ',
         text:type==='comment'?'コメント':'',
-        shape:'rect',
         start,
-        end:Math.min(state.duration,start+3),
-        x:state.pendingXY?.x??10,
-        y:state.pendingXY?.y??10,
-        w:type==='box'?30:35,
-        h:type==='box'?22:18,
-        color:typeColor[type],
+        end,
+        x:clamp(xy.x,0,99),
+        y:clamp(xy.y,0,99),
+        w:type==='comment'?30:25,
+        h:type==='comment'?15:20,
+        color:typeColor(type),
         fontSize:28,
-        fontWeight:'700'
+        shape:'square',
+        target:''
     };
 
-    state.pendingXY=null;
-
-    state.project.elements.push(e);
-    state.selected.clear();
-    state.selected.add(e.id);
+    APP.project.elements.push(e);
+    APP.selected.clear();
+    APP.selected.add(e.id);
+    APP.contextXY=null;
 
     dirty();
+    closeContext();
     renderAll();
     openElement(e.id);
 }
 
-/* =========================
-   接続
-========================= */
+/* ------------------------------
+   Element modal
+------------------------------ */
 
-function connectSelected(){
-    const selected=[...state.selected];
+function openElement(id){
+    const e=getElement(id);
 
-    if(selected.length!==2){
-        toast('コメントと強調枠を1つずつ選択してください',true);
+    if(!e)return;
+
+    APP.modalId=id;
+
+    UI.modalTitle.textContent=
+        e.type==='comment'?'コメント編集':
+        e.type==='highlight'?'強調枠編集':
+        'スキップ編集';
+
+    UI.fieldName.value=e.name;
+    UI.fieldText.value=e.text;
+    UI.fieldShape.value=e.shape;
+    UI.fieldStart.value=e.start;
+    UI.fieldEnd.value=e.end;
+    UI.fieldX.value=e.x;
+    UI.fieldY.value=e.y;
+    UI.fieldW.value=e.w;
+    UI.fieldH.value=e.h;
+    UI.fieldFont.value=e.fontSize;
+
+    UI.commentTextField.classList.toggle(
+        'hidden',
+        e.type!=='comment'
+    );
+
+    UI.shapeField.classList.toggle(
+        'hidden',
+        e.type!=='highlight'
+    );
+
+    UI.fontField.classList.toggle(
+        'hidden',
+        e.type!=='comment'
+    );
+
+    UI.targetField.classList.toggle(
+        'hidden',
+        e.type!=='comment'
+    );
+
+    buildColors(e.color);
+    buildTargets(e);
+
+    UI.modal.style.display='flex';
+
+    if(e.type==='comment'){
+        setTimeout(()=>UI.fieldText.focus(),0);
+    }
+}
+
+function buildColors(active){
+    UI.colorGrid.innerHTML='';
+
+    for(const color of APP.colors){
+        const button=document.createElement('button');
+
+        button.type='button';
+        button.className='color-choice';
+        button.style.background=color;
+        button.dataset.color=color;
+
+        if(color.toLowerCase()===String(active).toLowerCase()){
+            button.classList.add('active');
+        }
+
+        button.onclick=()=>{
+            UI.colorGrid
+                .querySelectorAll('.active')
+                .forEach(x=>x.classList.remove('active'));
+
+            button.classList.add('active');
+        };
+
+        UI.colorGrid.appendChild(button);
+    }
+}
+
+function buildTargets(comment){
+    UI.fieldTarget.innerHTML=
+        '<option value="">接続しない</option>';
+
+    if(!APP.project)return;
+
+    for(const e of APP.project.elements){
+        if(e.type!=='highlight')continue;
+
+        const option=document.createElement('option');
+        option.value=e.id;
+        option.textContent=e.name;
+
+        if(e.id===comment.target){
+            option.selected=true;
+        }
+
+        UI.fieldTarget.appendChild(option);
+    }
+}
+
+function closeElementModal(){
+    UI.modal.style.display='none';
+    APP.modalId=null;
+}
+
+function saveElement(){
+    const e=getElement(APP.modalId);
+
+    if(!e)return;
+
+    const start=Number(UI.fieldStart.value);
+    const end=Number(UI.fieldEnd.value);
+
+    if(
+        !Number.isFinite(start) ||
+        !Number.isFinite(end) ||
+        start<0 ||
+        end<=start ||
+        end>APP.duration
+    ){
+        toast('開始・終了時間が不正です',true);
         return;
     }
 
-    const a=getElement(selected[0]);
-    const b=getElement(selected[1]);
+    e.name=UI.fieldName.value.trim()||'要素';
+    e.start=start;
+    e.end=end;
+    e.x=clamp(Number(UI.fieldX.value)||0,0,99);
+    e.y=clamp(Number(UI.fieldY.value)||0,0,99);
+    e.w=clamp(Number(UI.fieldW.value)||1,1,100);
+    e.h=clamp(Number(UI.fieldH.value)||1,1,100);
+    e.color=
+        UI.colorGrid.querySelector('.active')?.dataset.color ||
+        e.color;
 
-    if(!a||!b){
-        toast('要素が見つかりません',true);
-        return;
+    if(e.type==='comment'){
+        e.text=UI.fieldText.value;
+        e.fontSize=clamp(
+            Number(UI.fieldFont.value)||28,
+            8,
+            100
+        );
+
+        const target=UI.fieldTarget.value;
+        const targetElement=getElement(target);
+
+        e.target=
+            targetElement?.type==='highlight'
+                ?target
+                :'';
     }
 
-    let comment,box;
-
-    if(a.type==='comment'&&b.type==='box'){
-        comment=a;box=b;
-    }else if(a.type==='box'&&b.type==='comment'){
-        comment=b;box=a;
-    }else{
-        toast('接続できるのはコメントと強調枠です',true);
-        return;
+    if(e.type==='highlight'){
+        e.shape=UI.fieldShape.value;
     }
-
-    comment.connectTo=box.id;
 
     dirty();
+    closeElementModal();
     renderAll();
-    toast('動画上に接続線を表示しました');
 }
 
-function disconnectSelected(){
-    let changed=false;
-
-    state.project.elements.forEach(e=>{
-        if(e.type==='comment'&&
-           (state.selected.has(e.id)||state.selected.has(e.connectTo))){
-            if(e.connectTo){
-                delete e.connectTo;
-                changed=true;
-            }
-        }
-    });
-
-    if(changed){
-        dirty();
-        renderAll();
-        toast('接続を解除しました');
-    }
-}
-
-/* =========================
-   削除
-========================= */
+/* ------------------------------
+   Delete
+------------------------------ */
 
 function deleteSelected(){
-    if(!state.selected.size)return;
+    if(!APP.project || !APP.selected.size)return;
 
-    const ids=new Set(state.selected);
+    const ids=new Set(APP.selected);
 
-    state.project.elements=
-        state.project.elements.filter(e=>!ids.has(e.id));
+    APP.project.elements=
+        APP.project.elements.filter(e=>!ids.has(e.id));
 
-    state.project.elements.forEach(e=>{
-        if(e.type==='comment'&&ids.has(e.connectTo)){
-            delete e.connectTo;
+    for(const e of APP.project.elements){
+        if(e.type==='comment' && ids.has(e.target)){
+            e.target='';
         }
-    });
+    }
 
-    state.selected.clear();
+    APP.selected.clear();
+
     dirty();
+    closeContext();
     renderAll();
 }
 
-/* =========================
-   右クリックメニュー
-========================= */
+/* ------------------------------
+   Context menu
+------------------------------ */
 
-function openMenu(x,y,id=null){
-    state.contextId=id;
+function openContext(x,y,id=null){
+    APP.contextId=id;
 
-    ui.menu.style.display='block';
-    ui.menu.style.left=Math.min(x,innerWidth-240)+'px';
-    ui.menu.style.top=Math.min(y,innerHeight-270)+'px';
+    UI.menu.style.display='block';
+
+    UI.menu.style.left=
+        Math.min(x,window.innerWidth-225)+'px';
+
+    UI.menu.style.top=
+        Math.min(y,window.innerHeight-250)+'px';
 }
 
-function closeMenu(){
-    ui.menu.style.display='none';
+function closeContext(){
+    UI.menu.style.display='none';
+    APP.contextId=null;
 }
 
-ui.menu.addEventListener('click',ev=>{
-    const action=ev.target.closest('button')?.dataset.action;
-    if(!action)return;
-
-    switch(action){
-        case 'add-comment':addElement('comment');break;
-        case 'add-box':addElement('box');break;
-        case 'add-skip':addElement('skip');break;
-        case 'edit':
-            if(state.contextId)openElement(state.contextId);
-            break;
-        case 'connect':connectSelected();break;
-        case 'disconnect':disconnectSelected();break;
-        case 'delete':deleteSelected();break;
-    }
-
-    closeMenu();
+UI.menu.querySelectorAll('[data-add]').forEach(button=>{
+    button.addEventListener('click',()=>{
+        addElement(button.dataset.add);
+    });
 });
 
-/* =========================
-   動画右クリック
-========================= */
+$('editContext').addEventListener('click',()=>{
+    if(APP.contextId){
+        openElement(APP.contextId);
+    }
 
-ui.wrap.addEventListener('contextmenu',ev=>{
+    closeContext();
+});
+
+$('deleteContext').addEventListener('click',()=>{
+    if(APP.contextId){
+        APP.selected.clear();
+        APP.selected.add(APP.contextId);
+        deleteSelected();
+    }
+
+    closeContext();
+});
+
+/* ------------------------------
+   Video right click
+------------------------------ */
+
+UI.videoWrap.addEventListener('contextmenu',ev=>{
     ev.preventDefault();
 
     if(!canEdit())return;
 
-    const rect=ui.video.getBoundingClientRect();
+    const rect=UI.video.getBoundingClientRect();
 
-    if(!rect.width||!rect.height)return;
+    if(
+        ev.clientX<rect.left ||
+        ev.clientX>rect.right ||
+        ev.clientY<rect.top ||
+        ev.clientY>rect.bottom
+    ){
+        return;
+    }
 
-    state.pendingXY={
-        x:clamp((ev.clientX-rect.left)/rect.width*100,0,95),
-        y:clamp((ev.clientY-rect.top)/rect.height*100,0,95)
+    APP.contextXY={
+        x:clamp(
+            (ev.clientX-rect.left)/rect.width*100,
+            0,
+            99
+        ),
+        y:clamp(
+            (ev.clientY-rect.top)/rect.height*100,
+            0,
+            99
+        )
     };
 
-    openMenu(ev.clientX,ev.clientY);
+    openContext(ev.clientX,ev.clientY,null);
 });
 
-/* =========================
-   保存
-========================= */
+/* ------------------------------
+   Timeline right click
+------------------------------ */
 
-function saveLocal(){
-    if(!state.project)return;
+UI.content.addEventListener('contextmenu',ev=>{
+    ev.preventDefault();
 
-    const p=structuredClone(state.project);
-    p.savedAt=new Date().toISOString();
+    if(!canEdit())return;
 
-    localStorage.setItem(
-        'video-editor:'+p.name,
-        JSON.stringify(p)
-    );
+    const bar=ev.target.closest('.element-bar');
 
-    clean();
-    toast('保存しました');
+    if(bar){
+        const id=bar.dataset.id;
+
+        APP.selected.clear();
+        APP.selected.add(id);
+
+        openContext(ev.clientX,ev.clientY,id);
+        renderAll();
+        return;
+    }
+
+    if(
+        ev.target.closest('.track-lane') ||
+        ev.target.closest('.axis-track')
+    ){
+        seek(clientToTime(ev.clientX));
+
+        APP.contextXY=null;
+        openContext(ev.clientX,ev.clientY,null);
+    }
+});
+
+/* ------------------------------
+   Timeline click
+------------------------------ */
+
+UI.content.addEventListener('pointerdown',ev=>{
+    if(
+        ev.target.closest('.element-bar') ||
+        ev.target.closest('.playhead')
+    ){
+        return;
+    }
+
+    if(
+        ev.target.closest('.track-lane') ||
+        ev.target.closest('.axis-track')
+    ){
+        seek(clientToTime(ev.clientX));
+    }
+});
+
+/* ------------------------------
+   Playback
+------------------------------ */
+
+async function togglePlay(){
+    if(!canEdit())return;
+
+    if(UI.video.paused){
+        if(APP.time>=APP.duration-.001){
+            APP.time=0;
+            UI.video.currentTime=0;
+        }
+
+        try{
+            await UI.video.play();
+            UI.play.textContent='Ⅱ';
+        }catch(error){
+            if(error.name!=='AbortError'){
+                toast('動画を再生できません',true);
+            }
+        }
+    }else{
+        UI.video.pause();
+        UI.play.textContent='▶';
+    }
 }
 
-function showStorage(){
-    ui.storageList.innerHTML='';
+function stopVideo(){
+    UI.video.pause();
+    UI.play.textContent='▶';
+    seek(0);
+}
+
+UI.play.addEventListener('click',togglePlay);
+UI.stop.addEventListener('click',stopVideo);
+
+UI.video.addEventListener('timeupdate',()=>{
+    if(!UI.video.paused){
+        APP.time=UI.video.currentTime;
+        renderAll();
+    }
+});
+
+UI.video.addEventListener('play',()=>{
+    UI.play.textContent='Ⅱ';
+});
+
+UI.video.addEventListener('pause',()=>{
+    UI.play.textContent='▶';
+});
+
+UI.video.addEventListener('ended',()=>{
+    UI.play.textContent='▶';
+    APP.time=APP.duration;
+    renderAll();
+});
+
+UI.video.addEventListener('loadedmetadata',()=>{
+    const duration=Number(UI.video.duration);
+
+    if(!Number.isFinite(duration) || duration<=0){
+        toast('動画の長さを取得できません',true);
+        return;
+    }
+
+    APP.duration=duration;
+    APP.time=0;
+
+    if(!APP.project){
+        APP.project=createProject(UI.video.src);
+    }
+
+    APP.project.duration=duration;
+
+    enableEditor();
+    renderAll();
+    clean();
+});
+
+/* ------------------------------
+   Zoom
+------------------------------ */
+
+UI.zoom.addEventListener('input',()=>{
+    UI.zoomValue.textContent=
+        Number(UI.zoom.value).toFixed(1)+'×';
+
+    renderAll();
+});
+
+/* ------------------------------
+   LocalStorage
+------------------------------ */
+
+function storageKey(name){
+    return 'video-annotation-project:'+name;
+}
+
+function saveLocal(){
+    if(!APP.project)return;
+
+    try{
+        const copy=structuredClone(APP.project);
+
+        copy.savedAt=new Date().toISOString();
+
+        localStorage.setItem(
+            storageKey(copy.name),
+            JSON.stringify(copy)
+        );
+
+        clean();
+        toast('保存しました');
+    }catch(error){
+        toast('保存に失敗しました：'+error.message,true);
+    }
+}
+
+function openStorage(){
+    UI.storageList.innerHTML='';
 
     const keys=Object.keys(localStorage)
-        .filter(k=>k.startsWith('video-editor:'))
+        .filter(k=>k.startsWith('video-annotation-project:'))
         .sort();
 
     if(!keys.length){
-        ui.storageList.textContent='保存されたプロジェクトはありません。';
+        const empty=document.createElement('div');
+        empty.style.padding='20px';
+        empty.style.color='#94a3b8';
+        empty.textContent='保存データはありません';
+        UI.storageList.appendChild(empty);
     }
 
-    keys.forEach(key=>{
+    for(const key of keys){
         try{
-            const p=JSON.parse(localStorage.getItem(key));
+            const project=JSON.parse(
+                localStorage.getItem(key)
+            );
 
             const row=document.createElement('div');
-            row.style.cssText=
-                'display:flex;gap:10px;align-items:center;padding:10px;border-bottom:1px solid #334155';
+            row.className='storage-item';
 
             const info=document.createElement('div');
-            info.style.flex='1';
+            info.className='storage-info';
 
-            const name=document.createElement('strong');
-            name.textContent=p.name;
+            const name=document.createElement('div');
+            name.className='storage-name';
+            name.textContent=project.name;
 
             const meta=document.createElement('div');
-            meta.style.cssText='font-size:11px;color:#64748b;margin-top:3px';
+            meta.className='storage-meta';
             meta.textContent=
-                `${p.videoName||''} / ${p.elements?.length||0}要素`;
+                `${project.videoName||'動画未設定'} / `+
+                `${project.elements?.length||0}要素`;
 
             info.append(name,meta);
 
@@ -1398,306 +2207,248 @@ function showStorage(){
             load.textContent='読込';
 
             load.onclick=()=>{
-                loadProject(p);
-                ui.storage.style.display='none';
+                loadProject(project);
+                UI.storage.style.display='none';
             };
 
-            const del=document.createElement('button');
-            del.className='btn small danger';
-            del.textContent='削除';
+            const remove=document.createElement('button');
+            remove.className='btn small danger';
+            remove.textContent='削除';
 
-            del.onclick=()=>{
-                localStorage.removeItem(key);
-                showStorage();
+            remove.onclick=()=>{
+                if(confirm('この保存データを削除しますか？')){
+                    localStorage.removeItem(key);
+                    openStorage();
+                }
             };
 
-            row.append(info,load,del);
-            ui.storageList.appendChild(row);
+            row.append(info,load,remove);
+            UI.storageList.appendChild(row);
         }catch(_){}
-    });
+    }
 
-    ui.storage.style.display='flex';
+    UI.storage.style.display='flex';
 }
 
-function loadProject(project){
+function loadProject(input){
     try{
-        state.project=normalizeProject(structuredClone(project));
-        state.duration=state.project.duration;
+        const p=normalizeProject(input);
 
-        if(Number.isFinite(ui.video.duration)&&ui.video.duration>0){
-            state.duration=ui.video.duration;
-            state.project.duration=state.duration;
+        APP.project=p;
+        APP.duration=
+            Number(UI.video.duration)>0
+                ?Number(UI.video.duration)
+                :p.duration;
+
+        APP.project.duration=APP.duration;
+        APP.time=0;
+        APP.selected.clear();
+
+        if(APP.duration<=0){
+            toast(
+                'プロジェクトを読み込みました。動画を読み込んでください。',
+                false
+            );
+        }else{
+            enableEditor();
         }
 
-        state.currentTime=0;
-        state.selected.clear();
-
-        enableEditor();
         renderAll();
         clean();
-
-        toast('プロジェクトを読み込みました');
-    }catch(e){
-        toast('読込エラー：'+e.message,true);
+    }catch(error){
+        toast(
+            'プロジェクトを読み込めません：'+error.message,
+            true
+        );
     }
 }
+
+/* ------------------------------
+   JSON export/import
+------------------------------ */
 
 function exportProject(){
-    if(!state.project)return;
+    if(!APP.project)return;
 
-    const form=document.createElement('form');
-    form.method='POST';
-    form.action=location.href;
-    form.style.display='none';
+    const data=JSON.stringify(
+        APP.project,
+        null,
+        2
+    );
 
-    const action=document.createElement('input');
-    action.name='action';
-    action.value='export-json';
+    const blob=new Blob(
+        [data],
+        {type:'application/json;charset=utf-8'}
+    );
 
-    const project=document.createElement('input');
-    project.name='project';
-    project.value=JSON.stringify(state.project);
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
 
-    form.append(action,project);
-    document.body.appendChild(form);
-    form.submit();
-    form.remove();
+    a.href=url;
+    a.download=
+        (APP.project.name||'video-project')+'.json';
+
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setTimeout(()=>{
+        URL.revokeObjectURL(url);
+    },1000);
 }
 
-/* =========================
-   動画
-========================= */
+UI.importProject.addEventListener('change',async ev=>{
+    const file=ev.target.files?.[0];
 
-function enableEditor(){
-    ui.play.disabled=false;
-    ui.stop.disabled=false;
-    ui.save.disabled=false;
-    ui.empty.style.display='none';
-}
-
-function disableEditor(){
-    ui.play.disabled=true;
-    ui.stop.disabled=true;
-    ui.save.disabled=true;
-    ui.empty.style.display='block';
-
-    ui.overlay.innerHTML='';
-    ui.connection.innerHTML='';
-    ui.tracks.innerHTML='';
-    ui.playhead.style.display='none';
-}
-
-function loadVideo(file){
-    if(!file||!file.type.startsWith('video/')){
-        toast('動画ファイルを選択してください',true);
-        return;
-    }
-
-    if(state.videoUrl)URL.revokeObjectURL(state.videoUrl);
-
-    state.videoFile=file;
-    state.videoUrl=URL.createObjectURL(file);
-    state.project=newProject(file.name);
-    state.duration=0;
-    state.currentTime=0;
-
-    disableEditor();
-
-    ui.video.src=state.videoUrl;
-    ui.video.load();
-
-    ui.status.textContent='動画を読み込んでいます…';
-}
-
-function resetProject(){
-    if(!confirm('現在のプロジェクトを破棄して新規作成しますか？'))return;
-
-    state.project=null;
-    state.selected.clear();
-    state.currentTime=0;
-    state.duration=0;
-
-    if(state.videoUrl){
-        URL.revokeObjectURL(state.videoUrl);
-        state.videoUrl='';
-    }
-
-    state.videoFile=null;
-
-    ui.video.removeAttribute('src');
-    ui.video.load();
-
-    disableEditor();
-    ui.status.textContent='動画を読み込んでください';
-}
-
-/* =========================
-   イベント
-========================= */
-
-ui.open.onclick=()=>ui.file.click();
-ui.file.onchange=()=>loadVideo(ui.file.files[0]);
-
-ui.newBtn.onclick=resetProject;
-ui.save.onclick=saveLocal;
-ui.load.onclick=showStorage;
-ui.exportBtn.onclick=exportProject;
-
-ui.import.onchange=async ev=>{
-    const file=ev.target.files[0];
     if(!file)return;
 
     try{
-        loadProject(JSON.parse(await file.text()));
-    }catch(e){
-        toast('JSON読込エラー：'+e.message,true);
+        const text=await file.text();
+        loadProject(JSON.parse(text));
+        toast('JSONを読み込みました');
+    }catch(error){
+        toast(
+            'JSONを読み込めません：'+error.message,
+            true
+        );
     }
 
     ev.target.value='';
-};
+});
 
-ui.video.onloadedmetadata=()=>{
-    state.duration=Number(ui.video.duration)||0;
+/* ------------------------------
+   UI buttons
+------------------------------ */
 
-    if(!state.project){
-        state.project=newProject();
-    }
+UI.openVideo.addEventListener(
+    'click',
+    ()=>UI.file.click()
+);
 
-    state.project.duration=state.duration;
-    state.currentTime=0;
+UI.file.addEventListener(
+    'change',
+    ()=>loadVideo(UI.file.files?.[0])
+);
 
-    enableEditor();
-    renderAll();
-    clean();
-};
+UI.newProject.addEventListener(
+    'click',
+    resetApplication
+);
 
-ui.video.ontimeupdate=()=>{
-    if(!ui.video.paused){
-        state.currentTime=ui.video.currentTime;
-        renderAll();
-    }
-};
+UI.saveProject.addEventListener(
+    'click',
+    saveLocal
+);
 
-ui.video.onended=()=>{
-    ui.play.textContent='▶';
-    state.currentTime=state.duration;
-    renderAll();
-};
+UI.loadProject.addEventListener(
+    'click',
+    openStorage
+);
 
-ui.play.onclick=async()=>{
-    if(!canEdit())return;
+UI.exportProject.addEventListener(
+    'click',
+    exportProject
+);
 
-    if(ui.video.paused){
-        try{
-            await ui.video.play();
-            ui.play.textContent='Ⅱ';
-        }catch(e){
-            toast('動画を再生できません',true);
+/* ------------------------------
+   Modal
+------------------------------ */
+
+UI.modalClose.addEventListener(
+    'click',
+    closeElementModal
+);
+
+UI.modalCancel.addEventListener(
+    'click',
+    closeElementModal
+);
+
+UI.modalSave.addEventListener(
+    'click',
+    saveElement
+);
+
+UI.modalDelete.addEventListener(
+    'click',
+    ()=>{
+        if(APP.modalId){
+            APP.selected.clear();
+            APP.selected.add(APP.modalId);
+            deleteSelected();
         }
-    }else{
-        ui.video.pause();
-        ui.play.textContent='▶';
+
+        closeElementModal();
     }
-};
+);
 
-ui.stop.onclick=()=>{
-    ui.video.pause();
-    ui.play.textContent='▶';
-    seek(0);
-};
+UI.storageClose.addEventListener(
+    'click',
+    ()=>UI.storage.style.display='none'
+);
 
-ui.zoom.oninput=()=>{
-    ui.zoomValue.textContent=
-        Number(ui.zoom.value).toFixed(1)+'×';
-    renderAll();
-};
-
-/* タイムラインクリック */
-ui.content.addEventListener('pointerdown',ev=>{
-    if(
-        ev.target.closest('.element-bar')||
-        ev.target.closest('.playhead')
-    )return;
-
-    if(ev.target.closest('.track-lane')||
-       ev.target.closest('.axis-track')){
-        seek(clientTime(ev.clientX));
-    }
-});
-
-/* 再生ヘッド */
-let playheadDrag=false;
-
-ui.playhead.addEventListener('pointerdown',ev=>{
-    if(!canEdit())return;
-
-    ev.preventDefault();
-    playheadDrag=true;
-    seek(clientTime(ev.clientX));
-});
-
-window.addEventListener('pointermove',ev=>{
-    if(playheadDrag)seek(clientTime(ev.clientX));
-});
-
-window.addEventListener('pointerup',()=>{
-    playheadDrag=false;
-});
-
-$('elementClose').onclick=closeElement;
-$('elementCancel').onclick=closeElement;
-$('elementSave').onclick=saveElement;
-
-$('storageClose').onclick=()=>{
-    ui.storage.style.display='none';
-};
-
-document.addEventListener('click',ev=>{
-    if(!ev.target.closest('.context-menu'))closeMenu();
-});
+/* ------------------------------
+   Keyboard
+------------------------------ */
 
 document.addEventListener('keydown',ev=>{
     const tag=document.activeElement?.tagName;
 
     if(ev.key==='Escape'){
-        closeMenu();
-        closeElement();
-        ui.storage.style.display='none';
+        closeContext();
+        closeElementModal();
+        UI.storage.style.display='none';
     }
 
     if(
-        (ev.key==='Delete'||ev.key==='Backspace')&&
+        (ev.key==='Delete' || ev.key==='Backspace') &&
         !['INPUT','TEXTAREA','SELECT'].includes(tag)
     ){
+        ev.preventDefault();
         deleteSelected();
     }
 
     if(
-        ev.key===' '&&
+        ev.key===' ' &&
         !['INPUT','TEXTAREA','SELECT'].includes(tag)
     ){
         ev.preventDefault();
-        ui.play.click();
+        togglePlay();
     }
 });
 
-window.addEventListener('resize',renderAll);
-ui.scroll.addEventListener('scroll',renderConnections);
+/* ------------------------------
+   Resize / scroll
+------------------------------ */
 
-function hexAlpha(hex,alpha){
-    if(!/^#[0-9a-f]{6}$/i.test(hex))return hex;
+window.addEventListener(
+    'resize',
+    renderAll
+);
 
-    const n=parseInt(hex.slice(1),16);
-    return `rgba(${n>>16},${n>>8&255},${n&255},${alpha})`;
-}
+UI.scroll.addEventListener(
+    'scroll',
+    renderConnections
+);
+
+/* ------------------------------
+   Render all
+------------------------------ */
 
 function renderAll(){
     renderTimeline();
     renderOverlay();
+    renderConnections();
     renderPlayhead();
 }
 
+/* ------------------------------
+   Initial state
+------------------------------ */
+
+UI.zoomValue.textContent='1.0×';
 renderAll();
+
 </script>
 </body>
 </html>
