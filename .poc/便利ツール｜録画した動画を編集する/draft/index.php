@@ -2,19 +2,21 @@
 declare(strict_types=1);
 
 /*
- * 画面共有録画・動画オーバーレイ編集
- * PHP + Apache / index.php 単体構成
+ * 画面共有録画・動画上直接編集ツール
  *
- * サーバー保存:
- *   ./data/editor.sqlite
- *   ./data/videos/
+ * 必要環境:
+ * - Apache
+ * - PHP 7.4+
+ * - HTTPS または localhost
  *
- * Apache/PHPプロセスに data ディレクトリへの書き込み権限が必要です。
+ * サーバー側永続保存:
+ *   ./data/projects/*.json
+ *
+ * Apache/PHPから data ディレクトリを書き込める必要があります。
  */
 
 const DATA_DIR = __DIR__ . DIRECTORY_SEPARATOR . 'data';
-const VIDEO_DIR = DATA_DIR . DIRECTORY_SEPARATOR . 'videos';
-const DB_FILE   = DATA_DIR . DIRECTORY_SEPARATOR . 'editor.sqlite';
+const PROJECT_DIR = DATA_DIR . DIRECTORY_SEPARATOR . 'projects';
 
 function jsonResponse(array $data, int $status = 200): never
 {
@@ -24,223 +26,163 @@ function jsonResponse(array $data, int $status = 200): never
     exit;
 }
 
-function ensureStorage(): void
+function ensureProjectDir(): bool
 {
-    if (!is_dir(DATA_DIR) && !mkdir(DATA_DIR, 0775, true)) {
-        throw new RuntimeException('dataディレクトリを作成できません。');
-    }
-    if (!is_dir(VIDEO_DIR) && !mkdir(VIDEO_DIR, 0775, true)) {
-        throw new RuntimeException('videosディレクトリを作成できません。');
+    if (is_dir(PROJECT_DIR)) {
+        return is_writable(PROJECT_DIR);
     }
 
-    $db = new PDO('sqlite:' . DB_FILE);
-    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    $db->exec(
-        'CREATE TABLE IF NOT EXISTS projects (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL DEFAULT "",
-            video_file TEXT NOT NULL DEFAULT "",
-            data TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )'
-    );
-}
-
-function db(): PDO
-{
-    ensureStorage();
-    $db = new PDO('sqlite:' . DB_FILE);
-    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    return $db;
-}
-
-function projectId(string $value = ''): string
-{
-    if (preg_match('/^[a-zA-Z0-9_-]{1,80}$/', $value)) {
-        return $value;
+    if (!is_dir(DATA_DIR) && !@mkdir(DATA_DIR, 0775, true)) {
+        return false;
     }
-    return bin2hex(random_bytes(12));
+
+    if (!is_dir(PROJECT_DIR) && !@mkdir(PROJECT_DIR, 0775, true)) {
+        return false;
+    }
+
+    return is_writable(PROJECT_DIR);
 }
 
-function requestJson(): array
+function validProjectId(string $id): bool
 {
-    $raw = file_get_contents('php://input');
-    $data = json_decode($raw ?: '{}', true);
-    return is_array($data) ? $data : [];
+    return (bool)preg_match('/^[a-zA-Z0-9_-]{8,80}$/', $id);
 }
 
-function sanitizeProject(array $project): array
+function projectPath(string $id): string
 {
-    $project['version'] = 2;
-    $project['items'] = is_array($project['items'] ?? null) ? $project['items'] : [];
-    $project['connectors'] = is_array($project['connectors'] ?? null) ? $project['connectors'] : [];
-    $project['skips'] = is_array($project['skips'] ?? null) ? $project['skips'] : [];
-    $project['duration'] = max(0, (float)($project['duration'] ?? 0));
-
-    return $project;
+    return PROJECT_DIR . DIRECTORY_SEPARATOR . $id . '.json';
 }
 
 /*
- * API
+ * PHP API
  */
 if (isset($_GET['api'])) {
-    try {
-        $api = (string)$_GET['api'];
+    $api = (string)$_GET['api'];
 
-        if ($api === 'save') {
-            $input = requestJson();
-            $id = projectId((string)($input['id'] ?? ''));
-            $name = trim((string)($input['name'] ?? '無題'));
-            $project = sanitizeProject($input['project'] ?? []);
-            $videoFile = basename((string)($input['videoFile'] ?? ''));
-
-            $now = date('c');
-            $pdo = db();
-
-            $stmt = $pdo->prepare(
-                'INSERT INTO projects
-                    (id,name,video_file,data,created_at,updated_at)
-                 VALUES
-                    (:id,:name,:video_file,:data,:created_at,:updated_at)
-                 ON CONFLICT(id) DO UPDATE SET
-                    name=excluded.name,
-                    video_file=excluded.video_file,
-                    data=excluded.data,
-                    updated_at=excluded.updated_at'
-            );
-
-            $stmt->execute([
-                ':id' => $id,
-                ':name' => $name,
-                ':video_file' => $videoFile,
-                ':data' => json_encode($project, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                ':created_at' => $now,
-                ':updated_at' => $now
-            ]);
-
-            jsonResponse([
-                'ok' => true,
-                'id' => $id,
-                'updated_at' => $now
-            ]);
-        }
-
-        if ($api === 'load') {
-            $id = projectId((string)($_GET['id'] ?? ''));
-            $stmt = db()->prepare('SELECT * FROM projects WHERE id=:id');
-            $stmt->execute([':id' => $id]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$row) {
-                jsonResponse(['ok' => false, 'error' => 'プロジェクトが見つかりません。'], 404);
-            }
-
-            jsonResponse([
-                'ok' => true,
-                'id' => $row['id'],
-                'name' => $row['name'],
-                'videoFile' => $row['video_file'],
-                'project' => json_decode($row['data'], true),
-                'createdAt' => $row['created_at'],
-                'updatedAt' => $row['updated_at']
-            ]);
-        }
-
-        if ($api === 'list') {
-            $rows = db()->query(
-                'SELECT id,name,video_file,created_at,updated_at
-                 FROM projects ORDER BY updated_at DESC'
-            )->fetchAll(PDO::FETCH_ASSOC);
-
-            jsonResponse(['ok' => true, 'projects' => $rows]);
-        }
-
-        if ($api === 'upload') {
-            if (empty($_FILES['video']) || $_FILES['video']['error'] !== UPLOAD_ERR_OK) {
-                jsonResponse(['ok' => false, 'error' => '動画ファイルを受信できませんでした。'], 400);
-            }
-
-            $id = projectId((string)($_POST['id'] ?? ''));
-            $name = basename($_FILES['video']['name']);
-            $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
-
-            if (!in_array($ext, ['webm', 'mp4', 'mov', 'mkv'], true)) {
-                $ext = 'webm';
-            }
-
-            $filename = $id . '.' . $ext;
-            $target = VIDEO_DIR . DIRECTORY_SEPARATOR . $filename;
-
-            if (!move_uploaded_file($_FILES['video']['tmp_name'], $target)) {
-                jsonResponse(['ok' => false, 'error' => '動画を保存できませんでした。'], 500);
-            }
-
-            jsonResponse([
-                'ok' => true,
-                'id' => $id,
-                'file' => $filename
-            ]);
-        }
-
-        if ($api === 'video') {
-            $file = basename((string)($_GET['file'] ?? ''));
-            $path = VIDEO_DIR . DIRECTORY_SEPARATOR . $file;
-
-            if (!$file || !is_file($path)) {
-                http_response_code(404);
-                exit;
-            }
-
-            $mime = match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
-                'mp4' => 'video/mp4',
-                'webm' => 'video/webm',
-                'mov' => 'video/quicktime',
-                default => 'application/octet-stream'
-            };
-
-            header('Content-Type: ' . $mime);
-            header('Content-Length: ' . filesize($path));
-            header('Accept-Ranges: bytes');
-            readfile($path);
-            exit;
-        }
-
-        if ($api === 'delete') {
-            $id = projectId((string)($_POST['id'] ?? ''));
-            $pdo = db();
-
-            $stmt = $pdo->prepare('SELECT video_file FROM projects WHERE id=:id');
-            $stmt->execute([':id' => $id]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if ($row && $row['video_file']) {
-                $path = VIDEO_DIR . DIRECTORY_SEPARATOR . basename($row['video_file']);
-                if (is_file($path)) {
-                    @unlink($path);
-                }
-            }
-
-            $stmt = $pdo->prepare('DELETE FROM projects WHERE id=:id');
-            $stmt->execute([':id' => $id]);
-
-            jsonResponse(['ok' => true]);
-        }
-
-        jsonResponse(['ok' => false, 'error' => '未知のAPIです。'], 404);
-
-    } catch (Throwable $e) {
+    if ($api === 'status') {
         jsonResponse([
-            'ok' => false,
-            'error' => $e->getMessage()
-        ], 500);
+            'ok' => true,
+            'serverWritable' => ensureProjectDir(),
+            'php' => PHP_VERSION
+        ]);
     }
+
+    if ($api === 'save') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            jsonResponse(['ok' => false, 'message' => 'POST only'], 405);
+        }
+
+        if (!ensureProjectDir()) {
+            jsonResponse([
+                'ok' => false,
+                'message' => 'data/projects に書き込めません。ディレクトリの権限を確認してください。'
+            ], 500);
+        }
+
+        $raw = file_get_contents('php://input');
+        $payload = json_decode($raw ?: '', true);
+
+        if (!is_array($payload)) {
+            jsonResponse(['ok' => false, 'message' => 'JSONが不正です。'], 400);
+        }
+
+        $projectId = isset($payload['projectId']) && is_string($payload['projectId'])
+            ? $payload['projectId']
+            : '';
+
+        if (!$projectId) {
+            $projectId = bin2hex(random_bytes(12));
+        }
+
+        if (!validProjectId($projectId)) {
+            jsonResponse(['ok' => false, 'message' => 'プロジェクトIDが不正です。'], 400);
+        }
+
+        $payload['version'] = 2;
+        $payload['projectId'] = $projectId;
+        $payload['savedAt'] = date('c');
+
+        $json = json_encode(
+            $payload,
+            JSON_UNESCAPED_UNICODE |
+            JSON_UNESCAPED_SLASHES |
+            JSON_PRETTY_PRINT
+        );
+
+        if ($json === false) {
+            jsonResponse(['ok' => false, 'message' => 'JSON化に失敗しました。'], 500);
+        }
+
+        $path = projectPath($projectId);
+
+        if (@file_put_contents($path, $json, LOCK_EX) === false) {
+            jsonResponse(['ok' => false, 'message' => '編集データを保存できませんでした。'], 500);
+        }
+
+        jsonResponse([
+            'ok' => true,
+            'projectId' => $projectId,
+            'savedAt' => $payload['savedAt']
+        ]);
+    }
+
+    if ($api === 'load') {
+        $projectId = isset($_GET['id']) ? (string)$_GET['id'] : '';
+
+        if (!validProjectId($projectId)) {
+            jsonResponse(['ok' => false, 'message' => 'プロジェクトIDが不正です。'], 400);
+        }
+
+        $path = projectPath($projectId);
+
+        if (!is_file($path)) {
+            jsonResponse(['ok' => false, 'message' => 'プロジェクトが見つかりません。'], 404);
+        }
+
+        $raw = @file_get_contents($path);
+        $data = json_decode($raw ?: '', true);
+
+        if (!is_array($data)) {
+            jsonResponse(['ok' => false, 'message' => '保存データが壊れています。'], 500);
+        }
+
+        jsonResponse([
+            'ok' => true,
+            'project' => $data
+        ]);
+    }
+
+    if ($api === 'delete') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            jsonResponse(['ok' => false, 'message' => 'POST only'], 405);
+        }
+
+        $raw = file_get_contents('php://input');
+        $payload = json_decode($raw ?: '', true);
+        $projectId = is_array($payload) && isset($payload['projectId'])
+            ? (string)$payload['projectId']
+            : '';
+
+        if (!validProjectId($projectId)) {
+            jsonResponse(['ok' => false, 'message' => 'プロジェクトIDが不正です。'], 400);
+        }
+
+        $path = projectPath($projectId);
+
+        if (is_file($path) && !@unlink($path)) {
+            jsonResponse(['ok' => false, 'message' => '削除できませんでした。'], 500);
+        }
+
+        jsonResponse(['ok' => true]);
+    }
+
+    jsonResponse(['ok' => false, 'message' => 'Unknown API'], 404);
 }
 ?>
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="utf-8">
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>画面共有録画・動画編集</title>
 
@@ -250,173 +192,205 @@ if (isset($_GET['api'])) {
     --bg:#101114;
     --panel:#1b1d21;
     --panel2:#23262b;
-    --line:#3a3e45;
-    --text:#f3f4f6;
+    --border:#3b3f46;
+    --text:#f4f5f7;
     --muted:#9da3ad;
-    --blue:#1683ff;
-    --red:#e5484d;
-    --yellow:#ffd54a;
+    --blue:#2878d7;
+    --red:#c93a3a;
+    --green:#23864a;
+    --yellow:#d9a62e;
 }
 
 *{box-sizing:border-box}
 
 html,body{
+    margin:0;
     width:100%;
     height:100%;
-    margin:0;
     background:var(--bg);
     color:var(--text);
-    font-family:system-ui,-apple-system,BlinkMacSystemFont,"Noto Sans JP",sans-serif;
+    font-family:
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        "Noto Sans JP",
+        sans-serif;
 }
 
-button,input,textarea,select{font:inherit}
+body{
+    overflow:hidden;
+}
+
+button,
+input,
+textarea,
+select{
+    font:inherit;
+}
 
 button{
-    border:1px solid #50545c;
-    background:#2a2d32;
+    border:1px solid #4b5058;
+    border-radius:6px;
+    background:#30343a;
     color:#fff;
-    border-radius:7px;
     padding:8px 11px;
     cursor:pointer;
 }
 
-button:hover:not(:disabled){background:#383c43}
-button:disabled{opacity:.45;cursor:not-allowed}
-button.primary{background:#116fd5;border-color:#2788ec}
-button.danger{background:#9d3035}
-button.success{background:#24763e}
-
-input,textarea,select{
-    width:100%;
-    color:#fff;
-    background:#15171a;
-    border:1px solid #4b5058;
-    border-radius:6px;
-    padding:7px 8px;
+button:hover:not(:disabled){
+    background:#41464e;
 }
 
-textarea{resize:vertical;min-height:70px}
+button:disabled{
+    opacity:.45;
+    cursor:not-allowed;
+}
+
+button.primary{background:#1768b7}
+button.success{background:#227b43}
+button.danger{background:#9f3030}
+
+input,
+textarea,
+select{
+    color:#fff;
+    background:#24272c;
+    border:1px solid #50555d;
+    border-radius:5px;
+    padding:7px;
+}
+
+input[type="color"]{
+    height:38px;
+    padding:3px;
+}
 
 header{
     height:48px;
-    padding:0 14px;
     display:flex;
     align-items:center;
     justify-content:space-between;
-    background:#181a1e;
-    border-bottom:1px solid var(--line);
+    padding:0 14px;
+    border-bottom:1px solid #333;
+    background:#1b1d20;
 }
 
 header h1{
-    margin:0;
     font-size:16px;
+    margin:0;
+}
+
+#status{
+    color:#b8bec8;
+    font-size:13px;
 }
 
 #message{
-    display:none;
     position:fixed;
-    top:58px;
     left:50%;
+    top:58px;
     transform:translateX(-50%);
     z-index:1000;
-    padding:10px 16px;
-    border-radius:8px;
-    background:#9b3535;
+    display:none;
+    max-width:min(700px,90vw);
+    padding:10px 15px;
+    border-radius:7px;
+    background:#8d3030;
     box-shadow:0 8px 30px #0008;
+    white-space:pre-wrap;
 }
 
-#message.ok{background:#23733c}
-
-#recordPage{
-    height:calc(100vh - 48px);
-    display:flex;
-    flex-direction:column;
+#message.ok{
+    background:#246b40;
 }
 
 .recorder{
-    flex:1;
-    min-height:0;
-    background:#050505;
+    height:calc(100vh - 104px);
+    min-height:300px;
     display:flex;
     align-items:center;
     justify-content:center;
+    background:#000;
 }
 
 #preview{
-    display:none;
     max-width:100%;
     max-height:100%;
+    display:none;
 }
 
 #placeholder{
-    color:#858a92;
+    color:#888;
     text-align:center;
+    padding:30px;
 }
 
 .toolbar{
+    height:56px;
     display:flex;
     align-items:center;
     gap:8px;
-    flex-wrap:wrap;
-    padding:9px 12px;
-    background:#191b1f;
-    border-top:1px solid var(--line);
+    padding:8px 12px;
+    border-top:1px solid #333;
+    background:#1b1d20;
+    overflow:auto;
+}
+
+.toolbar label{
+    font-size:13px;
+    white-space:nowrap;
 }
 
 #timer{
-    min-width:85px;
+    min-width:82px;
     font-variant-numeric:tabular-nums;
 }
 
 #editor{
-    display:none;
     position:fixed;
     inset:0;
-    z-index:20;
-    background:#0c0d0f;
+    z-index:100;
+    display:none;
     flex-direction:column;
+    background:#111;
 }
 
 .editor-main{
-    flex:1;
     min-height:0;
+    flex:1;
     display:grid;
     grid-template-columns:minmax(0,1fr) 360px;
 }
 
 .video-area{
+    position:relative;
     min-width:0;
     min-height:0;
-    position:relative;
     display:flex;
     align-items:center;
     justify-content:center;
-    background:#000;
     overflow:hidden;
+    background:#000;
 }
 
 #videoStage{
     position:relative;
     background:#000;
-    flex:none;
+    overflow:visible;
 }
 
 #recordedVideo{
     display:block;
     width:100%;
     height:100%;
-    object-fit:contain;
+    object-fit:fill;
 }
 
 #overlay{
     position:absolute;
     inset:0;
     pointer-events:none;
-}
-
-#objects{
-    position:absolute;
-    inset:0;
 }
 
 #connectors{
@@ -428,33 +402,18 @@ header h1{
     pointer-events:none;
 }
 
-.connector-hit{
-    fill:none;
-    stroke:transparent;
-    stroke-width:12;
-    pointer-events:stroke;
-    cursor:pointer;
-}
-
-.connector-line{
-    fill:none;
-    pointer-events:none;
-}
-
-.connector.selected .connector-line{
-    filter:drop-shadow(0 0 3px #fff);
-}
-
-.connector.selected .connector-hit{
-    stroke:rgba(255,213,74,.18);
+#objects{
+    position:absolute;
+    inset:0;
 }
 
 .edit-object{
     position:absolute;
     pointer-events:auto;
-    user-select:none;
-    touch-action:none;
     cursor:move;
+    touch-action:none;
+    user-select:none;
+    overflow:visible;
 }
 
 .edit-object.selected{
@@ -462,103 +421,128 @@ header h1{
     outline-offset:2px;
 }
 
-.comment-object{
-    border-radius:7px;
-    overflow:hidden;
-    padding:8px 10px;
+.edit-object.comment{
+    min-width:30px;
+    min-height:20px;
+    padding:6px 9px;
+    display:flex;
+    align-items:center;
+    justify-content:flex-start;
     white-space:pre-wrap;
+    overflow:hidden;
     word-break:break-word;
+    box-shadow:0 2px 10px #0005;
 }
 
-.box-object{
+.edit-object.box{
     background:transparent;
 }
 
-.resize-handle{
+.object-handle{
     position:absolute;
+    width:12px;
+    height:12px;
     right:-7px;
     bottom:-7px;
-    width:14px;
-    height:14px;
     border-radius:50%;
-    border:2px solid #111;
     background:#fff;
+    border:1px solid #222;
     cursor:nwse-resize;
-    z-index:5;
 }
 
-.endpoint{
+.connection-point{
     position:absolute;
-    width:13px;
-    height:13px;
+    width:12px;
+    height:12px;
     margin:-6px 0 0 -6px;
+    border:2px solid #fff;
+    background:#2878d7;
     border-radius:50%;
-    background:#ffd54a;
-    border:2px solid #111;
-    box-shadow:0 0 0 2px #fff8;
+    z-index:30;
+    display:none;
     cursor:crosshair;
-    pointer-events:auto;
-    z-index:10;
 }
 
-.endpoint:hover{transform:scale(1.25)}
+.edit-object.selected .connection-point{
+    display:block;
+}
 
-.endpoint.start{background:#42a5ff}
-.endpoint.end{background:#ff5c65}
+.connection-point[data-point="n"]{left:50%;top:0}
+.connection-point[data-point="ne"]{left:100%;top:0}
+.connection-point[data-point="e"]{left:100%;top:50%}
+.connection-point[data-point="se"]{left:100%;top:100%}
+.connection-point[data-point="s"]{left:50%;top:100%}
+.connection-point[data-point="sw"]{left:0;top:100%}
+.connection-point[data-point="w"]{left:0;top:50%}
+.connection-point[data-point="nw"]{left:0;top:0}
 
-.direct-edit{
-    position:absolute;
-    inset:0;
-    width:100%;
-    height:100%;
-    border:0;
-    outline:2px solid #5aa9ff;
-    resize:none;
-    overflow:auto;
-    padding:inherit;
-    background:inherit;
-    color:inherit;
-    font:inherit;
-    text-align:inherit;
+.connector{
+    stroke:#fff;
+    stroke-width:2.5;
+    fill:none;
+    pointer-events:stroke;
+    cursor:pointer;
+}
+
+.connector.selected{
+    stroke:#ffd54f;
+    stroke-width:5;
+}
+
+.connector-hit{
+    stroke:transparent;
+    stroke-width:14;
+    fill:none;
+    pointer-events:stroke;
+    cursor:pointer;
+}
+
+.connector-label{
+    pointer-events:none;
 }
 
 aside{
-    min-width:0;
     overflow:auto;
-    background:var(--panel);
-    border-left:1px solid var(--line);
+    min-width:0;
     padding:12px;
+    background:#1b1d20;
+    border-left:1px solid #383c42;
 }
 
 section{
     padding-bottom:13px;
     margin-bottom:13px;
-    border-bottom:1px solid var(--line);
+    border-bottom:1px solid #383c42;
 }
 
 section h2{
-    margin:0 0 8px;
     font-size:15px;
+    margin:0 0 9px;
 }
 
 .help{
-    color:var(--muted);
+    color:#9da3ad;
     font-size:12px;
     line-height:1.55;
-    margin-bottom:9px;
 }
 
 .field{
     display:block;
     margin:7px 0;
-    color:#b8bdc6;
+    color:#c5c9cf;
     font-size:12px;
 }
 
 .field input,
-.field textarea,
-.field select{
+.field select,
+.field textarea{
+    width:100%;
     margin-top:4px;
+}
+
+.field textarea{
+    min-height:70px;
+    resize:vertical;
 }
 
 .grid{
@@ -567,64 +551,52 @@ section h2{
     gap:0 8px;
 }
 
-.three{
-    display:grid;
-    grid-template-columns:1fr 1fr 1fr;
-    gap:7px;
-}
-
-.actions{
-    display:flex;
-    gap:6px;
-    flex-wrap:wrap;
-}
-
 .list-item{
-    padding:8px;
     margin:6px 0;
-    border:1px solid #42464d;
-    border-radius:7px;
+    padding:8px;
+    border:1px solid #454a51;
+    border-radius:6px;
     font-size:12px;
 }
 
 .list-item.selected{
-    border-color:#4aa3ff;
-    background:#17304a;
+    border-color:#368de8;
 }
 
-.list-item .buttons{
+.actions{
     display:flex;
     gap:5px;
     margin-top:6px;
 }
 
-.list-item button{
-    padding:5px 7px;
+.actions button{
+    padding:4px 7px;
     font-size:11px;
 }
 
 #timeline{
-    padding:8px 12px;
-    background:#181a1e;
-    border-top:1px solid var(--line);
+    padding:7px 12px;
+    background:#1b1d20;
+    border-top:1px solid #383c42;
 }
 
-#seek{width:100%}
+#seek{
+    width:100%;
+}
 
-.track-row{
+#tracks{
     display:grid;
-    grid-template-columns:65px 1fr;
-    gap:7px;
+    grid-template-columns:60px 1fr;
+    gap:5px 8px;
     align-items:center;
-    margin-top:4px;
+    color:#999;
     font-size:11px;
-    color:#9ea4ad;
 }
 
 .track{
     position:relative;
     height:14px;
-    background:#2b2e34;
+    background:#2a2d32;
     border-radius:3px;
     overflow:hidden;
 }
@@ -633,42 +605,44 @@ section h2{
     position:absolute;
     top:2px;
     height:10px;
-    min-width:2px;
+    min-width:3px;
     border-radius:2px;
     cursor:pointer;
 }
 
-.track .comment{background:#4aa3ff}
-.track .box{background:#ff4f55}
-.track .connector{background:#ffd54a}
-.track .skip{background:#ed9d31}
+.track .comment{background:#42a5f5}
+.track .box{background:#ef5350}
+.track .skip{background:#dca52b}
+.track .connector{background:#b17cff}
 
 .footer{
+    min-height:48px;
     display:flex;
-    justify-content:center;
     align-items:center;
+    justify-content:center;
     flex-wrap:wrap;
     gap:7px;
-    padding:8px;
-    background:#181a1e;
-    border-top:1px solid var(--line);
+    padding:7px 10px;
+    border-top:1px solid #383c42;
+    background:#1b1d20;
 }
 
 #timeReadout{
-    min-width:110px;
+    min-width:100px;
     text-align:center;
     font-variant-numeric:tabular-nums;
 }
 
 #contextMenu{
-    display:none;
     position:fixed;
-    z-index:100;
-    background:#292c31;
-    border:1px solid #555a62;
-    border-radius:8px;
+    z-index:500;
+    display:none;
+    min-width:190px;
     padding:5px;
-    box-shadow:0 10px 35px #0009;
+    border:1px solid #565b63;
+    border-radius:7px;
+    background:#282b30;
+    box-shadow:0 10px 30px #000b;
 }
 
 #contextMenu button{
@@ -679,27 +653,88 @@ section h2{
     background:transparent;
 }
 
-.toolbar-group{
+#contextMenu button:hover{
+    background:#3a3f47;
+}
+
+#formatPanel{
+    position:fixed;
+    z-index:450;
+    display:none;
+    width:330px;
+    max-width:calc(100vw - 20px);
+    max-height:calc(100vh - 20px);
+    overflow:auto;
+    padding:14px;
+    border:1px solid #555b64;
+    border-radius:9px;
+    background:#202328;
+    box-shadow:0 15px 50px #000c;
+}
+
+#formatPanel h3{
+    margin:0 0 10px;
+    font-size:15px;
+}
+
+.format-actions{
     display:flex;
-    gap:5px;
+    justify-content:flex-end;
+    gap:6px;
+    margin-top:12px;
+}
+
+.format-preview{
+    padding:10px;
+    margin-bottom:10px;
+    background:#16181b;
+    border:1px solid #3f444b;
+    border-radius:6px;
+    text-align:center;
+}
+
+.checkbox-row{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
     align-items:center;
 }
 
-@media(max-width:900px){
+.hidden{
+    display:none!important;
+}
+
+@media(max-width:850px){
     .editor-main{
         display:flex;
         flex-direction:column;
     }
 
     .video-area{
+        min-height:280px;
         flex:1;
-        min-height:260px;
     }
 
     aside{
-        max-height:42vh;
+        max-height:40vh;
         border-left:0;
-        border-top:1px solid var(--line);
+        border-top:1px solid #383c42;
+    }
+}
+
+@media(max-width:600px){
+    .toolbar{
+        height:auto;
+        min-height:56px;
+    }
+
+    .footer button{
+        font-size:11px;
+        padding:6px 7px;
+    }
+
+    #formatPanel{
+        width:300px;
     }
 }
 </style>
@@ -714,37 +749,31 @@ section h2{
 
 <div id="message"></div>
 
-<div id="recordPage">
-
-    <div class="recorder">
-        <video id="preview" autoplay muted playsinline></video>
-        <div id="placeholder">
-            「録画開始」を押して共有する画面を選択してください
-        </div>
+<div class="recorder">
+    <video id="preview" autoplay muted playsinline></video>
+    <div id="placeholder">
+        「録画開始」を押して共有する画面を選択してください
     </div>
+</div>
 
-    <div class="toolbar">
+<div class="toolbar">
+    <label>
+        <input id="systemAudio" type="checkbox">
+        画面の音声
+    </label>
 
-        <label>
-            <input type="checkbox" id="systemAudio">
-            画面の音声
-        </label>
+    <label>
+        <input id="microphone" type="checkbox">
+        マイク
+    </label>
 
-        <label>
-            <input type="checkbox" id="microphone">
-            マイク
-        </label>
+    <span id="timer">00:00:00</span>
 
-        <span id="timer">00:00:00</span>
-
-        <button id="start" class="primary">録画開始</button>
-        <button id="pause" disabled>一時停止</button>
-        <button id="stop" class="danger" disabled>停止</button>
-        <button id="reset" disabled>リセット</button>
-        <button id="openEditor" disabled>編集画面を開く</button>
-
-    </div>
-
+    <button id="start" class="primary">録画開始</button>
+    <button id="pause" disabled>一時停止</button>
+    <button id="stop" class="danger" disabled>停止</button>
+    <button id="reset" disabled>リセット</button>
+    <button id="openEditor" disabled>編集画面を開く</button>
 </div>
 
 <div id="editor">
@@ -777,31 +806,42 @@ section h2{
                 <h2>動画編集</h2>
 
                 <div class="help">
-                    コメント・強調枠を動画上へ直接配置できます。
-                    コメントはダブルクリックすると、その場で文字を編集できます。
-                    要素間の線は接点を直接ドラッグできます。
+                    動画上に直接要素を配置できます。
+                    要素はドラッグ移動・右下のハンドルでサイズ変更できます。
+                    コメントはダブルクリックで直接編集できます。
+                    要素や線を右クリックすると書式を変更できます。
                 </div>
 
-                <div class="actions">
-                    <button id="addComment" class="primary">コメントを追加</button>
-                    <button id="addBox" class="primary">強調枠を追加</button>
-                    <button id="connect">線でつなぐ</button>
-                    <button id="deleteSelected" class="danger">選択項目を削除</button>
+                <div style="margin-top:9px">
+                    <button id="addComment" class="primary">
+                        コメント追加
+                    </button>
+
+                    <button id="addBox" class="primary">
+                        強調枠追加
+                    </button>
+
+                    <button id="connect">
+                        線でつなぐ
+                    </button>
+
+                    <button id="deleteSelected" class="danger">
+                        選択削除
+                    </button>
                 </div>
             </section>
 
             <section>
-
                 <h2>選択中</h2>
 
                 <div id="selectionHint" class="help">
-                    要素または線を選択してください。
+                    動画上の要素または線を選択してください。
                 </div>
 
-                <div id="objectFields" hidden>
+                <div id="objectFields" class="hidden">
 
                     <label id="textField" class="field">
-                        コメント
+                        コメント内容
                         <textarea id="objectText"></textarea>
                     </label>
 
@@ -809,106 +849,55 @@ section h2{
 
                         <label class="field">
                             開始
-                            <input id="objectStart" type="number" min="0" step="0.1">
+                            <input id="objectStart"
+                                   type="number"
+                                   min="0"
+                                   step="0.1">
                         </label>
 
                         <label class="field">
                             終了
-                            <input id="objectEnd" type="number" min="0" step="0.1">
+                            <input id="objectEnd"
+                                   type="number"
+                                   min="0"
+                                   step="0.1">
                         </label>
 
                         <label class="field">
-                            左(%)
-                            <input id="objectX" type="number" min="0" max="100" step="0.1">
+                            左 %
+                            <input id="objectX"
+                                   type="number"
+                                   min="0"
+                                   max="100"
+                                   step="0.1">
                         </label>
 
                         <label class="field">
-                            上(%)
-                            <input id="objectY" type="number" min="0" max="100" step="0.1">
+                            上 %
+                            <input id="objectY"
+                                   type="number"
+                                   min="0"
+                                   max="100"
+                                   step="0.1">
                         </label>
 
                         <label class="field">
-                            幅(%)
-                            <input id="objectW" type="number" min="1" max="100" step="0.1">
+                            幅 %
+                            <input id="objectW"
+                                   type="number"
+                                   min="1"
+                                   max="100"
+                                   step="0.1">
                         </label>
 
                         <label class="field">
-                            高さ(%)
-                            <input id="objectH" type="number" min="1" max="100" step="0.1">
+                            高さ %
+                            <input id="objectH"
+                                   type="number"
+                                   min="1"
+                                   max="100"
+                                   step="0.1">
                         </label>
-
-                    </div>
-
-                    <div id="commentStyleFields">
-
-                        <label class="field">
-                            文字サイズ(px)
-                            <input id="fontSize" type="number" min="8" max="120" step="1">
-                        </label>
-
-                        <div class="grid">
-
-                            <label class="field">
-                                文字色
-                                <input id="fontColor" type="color">
-                            </label>
-
-                            <label class="field">
-                                背景色
-                                <input id="bgColor" type="color">
-                            </label>
-
-                            <label class="field">
-                                背景透明度
-                                <input id="bgOpacity" type="range" min="0" max="1" step="0.01">
-                            </label>
-
-                            <label class="field">
-                                太字
-                                <select id="fontWeight">
-                                    <option value="400">標準</option>
-                                    <option value="700">太字</option>
-                                </select>
-                            </label>
-
-                            <label class="field">
-                                横位置
-                                <select id="textAlign">
-                                    <option value="left">左</option>
-                                    <option value="center">中央</option>
-                                    <option value="right">右</option>
-                                </select>
-                            </label>
-
-                        </div>
-
-                    </div>
-
-                    <div id="boxStyleFields">
-
-                        <div class="grid">
-
-                            <label class="field">
-                                枠色
-                                <input id="borderColor" type="color">
-                            </label>
-
-                            <label class="field">
-                                枠太さ(px)
-                                <input id="borderWidth" type="number" min="1" max="30" step="1">
-                            </label>
-
-                            <label class="field">
-                                透明度
-                                <input id="boxOpacity" type="range" min="0" max="1" step="0.01">
-                            </label>
-
-                            <label class="field">
-                                塗り
-                                <input id="boxFill" type="color">
-                            </label>
-
-                        </div>
 
                     </div>
 
@@ -918,167 +907,91 @@ section h2{
 
                 </div>
 
-                <div id="connectorFields" hidden>
-
-                    <div class="help">
-                        黄色・青色の接点を動画上でドラッグして位置を変更できます。
-                    </div>
-
-                    <div class="grid">
-
-                        <label class="field">
-                            開始
-                            <input id="connectorStart" type="number" min="0" step="0.1">
-                        </label>
-
-                        <label class="field">
-                            終了
-                            <input id="connectorEnd" type="number" min="0" step="0.1">
-                        </label>
-
-                        <label class="field">
-                            線色
-                            <input id="lineColor" type="color">
-                        </label>
-
-                        <label class="field">
-                            太さ(px)
-                            <input id="lineWidth" type="number" min="1" max="30" step="1">
-                        </label>
-
-                        <label class="field">
-                            透明度
-                            <input id="lineOpacity" type="range" min="0" max="1" step="0.01">
-                        </label>
-
-                        <label class="field">
-                            線種
-                            <select id="lineDash">
-                                <option value="solid">実線</option>
-                                <option value="dashed">破線</option>
-                                <option value="dotted">点線</option>
-                            </select>
-                        </label>
-
-                        <label class="field">
-                            始点
-                            <select id="startArrow">
-                                <option value="none">なし</option>
-                                <option value="arrow">矢印</option>
-                                <option value="circle">丸</option>
-                                <option value="square">四角</option>
-                            </select>
-                        </label>
-
-                        <label class="field">
-                            終点
-                            <select id="endArrow">
-                                <option value="none">なし</option>
-                                <option value="arrow">矢印</option>
-                                <option value="circle">丸</option>
-                                <option value="square">四角</option>
-                            </select>
-                        </label>
-
-                        <label class="field">
-                            形状
-                            <select id="lineShape">
-                                <option value="line">直線</option>
-                                <option value="orthogonal">折れ線</option>
-                            </select>
-                        </label>
-
-                    </div>
-
-                    <button id="applyConnector" class="primary">
-                        線の変更を反映
-                    </button>
-
-                </div>
-
             </section>
 
             <section>
-
-                <h2>再生をスキップ</h2>
+                <h2>スキップ</h2>
 
                 <div class="grid">
 
                     <label class="field">
                         開始
-                        <input id="skipStart" type="number" min="0" step="0.1" value="0">
+                        <input id="skipStart"
+                               type="number"
+                               min="0"
+                               step="0.1"
+                               value="0">
                     </label>
 
                     <label class="field">
                         終了
-                        <input id="skipEnd" type="number" min="0" step="0.1" value="5">
+                        <input id="skipEnd"
+                               type="number"
+                               min="0"
+                               step="0.1"
+                               value="5">
                     </label>
 
                 </div>
 
-                <div class="actions">
-                    <button id="skipFromCurrent">現在位置を入力</button>
-                    <button id="addSkip" class="primary">範囲を追加</button>
-                </div>
+                <button id="skipFromCurrent">
+                    現在位置を入力
+                </button>
+
+                <button id="addSkip" class="primary">
+                    範囲追加
+                </button>
 
                 <div id="skipList"></div>
-
             </section>
 
             <section>
-
-                <h2>オブジェクト</h2>
+                <h2>要素</h2>
                 <div id="objectList"></div>
-
             </section>
 
             <section>
-
-                <h2>サーバー保存</h2>
-
-                <label class="field">
-                    プロジェクト名
-                    <input id="projectName" value="無題の動画編集">
-                </label>
-
-                <div class="actions">
-                    <button id="serverSave" class="success">
-                        サーバーへ保存
-                    </button>
-
-                    <button id="serverLoad">
-                        サーバーから読み込み
-                    </button>
-                </div>
-
-                <div id="serverProjectList"></div>
-
-                <div class="help">
-                    保存先は同じindex.phpのdata/editor.sqliteです。
-                    録画動画はdata/videosへ保存されます。
-                </div>
-
-            </section>
-
-            <section>
-
                 <h2>編集データ</h2>
 
-                <div class="actions">
-                    <button id="saveProject">JSON保存</button>
-                    <button id="loadProject">JSON読み込み</button>
-                    <button id="clearEdits" class="danger">すべて削除</button>
-                </div>
+                <button id="saveProject">
+                    JSON保存
+                </button>
+
+                <button id="loadProject">
+                    JSON読込
+                </button>
+
+                <button id="serverSave" class="success">
+                    サーバー保存
+                </button>
+
+                <button id="serverLoad">
+                    サーバー読込
+                </button>
+
+                <button id="clearEdits" class="danger">
+                    編集内容を全削除
+                </button>
 
                 <input id="projectFile"
                        type="file"
                        accept="application/json,.json"
                        hidden>
 
+                <div class="help" style="margin-top:8px">
+                    ブラウザのlocalStorageにも自動保存します。
+                    サーバー保存を実行すると
+                    <code>data/projects/</code>
+                    にJSONとして永続保存されます。
+                </div>
+
+                <label class="field">
+                    プロジェクトID
+                    <input id="projectId" readonly>
+                </label>
             </section>
 
         </aside>
-
     </div>
 
     <div id="timeline">
@@ -1090,41 +1003,39 @@ section h2{
                step="0.01"
                value="0">
 
-        <div class="track-row">
+        <div id="tracks">
+
             <span>コメント</span>
             <div class="track" id="commentTrack"></div>
-        </div>
 
-        <div class="track-row">
             <span>強調枠</span>
             <div class="track" id="boxTrack"></div>
-        </div>
 
-        <div class="track-row">
             <span>接続線</span>
             <div class="track" id="connectorTrack"></div>
-        </div>
 
-        <div class="track-row">
             <span>スキップ</span>
             <div class="track" id="skipTrack"></div>
+
         </div>
 
     </div>
 
     <div class="footer">
 
-        <span id="timeReadout">00:00 / 00:00</span>
+        <span id="timeReadout">
+            00:00 / 00:00
+        </span>
 
         <button id="back5">5秒戻る</button>
         <button id="forward5">5秒進む</button>
 
         <button id="downloadWebm">
-            WebMをダウンロード
+            WebMダウンロード
         </button>
 
         <button id="downloadMp4" class="success">
-            MP4に変換
+            MP4変換
         </button>
 
         <button id="closeEditor">
@@ -1137,17 +1048,229 @@ section h2{
 
 <div id="contextMenu">
 
-    <button data-action="comment">
-        コメントを追加
+    <button data-action="edit">
+        編集
     </button>
 
-    <button data-action="box">
-        強調枠を追加
+    <button data-action="format">
+        書式変更
+    </button>
+
+    <button data-action="duplicate">
+        複製
     </button>
 
     <button data-action="connect">
         線でつなぐ
     </button>
+
+    <button data-action="delete">
+        削除
+    </button>
+
+    <button data-action="comment">
+        コメント追加
+    </button>
+
+    <button data-action="box">
+        強調枠追加
+    </button>
+
+</div>
+
+<div id="formatPanel">
+
+    <h3 id="formatTitle">
+        書式変更
+    </h3>
+
+    <div id="formatObject">
+
+        <div class="format-preview" id="formatPreview">
+            プレビュー
+        </div>
+
+        <label class="field">
+            文字色
+            <input id="fmtColor" type="color" value="#ffffff">
+        </label>
+
+        <label class="field">
+            背景色
+            <input id="fmtBackground" type="color" value="#111111">
+        </label>
+
+        <label class="field">
+            フォントサイズ(px)
+            <input id="fmtFontSize"
+                   type="number"
+                   min="6"
+                   max="200"
+                   step="1"
+                   value="18">
+        </label>
+
+        <label class="field">
+            フォント
+            <select id="fmtFontFamily">
+                <option value="system-ui">システム標準</option>
+                <option value="sans-serif">Sans Serif</option>
+                <option value="serif">Serif</option>
+                <option value="monospace">Monospace</option>
+                <option value="'Noto Sans JP',sans-serif">Noto Sans JP</option>
+            </select>
+        </label>
+
+        <div class="checkbox-row">
+
+            <label>
+                <input id="fmtBold" type="checkbox">
+                太字
+            </label>
+
+            <label>
+                <input id="fmtItalic" type="checkbox">
+                斜体
+            </label>
+
+        </div>
+
+        <label class="field">
+            背景透明度
+            <input id="fmtBgOpacity"
+                   type="range"
+                   min="0"
+                   max="1"
+                   step="0.01"
+                   value="0.85">
+        </label>
+
+        <label class="field">
+            枠線色
+            <input id="fmtBorderColor"
+                   type="color"
+                   value="#ffffff">
+        </label>
+
+        <label class="field">
+            枠線幅(px)
+            <input id="fmtBorderWidth"
+                   type="number"
+                   min="0"
+                   max="30"
+                   step="1"
+                   value="1">
+        </label>
+
+        <label class="field">
+            角丸(px)
+            <input id="fmtRadius"
+                   type="number"
+                   min="0"
+                   max="100"
+                   step="1"
+                   value="6">
+        </label>
+
+        <label class="field">
+            内側余白(px)
+            <input id="fmtPadding"
+                   type="number"
+                   min="0"
+                   max="100"
+                   step="1"
+                   value="8">
+        </label>
+
+    </div>
+
+    <div id="formatConnector" class="hidden">
+
+        <label class="field">
+            線色
+            <input id="lineColor"
+                   type="color"
+                   value="#ffffff">
+        </label>
+
+        <label class="field">
+            線幅(px)
+            <input id="lineWidth"
+                   type="number"
+                   min="1"
+                   max="30"
+                   step="1"
+                   value="3">
+        </label>
+
+        <label class="field">
+            線種
+            <select id="lineDash">
+                <option value="solid">実線</option>
+                <option value="dashed">破線</option>
+                <option value="dotted">点線</option>
+            </select>
+        </label>
+
+        <label class="field">
+            始点
+            <select id="lineStartPoint">
+                <option value="n">上</option>
+                <option value="ne">右上</option>
+                <option value="e">右</option>
+                <option value="se">右下</option>
+                <option value="s">下</option>
+                <option value="sw">左下</option>
+                <option value="w">左</option>
+                <option value="nw">左上</option>
+            </select>
+        </label>
+
+        <label class="field">
+            終点
+            <select id="lineEndPoint">
+                <option value="n">上</option>
+                <option value="ne">右上</option>
+                <option value="e">右</option>
+                <option value="se">右下</option>
+                <option value="s">下</option>
+                <option value="sw">左下</option>
+                <option value="w">左</option>
+                <option value="nw">左上</option>
+            </select>
+        </label>
+
+        <label class="field">
+            始点マーカー
+            <select id="lineStartArrow">
+                <option value="none">なし</option>
+                <option value="arrow">矢印</option>
+                <option value="circle">丸</option>
+            </select>
+        </label>
+
+        <label class="field">
+            終点マーカー
+            <select id="lineEndArrow">
+                <option value="arrow">矢印</option>
+                <option value="none">なし</option>
+                <option value="circle">丸</option>
+            </select>
+        </label>
+
+    </div>
+
+    <div class="format-actions">
+
+        <button id="formatCancel">
+            キャンセル
+        </button>
+
+        <button id="formatApply" class="primary">
+            適用
+        </button>
+
+    </div>
 
 </div>
 
@@ -1162,7 +1285,8 @@ const $ = id => document.getElementById(id);
 const video = $("recordedVideo");
 const stage = $("videoStage");
 
-const STORAGE_KEY = "screen-recorder-edits-v2";
+const STORAGE_KEY = "screen-recorder-editor-v2";
+const API_URL = location.pathname;
 
 const state = {
     displayStream:null,
@@ -1177,10 +1301,6 @@ const state = {
     elapsedBeforePause:0,
     timerId:null,
 
-    projectId:null,
-    projectName:"無題の動画編集",
-    videoFile:"",
-
     items:[],
     connectors:[],
     skips:[],
@@ -1191,70 +1311,66 @@ const state = {
 
     contextPoint:{x:10,y:10},
 
+    projectId:"",
     ffmpeg:null,
     converting:false,
     lastSkipAt:-1,
-    editingText:false
+
+    formatTarget:null
 };
 
-function notify(message, ok=false){
-    const box=$("message");
-    box.textContent=message;
-    box.classList.toggle("ok",ok);
-    box.style.display="block";
-    clearTimeout(notify.timer);
-    notify.timer=setTimeout(()=>box.style.display="none",5000);
+function uid(){
+    if(window.crypto && crypto.randomUUID){
+        return crypto.randomUUID();
+    }
+
+    return "id-" +
+        Date.now().toString(36) +
+        "-" +
+        Math.random().toString(36).slice(2);
 }
 
 function clamp(v,min,max){
     return Math.max(min,Math.min(max,v));
 }
 
-function uid(){
-    if(window.crypto?.randomUUID) return crypto.randomUUID();
-    return Date.now().toString(36)+Math.random().toString(36).slice(2);
-}
-
-function formatTime(seconds,hours=false){
-    seconds=Math.max(0,Math.floor(Number(seconds)||0));
-    const h=Math.floor(seconds/3600);
-    const m=Math.floor(seconds%3600/60);
-    const s=seconds%60;
-
-    if(hours){
-        return [h,m,s].map(v=>String(v).padStart(2,"0")).join(":");
-    }
-
-    return [
-        Math.floor(seconds/60),
-        s
-    ].map(v=>String(v).padStart(2,"0")).join(":");
-}
-
 function duration(){
     return Number.isFinite(video.duration) ? video.duration : 0;
 }
 
-function validRange(start,end){
-    start=Number(start);
-    end=Number(end);
+function notify(message,ok=false){
+    const box=$("message");
 
-    const max=duration();
+    box.textContent=message;
+    box.classList.toggle("ok",ok);
+    box.style.display="block";
 
-    if(
-        !Number.isFinite(start) ||
-        !Number.isFinite(end) ||
-        start<0 ||
-        end<=start ||
-        (max && start>=max)
-    ){
-        return null;
+    clearTimeout(notify.timer);
+
+    notify.timer=setTimeout(()=>{
+        box.style.display="none";
+    },5000);
+}
+
+function formatTime(sec,hours=false){
+    sec=Math.max(0,Math.floor(Number(sec)||0));
+
+    const h=Math.floor(sec/3600);
+    const m=Math.floor((sec%3600)/60);
+    const s=sec%60;
+
+    if(hours){
+        return [h,m,s]
+            .map(v=>String(v).padStart(2,"0"))
+            .join(":");
     }
 
-    return {
-        start,
-        end:max ? Math.min(end,max) : end
-    };
+    return [
+        Math.floor(sec/60),
+        s
+    ]
+    .map(v=>String(v).padStart(2,"0"))
+    .join(":");
 }
 
 function fileStamp(){
@@ -1282,14 +1398,26 @@ function download(blob,name){
     a.click();
     a.remove();
 
-    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    setTimeout(()=>{
+        URL.revokeObjectURL(url);
+    },60000);
+}
+
+function updateRecordingButtons(recording=false){
+    $("start").disabled=recording;
+    $("pause").disabled=!recording;
+    $("stop").disabled=!recording;
+    $("reset").disabled=recording || !state.blob;
+    $("openEditor").disabled=recording || !state.blob;
 }
 
 function stopStreams(){
-    [state.displayStream,state.microphoneStream]
-        .forEach(stream=>{
-            stream?.getTracks().forEach(track=>track.stop());
-        });
+    [
+        state.displayStream,
+        state.microphoneStream
+    ].forEach(stream=>{
+        stream?.getTracks().forEach(track=>track.stop());
+    });
 
     state.displayStream=null;
     state.microphoneStream=null;
@@ -1302,23 +1430,16 @@ function stopStreams(){
     }
 }
 
-function updateRecordingButtons(recording=false){
-    $("start").disabled=recording;
-    $("pause").disabled=!recording;
-    $("stop").disabled=!recording;
-    $("reset").disabled=recording || !state.blob;
-    $("openEditor").disabled=recording || !state.blob;
-}
-
 function updateTimer(){
     const active=state.startedAt
         ? Date.now()-state.startedAt
         : 0;
 
-    $("timer").textContent=formatTime(
-        (state.elapsedBeforePause+active)/1000,
-        true
-    );
+    $("timer").textContent=
+        formatTime(
+            (state.elapsedBeforePause+active)/1000,
+            true
+        );
 }
 
 function beginTimer(){
@@ -1331,12 +1452,14 @@ function beginTimer(){
 
 function freezeTimer(){
     if(state.startedAt){
-        state.elapsedBeforePause += Date.now()-state.startedAt;
+        state.elapsedBeforePause+=
+            Date.now()-state.startedAt;
     }
 
     state.startedAt=0;
 
     clearInterval(state.timerId);
+
     state.timerId=null;
 
     updateTimer();
@@ -1349,11 +1472,12 @@ function recordingMime(){
         "video/webm;codecs=vp9",
         "video/webm;codecs=vp8",
         "video/webm"
-    ].find(type=>MediaRecorder.isTypeSupported(type));
+    ].find(type=>{
+        return MediaRecorder.isTypeSupported(type);
+    });
 }
 
 async function recordingStream(){
-
     const stream=new MediaStream(
         state.displayStream.getVideoTracks()
     );
@@ -1361,10 +1485,10 @@ async function recordingStream(){
     const tracks=[
         ...(
             $("systemAudio").checked
-            ? state.displayStream.getAudioTracks()
-            : []
+                ? state.displayStream.getAudioTracks()
+                : []
         ),
-        ...(state.microphoneStream?.getAudioTracks() || [])
+        ...(state.microphoneStream?.getAudioTracks()||[])
     ];
 
     if(tracks.length===1){
@@ -1376,12 +1500,14 @@ async function recordingStream(){
 
         state.audioContext=context;
 
-        const destination=context.createMediaStreamDestination();
+        const destination=
+            context.createMediaStreamDestination();
 
         tracks.forEach(track=>{
-            const source=context.createMediaStreamSource(
-                new MediaStream([track])
-            );
+            const source=
+                context.createMediaStreamSource(
+                    new MediaStream([track])
+                );
 
             source.connect(destination);
         });
@@ -1396,14 +1522,8 @@ async function recordingStream(){
     return stream;
 }
 
-/* ---------------------------
-   録画
---------------------------- */
-
 $("start").onclick=async()=>{
-
     try{
-
         if(
             !navigator.mediaDevices?.getDisplayMedia ||
             !window.MediaRecorder
@@ -1417,7 +1537,7 @@ $("start").onclick=async()=>{
 
         if(!mimeType){
             throw new Error(
-                "WebM録画に対応していません。"
+                "このブラウザはWebM録画に対応していません。"
             );
         }
 
@@ -1442,7 +1562,8 @@ $("start").onclick=async()=>{
         state.blob=null;
         state.elapsedBeforePause=0;
 
-        state.recorder=new MediaRecorder(stream,{mimeType});
+        state.recorder=
+            new MediaRecorder(stream,{mimeType});
 
         state.recorder.ondataavailable=e=>{
             if(e.data?.size){
@@ -1451,7 +1572,6 @@ $("start").onclick=async()=>{
         };
 
         state.recorder.onstop=()=>{
-
             freezeTimer();
             stopStreams();
 
@@ -1464,7 +1584,9 @@ $("start").onclick=async()=>{
             state.blob=new Blob(
                 state.chunks,
                 {
-                    type:state.recorder.mimeType || "video/webm"
+                    type:
+                        state.recorder.mimeType ||
+                        "video/webm"
                 }
             );
 
@@ -1472,7 +1594,8 @@ $("start").onclick=async()=>{
                 URL.revokeObjectURL(state.url);
             }
 
-            state.url=URL.createObjectURL(state.blob);
+            state.url=
+                URL.createObjectURL(state.blob);
 
             video.src=state.url;
             video.load();
@@ -1510,7 +1633,6 @@ $("start").onclick=async()=>{
         updateRecordingButtons(true);
 
     }catch(error){
-
         stopStreams();
 
         state.recorder=null;
@@ -1525,7 +1647,6 @@ $("start").onclick=async()=>{
 };
 
 function stopRecording(){
-
     if(
         !state.recorder ||
         state.recorder.state==="inactive"
@@ -1546,22 +1667,17 @@ function stopRecording(){
 $("stop").onclick=stopRecording;
 
 $("pause").onclick=()=>{
-
     if(!state.recorder) return;
 
     if(state.recorder.state==="recording"){
-
         state.recorder.pause();
-
         freezeTimer();
 
         $("pause").textContent="再開";
         $("status").textContent="一時停止中";
 
     }else if(state.recorder.state==="paused"){
-
         state.recorder.resume();
-
         beginTimer();
 
         $("pause").textContent="一時停止";
@@ -1570,9 +1686,8 @@ $("pause").onclick=()=>{
 };
 
 $("reset").onclick=()=>{
-
     if(!confirm(
-        "現在の録画と編集内容を削除しますか？"
+        "現在の録画と編集内容を削除して新しく録画しますか？"
     )){
         return;
     }
@@ -1583,18 +1698,10 @@ $("reset").onclick=()=>{
         URL.revokeObjectURL(state.url);
     }
 
-    Object.assign(state,{
-        url:null,
-        blob:null,
-        chunks:[],
-        recorder:null,
-        items:[],
-        connectors:[],
-        skips:[],
-        selected:null,
-        projectId:null,
-        videoFile:""
-    });
+    state.url=null;
+    state.blob=null;
+    state.chunks=[];
+    state.recorder=null;
 
     video.removeAttribute("src");
     video.load();
@@ -1607,6 +1714,13 @@ $("reset").onclick=()=>{
     $("pause").textContent="一時停止";
     $("status").textContent="待機中";
 
+    state.items=[];
+    state.connectors=[];
+    state.skips=[];
+    state.selected=null;
+    state.connectMode=false;
+    state.connectFrom=null;
+
     localStorage.removeItem(STORAGE_KEY);
 
     updateRecordingButtons();
@@ -1616,7 +1730,7 @@ $("reset").onclick=()=>{
 
 $("openEditor").onclick=()=>{
     $("editor").style.display="flex";
-    render();
+    requestAnimationFrame(render);
 };
 
 $("closeEditor").onclick=()=>{
@@ -1624,26 +1738,37 @@ $("closeEditor").onclick=()=>{
     $("editor").style.display="none";
 };
 
-/* ---------------------------
-   FFmpeg
---------------------------- */
+$("downloadWebm").onclick=()=>{
+    if(!state.blob){
+        notify("録画データがありません。");
+        return;
+    }
+
+    download(
+        state.blob,
+        `screen-recording-${fileStamp()}.webm`
+    );
+};
 
 async function getFFmpeg(){
-
-    if(state.ffmpeg) return state.ffmpeg;
+    if(state.ffmpeg){
+        return state.ffmpeg;
+    }
 
     if(
         !window.FFmpeg?.FFmpeg ||
         !window.FFmpegUtil?.toBlobURL
     ){
         throw new Error(
-            "FFmpegを読み込めません。インターネット接続を確認してください。"
+            "MP4変換用ライブラリを読み込めません。"
         );
     }
 
-    const ffmpeg=new window.FFmpeg.FFmpeg();
+    const ffmpeg=
+        new window.FFmpeg.FFmpeg();
 
-    const toBlobURL=window.FFmpegUtil.toBlobURL;
+    const toBlobURL=
+        window.FFmpegUtil.toBlobURL;
 
     const base=
         "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd";
@@ -1656,18 +1781,21 @@ async function getFFmpeg(){
     });
 
     await ffmpeg.load({
-        coreURL:await toBlobURL(
-            `${base}/ffmpeg-core.js`,
-            "text/javascript"
-        ),
-        wasmURL:await toBlobURL(
-            `${base}/ffmpeg-core.wasm`,
-            "application/wasm"
-        ),
-        workerURL:await toBlobURL(
-            `${base}/ffmpeg-core.worker.js`,
-            "text/javascript"
-        )
+        coreURL:
+            await toBlobURL(
+                `${base}/ffmpeg-core.js`,
+                "text/javascript"
+            ),
+        wasmURL:
+            await toBlobURL(
+                `${base}/ffmpeg-core.wasm`,
+                "application/wasm"
+            ),
+        workerURL:
+            await toBlobURL(
+                `${base}/ffmpeg-core.worker.js`,
+                "text/javascript"
+            )
     });
 
     state.ffmpeg=ffmpeg;
@@ -1675,33 +1803,25 @@ async function getFFmpeg(){
     return ffmpeg;
 }
 
-$("downloadWebm").onclick=()=>{
-    if(!state.blob){
-        return notify("録画データがありません。");
-    }
-
-    download(
-        state.blob,
-        `screen-recording-${fileStamp()}.webm`
-    );
-};
-
 $("downloadMp4").onclick=async()=>{
-
-    if(!state.blob || state.converting) return;
+    if(!state.blob || state.converting){
+        return;
+    }
 
     state.converting=true;
     $("downloadMp4").disabled=true;
 
     try{
-
-        $("status").textContent="MP4変換準備中";
+        $("status").textContent=
+            "MP4変換準備中";
 
         const ffmpeg=await getFFmpeg();
 
         await ffmpeg.writeFile(
             "input.webm",
-            await window.FFmpegUtil.fetchFile(state.blob)
+            await window.FFmpegUtil.fetchFile(
+                state.blob
+            )
         );
 
         const code=await ffmpeg.exec([
@@ -1716,18 +1836,18 @@ $("downloadMp4").onclick=async()=>{
         ]);
 
         if(code!==0){
-            throw new Error("MP4変換に失敗しました。");
+            throw new Error(
+                "動画変換が完了しませんでした。"
+            );
         }
 
-        const data=await ffmpeg.readFile("output.mp4");
-
-        const mp4=new Blob(
-            [data],
-            {type:"video/mp4"}
-        );
+        const data=
+            await ffmpeg.readFile("output.mp4");
 
         download(
-            mp4,
+            new Blob([data],{
+                type:"video/mp4"
+            }),
             `screen-recording-${fileStamp()}.mp4`
         );
 
@@ -1736,29 +1856,38 @@ $("downloadMp4").onclick=async()=>{
             ffmpeg.deleteFile("output.mp4")
         ]);
 
-        notify("MP4をダウンロードしました。",true);
+        notify(
+            "MP4をダウンロードしました。",
+            true
+        );
 
     }catch(error){
-
         notify(
-            `MP4変換に失敗しました。${error.message || ""}`
+            `MP4変換に失敗しました。${
+                error.message||""
+            }`
         );
 
     }finally{
-
-        state.converting=false;
-        $("downloadMp4").disabled=false;
         $("status").textContent="録画終了";
+        $("downloadMp4").disabled=false;
+        state.converting=false;
     }
 };
 
-/* ---------------------------
-   保存
---------------------------- */
+/* =========================================================
+ * 編集データ
+ * ======================================================= */
+
+function newProjectId(){
+    return "project-" +
+        uid().replace(/-/g,"");
+}
 
 function projectData(){
     return {
         version:2,
+        projectId:state.projectId,
         duration:duration(),
         items:state.items,
         connectors:state.connectors,
@@ -1767,68 +1896,409 @@ function projectData(){
 }
 
 function saveLocal(){
-
     try{
-
         localStorage.setItem(
             STORAGE_KEY,
             JSON.stringify(projectData())
         );
-
     }catch{
-
         notify(
-            "ブラウザへの自動保存に失敗しました。"
+            "ブラウザへの自動保存に失敗しました。JSONまたはサーバー保存を利用してください。"
         );
     }
 }
 
-/* ---------------------------
-   オブジェクト
---------------------------- */
+function restoreLocal(){
+    try{
+        const raw=
+            localStorage.getItem(STORAGE_KEY);
 
-function defaultCommentStyle(){
+        if(!raw){
+            return;
+        }
 
-    return {
-        fontSize:24,
-        fontColor:"#ffffff",
-        bgColor:"#000000",
-        bgOpacity:.86,
-        fontWeight:"400",
-        textAlign:"left"
-    };
+        const data=JSON.parse(raw);
+
+        validateProject(data,false);
+
+        state.projectId=
+            data.projectId ||
+            newProjectId();
+
+        state.items=
+            structuredClone(data.items);
+
+        state.connectors=
+            structuredClone(data.connectors);
+
+        state.skips=
+            structuredClone(data.skips);
+
+        $("projectId").value=
+            state.projectId;
+
+    }catch{
+        localStorage.removeItem(STORAGE_KEY);
+    }
 }
 
-function defaultBoxStyle(){
+function validateProject(data,strictDuration=true){
+    if(!data || typeof data!=="object"){
+        throw new Error(
+            "編集データの形式が正しくありません。"
+        );
+    }
 
-    return {
-        borderColor:"#ff453a",
-        borderWidth:3,
-        opacity:.95,
-        fill:"#ff453a",
-        fillOpacity:.08
-    };
+    if(!Array.isArray(data.items)){
+        throw new Error("要素データが不正です。");
+    }
+
+    if(!Array.isArray(data.connectors)){
+        throw new Error("線データが不正です。");
+    }
+
+    if(!Array.isArray(data.skips)){
+        throw new Error("スキップデータが不正です。");
+    }
+
+    const max=duration();
+
+    if(
+        strictDuration &&
+        max &&
+        data.duration &&
+        Math.abs(
+            Number(data.duration)-max
+        )>1
+    ){
+        throw new Error(
+            "保存時と動画の長さが異なります。"
+        );
+    }
+
+    const ids=new Set();
+
+    for(const item of data.items){
+
+        if(
+            !item ||
+            typeof item.id!=="string" ||
+            ids.has(item.id) ||
+            !["comment","box"].includes(item.type)
+        ){
+            throw new Error(
+                "要素データが不正です。"
+            );
+        }
+
+        const values=[
+            item.start,
+            item.end,
+            item.x,
+            item.y,
+            item.w,
+            item.h
+        ];
+
+        if(values.some(v=>!Number.isFinite(Number(v)))){
+            throw new Error(
+                "要素の数値データが不正です。"
+            );
+        }
+
+        if(
+            Number(item.start)<0 ||
+            Number(item.end)<=Number(item.start) ||
+            Number(item.x)<0 ||
+            Number(item.y)<0 ||
+            Number(item.w)<1 ||
+            Number(item.h)<1 ||
+            Number(item.x)+Number(item.w)>100 ||
+            Number(item.y)+Number(item.h)>100
+        ){
+            throw new Error(
+                "要素の位置・サイズ・時間が不正です。"
+            );
+        }
+
+        if(
+            item.type==="comment" &&
+            typeof item.text!=="string"
+        ){
+            throw new Error(
+                "コメント内容が不正です。"
+            );
+        }
+
+        ids.add(item.id);
+    }
+
+    for(const line of data.connectors){
+
+        if(
+            !line ||
+            typeof line.id!=="string" ||
+            !ids.has(line.from) ||
+            !ids.has(line.to)
+        ){
+            throw new Error(
+                "接続線データが不正です。"
+            );
+        }
+    }
+
+    for(const range of data.skips){
+        if(
+            !range ||
+            !Number.isFinite(Number(range.start)) ||
+            !Number.isFinite(Number(range.end)) ||
+            Number(range.end)<=Number(range.start)
+        ){
+            throw new Error(
+                "スキップ範囲が不正です。"
+            );
+        }
+    }
+
+    return true;
+}
+
+function applyProject(data){
+    validateProject(data);
+
+    state.projectId=
+        data.projectId ||
+        newProjectId();
+
+    state.items=
+        structuredClone(data.items);
+
+    state.connectors=
+        structuredClone(data.connectors);
+
+    state.skips=
+        structuredClone(data.skips);
+
+    state.selected=null;
+    state.connectMode=false;
+    state.connectFrom=null;
+
+    $("projectId").value=
+        state.projectId;
+
+    $("connect").textContent=
+        "線でつなぐ";
+
+    render();
+    saveLocal();
+}
+
+$("saveProject").onclick=()=>{
+    const data=projectData();
+
+    download(
+        new Blob(
+            [JSON.stringify(data,null,2)],
+            {type:"application/json"}
+        ),
+        `screen-recording-edits-${fileStamp()}.json`
+    );
+};
+
+$("loadProject").onclick=()=>{
+    $("projectFile").click();
+};
+
+$("projectFile").onchange=async event=>{
+    const file=event.target.files?.[0];
+
+    if(!file){
+        return;
+    }
+
+    try{
+        const data=
+            JSON.parse(await file.text());
+
+        applyProject(data);
+
+        notify(
+            "編集内容を読み込みました。",
+            true
+        );
+
+    }catch(error){
+        notify(
+            `読み込みに失敗しました。${
+                error.message||""
+            }`
+        );
+
+    }finally{
+        event.target.value="";
+    }
+};
+
+$("serverSave").onclick=async()=>{
+    try{
+        if(!state.projectId){
+            state.projectId=newProjectId();
+        }
+
+        const data=projectData();
+
+        $("status").textContent=
+            "サーバー保存中";
+
+        const response=await fetch(
+            `${API_URL}?api=save`,
+            {
+                method:"POST",
+                headers:{
+                    "Content-Type":
+                        "application/json"
+                },
+                body:JSON.stringify(data)
+            }
+        );
+
+        const result=
+            await response.json();
+
+        if(!response.ok || !result.ok){
+            throw new Error(
+                result.message ||
+                "サーバー保存に失敗しました。"
+            );
+        }
+
+        state.projectId=result.projectId;
+
+        $("projectId").value=
+            state.projectId;
+
+        saveLocal();
+
+        notify(
+            `サーバーへ保存しました。\nID: ${state.projectId}`,
+            true
+        );
+
+    }catch(error){
+        notify(
+            `サーバー保存に失敗しました。\n${
+                error.message||""
+            }`
+        );
+
+    }finally{
+        $("status").textContent="録画終了";
+    }
+};
+
+$("serverLoad").onclick=async()=>{
+    const id=
+        $("projectId").value.trim();
+
+    if(!id){
+        return notify(
+            "プロジェクトIDを入力してください。"
+        );
+    }
+
+    try{
+        $("status").textContent=
+            "サーバーから読み込み中";
+
+        const response=await fetch(
+            `${API_URL}?api=load&id=${
+                encodeURIComponent(id)
+            }`
+        );
+
+        const result=
+            await response.json();
+
+        if(!response.ok || !result.ok){
+            throw new Error(
+                result.message ||
+                "サーバーから読み込めませんでした。"
+            );
+        }
+
+        applyProject(result.project);
+
+        notify(
+            "サーバーから編集内容を読み込みました。",
+            true
+        );
+
+    }catch(error){
+        notify(
+            `サーバー読込に失敗しました。\n${
+                error.message||""
+            }`
+        );
+
+    }finally{
+        $("status").textContent="録画終了";
+    }
+};
+
+$("clearEdits").onclick=()=>{
+    if(!confirm(
+        "コメント・枠・線・スキップをすべて削除しますか？"
+    )){
+        return;
+    }
+
+    state.items=[];
+    state.connectors=[];
+    state.skips=[];
+    state.selected=null;
+    state.connectMode=false;
+    state.connectFrom=null;
+
+    $("connect").textContent=
+        "線でつなぐ";
+
+    render();
+    saveLocal();
+};
+
+/* =========================================================
+ * 要素
+ * ======================================================= */
+
+function currentSelection(){
+    return state.items.find(
+        item=>item.id===state.selected
+    ) ||
+    state.connectors.find(
+        line=>line.id===state.selected
+    ) ||
+    null;
 }
 
 function addItem(
     type,
-    position={x:15,y:15}
+    position={x:10,y:10}
 ){
-
     const start=Math.min(
-        video.currentTime || 0,
-        Math.max(0,duration()-.1)
+        video.currentTime||0,
+        Math.max(0,duration()-0.1)
     );
 
     const end=Math.min(
-        duration() || start+3,
+        duration()||start+3,
         start+3
     );
 
     if(end<=start){
-        return notify(
+        notify(
             "動画の終了位置には要素を追加できません。"
         );
+        return;
     }
 
     const item={
@@ -1836,18 +2306,41 @@ function addItem(
         type,
         start,
         end,
-        x:clamp(position.x,0,70),
-        y:clamp(position.y,0,70),
+        x:clamp(position.x,0,90),
+        y:clamp(position.y,0,90),
         w:type==="comment"?28:25,
-        h:type==="comment"?14:20
-    };
+        h:type==="comment"?13:20,
 
-    if(type==="comment"){
-        item.text="コメント";
-        item.style=defaultCommentStyle();
-    }else{
-        item.style=defaultBoxStyle();
-    }
+        text:type==="comment"
+            ? "コメント"
+            : "",
+
+        style:{
+            color:"#ffffff",
+            background:"#111111",
+            bgOpacity:0.86,
+            fontSize:18,
+            fontFamily:"system-ui",
+            bold:false,
+            italic:false,
+            borderColor:
+                type==="comment"
+                    ? "#ffffff"
+                    : "#ff453a",
+            borderWidth:
+                type==="comment"
+                    ? 1
+                    : 3,
+            radius:
+                type==="comment"
+                    ? 6
+                    : 0,
+            padding:
+                type==="comment"
+                    ? 8
+                    : 0
+        }
+    };
 
     state.items.push(item);
     state.selected=item.id;
@@ -1866,459 +2359,210 @@ $("addBox").onclick=()=>{
     addItem("box");
 };
 
-function findItem(id){
-    return state.items.find(item=>item.id===id);
-}
-
-function findConnector(id){
-    return state.connectors.find(line=>line.id===id);
-}
-
-function currentSelection(){
-
-    return (
-        findItem(state.selected) ||
-        findConnector(state.selected) ||
-        null
-    );
-}
-
-/* ---------------------------
-   接続
---------------------------- */
-
-function createConnector(from,to){
-
-    const start=Math.max(
-        from.start,
-        to.start
-    );
-
-    const end=Math.min(
-        from.end,
-        to.end
-    );
-
-    if(end<=start){
-        notify(
-            "表示時間が重なる要素同士を接続してください。"
-        );
-        return null;
-    }
-
-    return {
-        id:uid(),
-
-        from:{
-            itemId:from.id,
-            x:100,
-            y:50
-        },
-
-        to:{
-            itemId:to.id,
-            x:0,
-            y:50
-        },
-
-        start,
-        end,
-
-        shape:"line",
-
-        style:{
-            color:"#ffffff",
-            width:3,
-            opacity:1,
-            dash:"solid",
-            startArrow:"none",
-            endArrow:"arrow"
-        }
-    };
-}
-
 function selectItem(item){
-
     if(
         state.connectMode &&
         state.items.includes(item)
     ){
-
         if(!state.connectFrom){
-
             state.connectFrom=item.id;
             state.selected=item.id;
 
             notify(
-                "接続先の要素をクリックしてください。",
+                "次に接続先の要素をクリックしてください。",
                 true
             );
 
         }else if(
             state.connectFrom!==item.id
         ){
+            const from=
+                state.items.find(
+                    x=>x.id===state.connectFrom
+                );
 
-            const from=findItem(state.connectFrom);
+            const to=item;
 
-            const line=createConnector(
-                from,
-                item
-            );
-
-            if(line){
-
-                state.connectors.push(line);
-
-                state.selected=line.id;
-
+            if(!from){
                 state.connectFrom=null;
-                state.connectMode=false;
-
-                $("connect").textContent="線でつなぐ";
-
-                saveLocal();
+                return;
             }
+
+            if(
+                state.connectors.some(line=>
+                    (
+                        line.from===from.id &&
+                        line.to===to.id
+                    ) ||
+                    (
+                        line.from===to.id &&
+                        line.to===from.id
+                    )
+                )
+            ){
+                notify(
+                    "この2つの要素はすでに接続されています。"
+                );
+                return;
+            }
+
+            const start=
+                Math.max(from.start,to.start);
+
+            const end=
+                Math.min(from.end,to.end);
+
+            if(end<=start){
+                notify(
+                    "表示時間が重なる要素同士を接続してください。"
+                );
+                return;
+            }
+
+            const line={
+                id:uid(),
+                from:from.id,
+                to:to.id,
+                start,
+                end,
+
+                fromPoint:
+                    chooseBestPoint(from,to),
+
+                toPoint:
+                    chooseBestPoint(to,from),
+
+                style:{
+                    color:"#ffffff",
+                    width:3,
+                    dash:"solid",
+                    startArrow:"none",
+                    endArrow:"arrow"
+                }
+            };
+
+            state.connectors.push(line);
+
+            state.selected=line.id;
+            state.connectFrom=null;
+            state.connectMode=false;
+
+            $("connect").textContent=
+                "線でつなぐ";
+
+            saveLocal();
         }
 
     }else{
-
         state.selected=item.id;
     }
 
     render();
 }
 
-$("connect").onclick=()=>{
+function chooseBestPoint(from,to){
+    const fx=from.x+from.w/2;
+    const fy=from.y+from.h/2;
 
+    const tx=to.x+to.w/2;
+    const ty=to.y+to.h/2;
+
+    const dx=tx-fx;
+    const dy=ty-fy;
+
+    if(Math.abs(dx)>Math.abs(dy)){
+        return dx>=0 ? "e" : "w";
+    }
+
+    return dy>=0 ? "s" : "n";
+}
+
+$("connect").onclick=()=>{
     state.connectMode=!state.connectMode;
     state.connectFrom=null;
 
     $("connect").textContent=
         state.connectMode
-        ? "接続をキャンセル"
-        : "線でつなぐ";
+            ? "接続をキャンセル"
+            : "線でつなぐ";
 
     notify(
         state.connectMode
-        ? "接続する2つの要素を順番にクリックしてください。"
-        : "接続をキャンセルしました。",
+            ? "接続元→接続先の順番で要素をクリックしてください。"
+            : "接続をキャンセルしました。",
         true
     );
 };
 
-/* ---------------------------
-   SVG矢印
---------------------------- */
-
-function markerDefinition(svg,id,color,type){
-
-    const defs=
-        svg.querySelector("defs") ||
-        (()=>{
-
-            const d=document.createElementNS(
-                "http://www.w3.org/2000/svg",
-                "defs"
-            );
-
-            svg.appendChild(d);
-            return d;
-
-        })();
-
-    const marker=document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "marker"
-    );
-
-    marker.id=id;
-    marker.setAttribute(
-        "markerWidth",
-        type==="arrow"?"10":"7"
-    );
-    marker.setAttribute("markerHeight","10");
-    marker.setAttribute("refX",type==="arrow"?"8":"5");
-    marker.setAttribute("refY","5");
-    marker.setAttribute("orient","auto");
-    marker.setAttribute("markerUnits","strokeWidth");
-
-    const path=document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "path"
-    );
-
-    if(type==="arrow"){
-        path.setAttribute("d","M 0 0 L 10 5 L 0 10 z");
-    }else if(type==="circle"){
-        path.setAttribute("d","M 5 0 A 5 5 0 1 1 4.99 0");
-    }else{
-        path.setAttribute("d","M 1 1 L 9 1 L 9 9 L 1 9 z");
+function deleteSelected(){
+    if(!state.selected){
+        notify("削除する項目を選択してください。");
+        return;
     }
 
-    path.setAttribute("fill",color);
+    const selected=state.selected;
 
-    marker.appendChild(path);
-    defs.appendChild(marker);
+    state.items=
+        state.items.filter(
+            item=>item.id!==selected
+        );
 
-    return `url(#${id})`;
+    state.connectors=
+        state.connectors.filter(line=>{
+            return line.id!==selected &&
+                state.items.some(
+                    item=>item.id===line.from
+                ) &&
+                state.items.some(
+                    item=>item.id===line.to
+                );
+        });
+
+    state.selected=null;
+
+    render();
+    saveLocal();
 }
 
-function connectorPoints(line){
+$("deleteSelected").onclick=
+    deleteSelected;
 
-    const a=findItem(line.from.itemId);
-    const b=findItem(line.to.itemId);
+/* =========================================================
+ * 位置・サイズ
+ * ======================================================= */
 
-    if(!a || !b) return null;
+function fitStage(){
+    const area=$("videoArea");
 
-    const p1={
-        x:a.x + a.w*(line.from.x/100),
-        y:a.y + a.h*(line.from.y/100)
-    };
+    const vw=video.videoWidth||16;
+    const vh=video.videoHeight||9;
 
-    const p2={
-        x:b.x + b.w*(line.to.x/100),
-        y:b.y + b.h*(line.to.y/100)
-    };
+    if(!area.clientWidth || !area.clientHeight){
+        return;
+    }
 
-    return {a,b,p1,p2};
+    const scale=Math.min(
+        area.clientWidth/vw,
+        area.clientHeight/vh
+    );
+
+    stage.style.width=
+        `${Math.max(1,vw*scale)}px`;
+
+    stage.style.height=
+        `${Math.max(1,vh*scale)}px`;
+
+    $("connectors")
+        .setAttribute(
+            "viewBox",
+            "0 0 100 100"
+        );
 }
 
-function drawConnectorLine(svg,line){
-
-    const points=connectorPoints(line);
-
-    if(!points) return;
-
-    const {
-        p1,
-        p2
-    }=points;
-
-    const group=document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "g"
-    );
-
-    group.classList.add("connector");
-
-    if(state.selected===line.id){
-        group.classList.add("selected");
-    }
-
-    const style=line.style || {};
-
-    const color=style.color || "#fff";
-    const width=Number(style.width)||3;
-
-    let d;
-
-    if((line.shape||"line")==="orthogonal"){
-
-        const midX=(p1.x+p2.x)/2;
-
-        d=
-            `M ${p1.x} ${p1.y}
-             L ${midX} ${p1.y}
-             L ${midX} ${p2.y}
-             L ${p2.x} ${p2.y}`;
-
-    }else{
-
-        d=
-            `M ${p1.x} ${p1.y}
-             L ${p2.x} ${p2.y}`;
-    }
-
-    const visible=document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "path"
-    );
-
-    visible.setAttribute("d",d);
-    visible.classList.add("connector-line");
-    visible.setAttribute("stroke",color);
-    visible.setAttribute("stroke-width",width);
-    visible.setAttribute(
-        "stroke-opacity",
-        clamp(Number(style.opacity ?? 1),0,1)
-    );
-
-    if(style.dash==="dashed"){
-        visible.setAttribute("stroke-dasharray","10 7");
-    }else if(style.dash==="dotted"){
-        visible.setAttribute("stroke-dasharray","2 6");
-        visible.setAttribute("stroke-linecap","round");
-    }
-
-    if(style.startArrow && style.startArrow!=="none"){
-        visible.setAttribute(
-            "marker-start",
-            markerDefinition(
-                svg,
-                `${line.id}-start`,
-                color,
-                style.startArrow
-            )
-        );
-    }
-
-    if(style.endArrow && style.endArrow!=="none"){
-        visible.setAttribute(
-            "marker-end",
-            markerDefinition(
-                svg,
-                `${line.id}-end`,
-                color,
-                style.endArrow
-            )
-        );
-    }
-
-    const hit=document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "path"
-    );
-
-    hit.setAttribute("d",d);
-    hit.classList.add("connector-hit");
-
-    hit.addEventListener("click",e=>{
-        e.stopPropagation();
-        state.selected=line.id;
-        render();
-    });
-
-    group.appendChild(visible);
-    group.appendChild(hit);
-
-    svg.appendChild(group);
-
-    if(state.selected===line.id){
-
-        createEndpoint(
-            line,
-            "from",
-            p1
-        );
-
-        createEndpoint(
-            line,
-            "to",
-            p2
-        );
-    }
+if(window.ResizeObserver){
+    new ResizeObserver(fitStage)
+        .observe($("videoArea"));
 }
-
-function createEndpoint(line,side,point){
-
-    const endpoint=document.createElement("div");
-
-    endpoint.className=
-        `endpoint ${side==="from"?"start":"end"}`;
-
-    endpoint.style.left=`${point.x}%`;
-    endpoint.style.top=`${point.y}%`;
-
-    endpoint.title=
-        side==="from"
-        ? "始点をドラッグ"
-        : "終点をドラッグ";
-
-    endpoint.addEventListener(
-        "pointerdown",
-        e=>{
-            e.preventDefault();
-            e.stopPropagation();
-
-            dragEndpoint(
-                e,
-                line,
-                side
-            );
-        }
-    );
-
-    $("overlay").appendChild(endpoint);
-}
-
-function dragEndpoint(event,line,side){
-
-    const item=findItem(
-        line[side].itemId
-    );
-
-    if(!item) return;
-
-    const target=event.currentTarget;
-
-    target.setPointerCapture(event.pointerId);
-
-    const pointerId=event.pointerId;
-
-    const move=e=>{
-
-        if(e.pointerId!==pointerId) return;
-
-        const rect=stage.getBoundingClientRect();
-
-        const sx=
-            ((e.clientX-rect.left)/rect.width)*100;
-
-        const sy=
-            ((e.clientY-rect.top)/rect.height)*100;
-
-        const localX=
-            ((sx-item.x)/item.w)*100;
-
-        const localY=
-            ((sy-item.y)/item.h)*100;
-
-        line[side].x=clamp(localX,0,100);
-        line[side].y=clamp(localY,0,100);
-
-        renderConnectorsOnly();
-    };
-
-    const end=()=>{
-
-        target.removeEventListener(
-            "pointermove",
-            move
-        );
-
-        target.removeEventListener(
-            "pointerup",
-            end
-        );
-
-        target.removeEventListener(
-            "pointercancel",
-            end
-        );
-
-        render();
-        saveLocal();
-    };
-
-    target.addEventListener(
-        "pointermove",
-        move
-    );
-
-    target.addEventListener(
-        "pointerup",
-        end
-    );
-
-    target.addEventListener(
-        "pointercancel",
-        end
-    );
-}
-
-/* ---------------------------
-   オブジェクトドラッグ
---------------------------- */
 
 function dragOrResize(
     event,
@@ -2326,8 +2570,9 @@ function dragOrResize(
     element,
     resizing
 ){
-
-    if(event.button!==0) return;
+    if(event.button!==0){
+        return;
+    }
 
     event.preventDefault();
     event.stopPropagation();
@@ -2345,42 +2590,52 @@ function dragOrResize(
         h:item.h
     };
 
+    const pointerTarget=event.currentTarget;
     const pointerId=event.pointerId;
 
-    element.setPointerCapture(pointerId);
+    pointerTarget.setPointerCapture(
+        pointerId
+    );
 
-    const move=e=>{
+    const onMove=moveEvent=>{
+        if(moveEvent.pointerId!==pointerId){
+            return;
+        }
 
-        if(e.pointerId!==pointerId) return;
+        const rect=
+            stage.getBoundingClientRect();
 
-        const rect=stage.getBoundingClientRect();
-
-        if(!rect.width || !rect.height) return;
+        if(!rect.width || !rect.height){
+            return;
+        }
 
         const dx=
-            (e.clientX-origin.clientX)/
+            (moveEvent.clientX-origin.clientX) /
             rect.width*100;
 
         const dy=
-            (e.clientY-origin.clientY)/
+            (moveEvent.clientY-origin.clientY) /
             rect.height*100;
 
         if(resizing){
 
             item.w=clamp(
                 origin.w+dx,
-                5,
+                3,
                 100-item.x
             );
 
             item.h=clamp(
                 origin.h+dy,
-                5,
+                3,
                 100-item.y
             );
 
-            element.style.width=`${item.w}%`;
-            element.style.height=`${item.h}%`;
+            element.style.width=
+                `${item.w}%`;
+
+            element.style.height=
+                `${item.h}%`;
 
         }else{
 
@@ -2396,168 +2651,160 @@ function dragOrResize(
                 100-item.h
             );
 
-            element.style.left=`${item.x}%`;
-            element.style.top=`${item.y}%`;
+            element.style.left=
+                `${item.x}%`;
+
+            element.style.top=
+                `${item.y}%`;
         }
 
-        renderConnectorsOnly();
+        drawConnectors();
     };
 
-    const end=()=>{
+    const onEnd=endEvent=>{
+        if(endEvent.pointerId!==pointerId){
+            return;
+        }
 
-        element.removeEventListener(
+        pointerTarget.removeEventListener(
             "pointermove",
-            move
+            onMove
         );
 
-        element.removeEventListener(
+        pointerTarget.removeEventListener(
             "pointerup",
-            end
+            onEnd
         );
 
-        element.removeEventListener(
+        pointerTarget.removeEventListener(
             "pointercancel",
-            end
+            onEnd
         );
 
         render();
         saveLocal();
     };
 
-    element.addEventListener(
+    pointerTarget.addEventListener(
         "pointermove",
-        move
+        onMove
     );
 
-    element.addEventListener(
+    pointerTarget.addEventListener(
         "pointerup",
-        end
+        onEnd
     );
 
-    element.addEventListener(
+    pointerTarget.addEventListener(
         "pointercancel",
-        end
+        onEnd
     );
 }
 
-/* ---------------------------
-   直接文字編集
---------------------------- */
+/* =========================================================
+ * 接点
+ * ======================================================= */
 
-function startDirectTextEdit(item,element){
+function pointPosition(item,point){
+    const x=item.x;
+    const y=item.y;
+    const w=item.w;
+    const h=item.h;
 
-    if(item.type!=="comment") return;
-
-    if(state.editingText) return;
-
-    state.editingText=true;
-
-    const textarea=document.createElement("textarea");
-
-    textarea.className="direct-edit";
-
-    textarea.value=item.text || "";
-
-    textarea.style.fontSize=
-        `${item.style?.fontSize || 24}px`;
-
-    textarea.style.fontWeight=
-        item.style?.fontWeight || "400";
-
-    textarea.style.color=
-        item.style?.fontColor || "#fff";
-
-    textarea.style.textAlign=
-        item.style?.textAlign || "left";
-
-    textarea.style.background=
-        item.style?.bgColor || "#000";
-
-    textarea.style.opacity=
-        item.style?.bgOpacity ?? .86;
-
-    element.replaceChildren(textarea);
-
-    textarea.focus();
-    textarea.select();
-
-    const finish=()=>{
-
-        item.text=textarea.value.trim() || "コメント";
-
-        state.editingText=false;
-
-        render();
-        saveLocal();
+    const positions={
+        n:[x+w/2,y],
+        ne:[x+w,y],
+        e:[x+w,y+h/2],
+        se:[x+w,y+h],
+        s:[x+w/2,y+h],
+        sw:[x,y+h],
+        w:[x,y+h/2],
+        nw:[x,y]
     };
 
-    textarea.addEventListener(
-        "blur",
-        finish,
-        {once:true}
-    );
-
-    textarea.addEventListener(
-        "keydown",
-        e=>{
-            if(
-                (e.ctrlKey || e.metaKey) &&
-                e.key==="Enter"
-            ){
-                textarea.blur();
-            }
-
-            if(e.key==="Escape"){
-                state.editingText=false;
-                render();
-            }
-        }
-    );
+    return positions[point] ||
+        positions.e;
 }
 
-/* ---------------------------
-   描画
---------------------------- */
+/* =========================================================
+ * SVGマーカー
+ * ======================================================= */
 
-function fitStage(){
+function ensureSvgDefs(){
+    const svg=$("connectors");
 
-    const area=$("videoArea");
+    let defs=svg.querySelector("defs");
 
-    const vw=video.videoWidth || 16;
-    const vh=video.videoHeight || 9;
+    if(!defs){
+        defs=document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "defs"
+        );
 
-    const scale=Math.min(
-        area.clientWidth/vw,
-        area.clientHeight/vh
-    );
+        svg.prepend(defs);
+    }
 
-    stage.style.width=
-        `${Math.max(1,vw*scale)}px`;
+    defs.innerHTML=`
+        <marker id="arrow-${CSS.escape(
+            state.projectId||"default"
+        )}"
+                markerWidth="8"
+                markerHeight="8"
+                refX="7"
+                refY="4"
+                orient="auto"
+                markerUnits="strokeWidth">
+            <path d="M0,0 L8,4 L0,8 Z"
+                  fill="context-stroke"/>
+        </marker>
 
-    stage.style.height=
-        `${Math.max(1,vh*scale)}px`;
+        <marker id="circle-${CSS.escape(
+            state.projectId||"default"
+        )}"
+                markerWidth="8"
+                markerHeight="8"
+                refX="4"
+                refY="4"
+                orient="auto"
+                markerUnits="strokeWidth">
+            <circle cx="4"
+                    cy="4"
+                    r="3"
+                    fill="context-stroke"/>
+        </marker>
+    `;
 }
 
-new ResizeObserver(
-    fitStage
-).observe($("videoArea"));
-
-function clearEndpointElements(){
-
-    document
-        .querySelectorAll(".endpoint")
-        .forEach(el=>el.remove());
+function markerId(type){
+    return `${type}-${CSS.escape(
+        state.projectId||"default"
+    )}`;
 }
 
-function renderConnectorsOnly(){
+/* =========================================================
+ * 接続線描画
+ * ======================================================= */
 
+function dashArray(type,width){
+    if(type==="dashed"){
+        return `${width*4} ${width*3}`;
+    }
+
+    if(type==="dotted"){
+        return `1 ${width*3}`;
+    }
+
+    return "none";
+}
+
+function drawConnectors(){
     const svg=$("connectors");
 
     svg.replaceChildren();
 
-    clearEndpointElements();
+    ensureSvgDefs();
 
-    const t=video.currentTime || 0;
+    const t=video.currentTime||0;
 
     state.connectors.forEach(line=>{
 
@@ -2568,12 +2815,21 @@ function renderConnectorsOnly(){
             return;
         }
 
-        const a=findItem(line.from.itemId);
-        const b=findItem(line.to.itemId);
+        const a=
+            state.items.find(
+                item=>item.id===line.from
+            );
+
+        const b=
+            state.items.find(
+                item=>item.id===line.to
+            );
+
+        if(!a || !b){
+            return;
+        }
 
         if(
-            !a ||
-            !b ||
             t<a.start ||
             t>=a.end ||
             t<b.start ||
@@ -2582,20 +2838,255 @@ function renderConnectorsOnly(){
             return;
         }
 
-        drawConnectorLine(
-            svg,
-            line
+        const p1=
+            pointPosition(
+                a,
+                line.fromPoint||"e"
+            );
+
+        const p2=
+            pointPosition(
+                b,
+                line.toPoint||"w"
+            );
+
+        const visibleStyle={
+            color:line.style?.color||"#ffffff",
+            width:Number(line.style?.width)||3,
+            dash:line.style?.dash||"solid"
+        };
+
+        const hit=
+            document.createElementNS(
+                "http://www.w3.org/2000/svg",
+                "line"
+            );
+
+        hit.setAttribute("x1",p1[0]);
+        hit.setAttribute("y1",p1[1]);
+        hit.setAttribute("x2",p2[0]);
+        hit.setAttribute("y2",p2[1]);
+
+        hit.classList.add("connector-hit");
+
+        hit.addEventListener(
+            "click",
+            event=>{
+                event.stopPropagation();
+
+                state.selected=line.id;
+
+                render();
+            }
         );
+
+        svg.appendChild(hit);
+
+        const node=
+            document.createElementNS(
+                "http://www.w3.org/2000/svg",
+                "line"
+            );
+
+        node.setAttribute("x1",p1[0]);
+        node.setAttribute("y1",p1[1]);
+        node.setAttribute("x2",p2[0]);
+        node.setAttribute("y2",p2[1]);
+
+        node.classList.add("connector");
+
+        if(state.selected===line.id){
+            node.classList.add("selected");
+        }
+
+        node.setAttribute(
+            "stroke",
+            visibleStyle.color
+        );
+
+        node.setAttribute(
+            "stroke-width",
+            visibleStyle.width
+        );
+
+        node.setAttribute(
+            "stroke-dasharray",
+            dashArray(
+                visibleStyle.dash,
+                visibleStyle.width
+            )
+        );
+
+        const startArrow=
+            line.style?.startArrow||"none";
+
+        const endArrow=
+            line.style?.endArrow||"arrow";
+
+        if(startArrow!=="none"){
+            node.setAttribute(
+                "marker-start",
+                `url(#${markerId(startArrow)})`
+            );
+        }
+
+        if(endArrow!=="none"){
+            node.setAttribute(
+                "marker-end",
+                `url(#${markerId(endArrow)})`
+            );
+        }
+
+        node.addEventListener(
+            "click",
+            event=>{
+                event.stopPropagation();
+
+                state.selected=line.id;
+
+                render();
+            }
+        );
+
+        svg.appendChild(node);
+    });
+}
+
+/* =========================================================
+ * 要素描画
+ * ======================================================= */
+
+function rgba(hex,opacity){
+    hex=String(hex||"#000000")
+        .replace("#","");
+
+    if(hex.length===3){
+        hex=hex
+            .split("")
+            .map(v=>v+v)
+            .join("");
+    }
+
+    const n=parseInt(hex,16);
+
+    if(Number.isNaN(n)){
+        return `rgba(0,0,0,${opacity})`;
+    }
+
+    return `rgba(
+        ${(n>>16)&255},
+        ${(n>>8)&255},
+        ${n&255},
+        ${opacity}
+    )`;
+}
+
+function applyObjectStyle(element,item){
+    const s=item.style||{};
+
+    if(item.type==="comment"){
+
+        element.style.color=
+            s.color||"#ffffff";
+
+        element.style.background=
+            rgba(
+                s.background||"#111111",
+                Number.isFinite(
+                    Number(s.bgOpacity)
+                )
+                    ? Number(s.bgOpacity)
+                    : 0.86
+            );
+
+        element.style.fontSize=
+            `${Number(s.fontSize)||18}px`;
+
+        element.style.fontFamily=
+            s.fontFamily||"system-ui";
+
+        element.style.fontWeight=
+            s.bold ? "700" : "400";
+
+        element.style.fontStyle=
+            s.italic ? "italic" : "normal";
+
+        element.style.border=
+            `${Number(s.borderWidth)||0}px solid ${
+                s.borderColor||"#ffffff"
+            }`;
+
+        element.style.borderRadius=
+            `${Number(s.radius)||0}px`;
+
+        element.style.padding=
+            `${Number(s.padding)||0}px`;
+
+    }else{
+
+        element.style.background="transparent";
+
+        element.style.border=
+            `${Number(s.borderWidth)||3}px solid ${
+                s.borderColor||"#ff453a"
+            }`;
+
+        element.style.borderRadius=
+            `${Number(s.radius)||0}px`;
+    }
+}
+
+function makeConnectionPoints(item,element){
+
+    [
+        "n",
+        "ne",
+        "e",
+        "se",
+        "s",
+        "sw",
+        "w",
+        "nw"
+    ].forEach(point=>{
+
+        const el=
+            document.createElement("div");
+
+        el.className=
+            "connection-point";
+
+        el.dataset.point=point;
+
+        el.title=
+            `接点 ${point}`;
+
+        el.addEventListener(
+            "pointerdown",
+            event=>{
+                event.preventDefault();
+                event.stopPropagation();
+
+                if(
+                    state.connectMode &&
+                    state.connectFrom
+                ){
+                    state.selected=item.id;
+
+                    selectItem(item);
+                }
+            }
+        );
+
+        element.appendChild(el);
     });
 }
 
 function drawObjects(){
-
     const container=$("objects");
 
     container.replaceChildren();
 
-    const t=video.currentTime || 0;
+    const t=video.currentTime||0;
 
     state.items.forEach(item=>{
 
@@ -2606,83 +3097,52 @@ function drawObjects(){
             return;
         }
 
-        const element=document.createElement("div");
+        const element=
+            document.createElement("div");
 
         element.className=
-            `edit-object ${
-                item.type==="comment"
-                ? "comment-object"
-                : "box-object"
-            }`;
+            `edit-object ${item.type}`;
 
         if(state.selected===item.id){
             element.classList.add("selected");
         }
 
-        element.style.left=`${item.x}%`;
-        element.style.top=`${item.y}%`;
-        element.style.width=`${item.w}%`;
-        element.style.height=`${item.h}%`;
+        element.style.left=
+            `${item.x}%`;
+
+        element.style.top=
+            `${item.y}%`;
+
+        element.style.width=
+            `${item.w}%`;
+
+        element.style.height=
+            `${item.h}%`;
+
+        applyObjectStyle(
+            element,
+            item
+        );
 
         if(item.type==="comment"){
-
-            const style=item.style || {};
-
-            element.textContent=item.text || "";
-
-            element.style.fontSize=
-                `${style.fontSize || 24}px`;
-
-            element.style.color=
-                style.fontColor || "#fff";
-
-            element.style.backgroundColor=
-                style.bgColor || "#000";
-
-            element.style.opacity=
-                1;
-
-            element.style.fontWeight=
-                style.fontWeight || "400";
-
-            element.style.textAlign=
-                style.textAlign || "left";
-
-            const bg=hexToRgba(
-                style.bgColor || "#000",
-                Number(style.bgOpacity ?? .86)
-            );
-
-            element.style.backgroundColor=bg;
-        }else{
-
-            const style=item.style || {};
-
-            element.style.border=
-                `${Number(style.borderWidth || 3)}px solid ${
-                    style.borderColor || "#ff453a"
-                }`;
-
-            element.style.backgroundColor=
-                hexToRgba(
-                    style.fill || "#ff453a",
-                    Number(style.fillOpacity ?? .08)
-                );
-
-            element.style.opacity=
-                Number(style.opacity ?? .95);
+            element.textContent=
+                item.text||"";
         }
 
-        const handle=document.createElement("div");
+        const handle=
+            document.createElement("div");
 
-        handle.className="resize-handle";
-        handle.title="ドラッグしてサイズ変更";
+        handle.className=
+            "object-handle";
+
+        handle.title=
+            "ドラッグしてサイズ変更";
 
         handle.addEventListener(
             "pointerdown",
-            e=>{
+            event=>{
                 dragOrResize(
-                    e,
+                    event,
                     item,
                     element,
                     true
@@ -2692,23 +3152,32 @@ function drawObjects(){
 
         element.appendChild(handle);
 
+        makeConnectionPoints(
+            item,
+            element
+        );
+
         element.addEventListener(
             "pointerdown",
-            e=>{
-
-                if(e.target===handle) return;
+            event=>{
+                if(
+                    event.target===handle ||
+                    event.target.classList.contains(
+                        "connection-point"
+                    )
+                ){
+                    return;
+                }
 
                 if(state.connectMode){
-
-                    e.preventDefault();
-                    e.stopPropagation();
+                    event.preventDefault();
+                    event.stopPropagation();
 
                     selectItem(item);
 
                 }else{
-
                     dragOrResize(
-                        e,
+                        event,
                         item,
                         element,
                         false
@@ -2719,15 +3188,36 @@ function drawObjects(){
 
         element.addEventListener(
             "dblclick",
-            e=>{
-                e.stopPropagation();
-
-                if(item.type==="comment"){
-                    startDirectTextEdit(
-                        item,
-                        element
-                    );
+            event=>{
+                if(item.type!=="comment"){
+                    return;
                 }
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                state.selected=item.id;
+
+                editCommentDirectly(
+                    item,
+                    element
+                );
+            }
+        );
+
+        element.addEventListener(
+            "contextmenu",
+            event=>{
+                event.preventDefault();
+                event.stopPropagation();
+
+                state.selected=item.id;
+
+                showContextMenu(
+                    event.clientX,
+                    event.clientY,
+                    item
+                );
             }
         );
 
@@ -2735,196 +3225,188 @@ function drawObjects(){
     });
 }
 
-function render(){
+function editCommentDirectly(item,element){
+    const current=item.text||"";
 
-    fitStage();
+    const textarea=
+        document.createElement("textarea");
 
-    drawObjects();
+    textarea.value=current;
 
-    renderConnectorsOnly();
+    textarea.style.position="absolute";
+    textarea.style.left="0";
+    textarea.style.top="0";
+    textarea.style.width="100%";
+    textarea.style.height="100%";
+    textarea.style.resize="none";
+    textarea.style.border="0";
+    textarea.style.outline="2px solid #42a5f5";
+    textarea.style.background=
+        "rgba(20,20,20,.96)";
+    textarea.style.color=
+        item.style?.color||"#fff";
+    textarea.style.padding=
+        `${Number(item.style?.padding)||8}px`;
 
-    renderLists();
+    element.replaceChildren(textarea);
 
-    renderTracks();
+    textarea.focus();
+    textarea.select();
 
-    updateSelection();
+    let finished=false;
+
+    const finish=save=>{
+        if(finished){
+            return;
+        }
+
+        finished=true;
+
+        if(save){
+            const text=textarea.value;
+
+            if(!text.trim()){
+                notify(
+                    "コメントを空にすることはできません。"
+                );
+            }else{
+                item.text=text;
+                saveLocal();
+            }
+        }
+
+        render();
+    };
+
+    textarea.addEventListener(
+        "keydown",
+        event=>{
+            if(
+                event.key==="Enter" &&
+                (event.ctrlKey||event.metaKey)
+            ){
+                event.preventDefault();
+                finish(true);
+            }
+
+            if(event.key==="Escape"){
+                event.preventDefault();
+                finish(false);
+            }
+        }
+    );
+
+    textarea.addEventListener(
+        "blur",
+        ()=>finish(true)
+    );
 }
 
-function hexToRgba(hex,opacity){
-
-    const value=String(hex).replace("#","");
-
-    const r=parseInt(
-        value.length===3
-        ? value[0]+value[0]
-        : value.slice(0,2),
-        16
-    );
-
-    const g=parseInt(
-        value.length===3
-        ? value[1]+value[1]
-        : value.slice(2,4),
-        16
-    );
-
-    const b=parseInt(
-        value.length===3
-        ? value[2]+value[2]
-        : value.slice(4,6),
-        16
-    );
-
-    return `rgba(${r||0},${g||0},${b||0},${clamp(opacity,0,1)})`;
-}
-
-/* ---------------------------
-   選択UI
---------------------------- */
+/* =========================================================
+ * 選択状態
+ * ======================================================= */
 
 function updateSelection(){
 
-    const selected=currentSelection();
+    const selected=
+        currentSelection();
 
-    const objectSelected=
+    const object=
         selected &&
         state.items.includes(selected);
 
-    const connectorSelected=
+    const line=
         selected &&
         state.connectors.includes(selected);
-
-    $("objectFields").hidden=!objectSelected;
-    $("connectorFields").hidden=!connectorSelected;
 
     if(!selected){
 
         $("selectionHint").textContent=
-            "要素または線を選択してください。";
+            "動画上の要素または線を選択してください。";
+
+        $("objectFields").classList.add(
+            "hidden"
+        );
 
         return;
     }
 
-    if(objectSelected){
+    if(line){
 
         $("selectionHint").textContent=
-            selected.type==="comment"
+            "接続線を選択中。右クリックで線の書式・接点を変更できます。";
+
+        $("objectFields").classList.add(
+            "hidden"
+        );
+
+        return;
+    }
+
+    $("selectionHint").textContent=
+        selected.type==="comment"
             ? "コメントを編集中"
             : "強調枠を編集中";
 
-        $("textField").hidden=
-            selected.type!=="comment";
+    $("objectFields").classList.remove(
+        "hidden"
+    );
 
-        $("commentStyleFields").hidden=
-            selected.type!=="comment";
+    $("textField").classList.toggle(
+        "hidden",
+        selected.type!=="comment"
+    );
 
-        $("boxStyleFields").hidden=
-            selected.type!=="box";
+    $("objectText").value=
+        selected.text||"";
 
-        $("objectText").value=
-            selected.text || "";
+    $("objectStart").value=
+        Number(selected.start).toFixed(2);
 
-        $("objectStart").value=
-            Number(selected.start).toFixed(2);
+    $("objectEnd").value=
+        Number(selected.end).toFixed(2);
 
-        $("objectEnd").value=
-            Number(selected.end).toFixed(2);
+    $("objectX").value=
+        Number(selected.x).toFixed(2);
 
-        $("objectX").value=
-            Number(selected.x).toFixed(2);
+    $("objectY").value=
+        Number(selected.y).toFixed(2);
 
-        $("objectY").value=
-            Number(selected.y).toFixed(2);
+    $("objectW").value=
+        Number(selected.w).toFixed(2);
 
-        $("objectW").value=
-            Number(selected.w).toFixed(2);
-
-        $("objectH").value=
-            Number(selected.h).toFixed(2);
-
-        const style=selected.style || {};
-
-        if(selected.type==="comment"){
-
-            $("fontSize").value=
-                style.fontSize || 24;
-
-            $("fontColor").value=
-                style.fontColor || "#ffffff";
-
-            $("bgColor").value=
-                style.bgColor || "#000000";
-
-            $("bgOpacity").value=
-                style.bgOpacity ?? .86;
-
-            $("fontWeight").value=
-                style.fontWeight || "400";
-
-            $("textAlign").value=
-                style.textAlign || "left";
-
-        }else{
-
-            $("borderColor").value=
-                style.borderColor || "#ff453a";
-
-            $("borderWidth").value=
-                style.borderWidth || 3;
-
-            $("boxOpacity").value=
-                style.opacity ?? .95;
-
-            $("boxFill").value=
-                style.fill || "#ff453a";
-        }
-
-    }else{
-
-        $("selectionHint").textContent=
-            "接続線を編集中";
-
-        $("objectFields").hidden=true;
-
-        const line=selected;
-
-        const style=line.style || {};
-
-        $("connectorStart").value=
-            Number(line.start).toFixed(2);
-
-        $("connectorEnd").value=
-            Number(line.end).toFixed(2);
-
-        $("lineColor").value=
-            style.color || "#ffffff";
-
-        $("lineWidth").value=
-            style.width || 3;
-
-        $("lineOpacity").value=
-            style.opacity ?? 1;
-
-        $("lineDash").value=
-            style.dash || "solid";
-
-        $("startArrow").value=
-            style.startArrow || "none";
-
-        $("endArrow").value=
-            style.endArrow || "arrow";
-
-        $("lineShape").value=
-            line.shape || "line";
-    }
+    $("objectH").value=
+        Number(selected.h).toFixed(2);
 }
 
-/* ---------------------------
-   オブジェクト適用
---------------------------- */
+function validRange(start,end){
+    start=Number(start);
+    end=Number(end);
+
+    const max=duration();
+
+    if(
+        !Number.isFinite(start) ||
+        !Number.isFinite(end) ||
+        start<0 ||
+        end<=start
+    ){
+        return null;
+    }
+
+    if(max && start>=max){
+        return null;
+    }
+
+    return {
+        start,
+        end:max
+            ? Math.min(end,max)
+            : end
+    };
+}
 
 $("applyObject").onclick=()=>{
-
     const item=currentSelection();
 
     if(
@@ -2946,24 +3428,28 @@ $("applyObject").onclick=()=>{
 
     if(
         !range ||
-        ![x,y,w,h].every(Number.isFinite) ||
+        [x,y,w,h].some(v=>!Number.isFinite(v)) ||
         x<0 ||
         y<0 ||
-        w<5 ||
-        h<5 ||
+        w<1 ||
+        h<1 ||
         x+w>100 ||
         y+h>100
     ){
-        return notify(
+        notify(
             "時間・位置・サイズを正しく入力してください。"
         );
+        return;
     }
 
     if(
         item.type==="comment" &&
         !$("objectText").value.trim()
     ){
-        return notify("コメントを入力してください。");
+        notify(
+            "コメントを入力してください。"
+        );
+        return;
     }
 
     Object.assign(
@@ -2973,240 +3459,694 @@ $("applyObject").onclick=()=>{
     );
 
     if(item.type==="comment"){
-
-        item.text=$("objectText").value.trim();
-
-        item.style={
-            ...(item.style || {}),
-            fontSize:Number($("fontSize").value)||24,
-            fontColor:$("fontColor").value,
-            bgColor:$("bgColor").value,
-            bgOpacity:Number($("bgOpacity").value),
-            fontWeight:$("fontWeight").value,
-            textAlign:$("textAlign").value
-        };
-
-    }else{
-
-        item.style={
-            ...(item.style || {}),
-            borderColor:$("borderColor").value,
-            borderWidth:Number($("borderWidth").value)||3,
-            opacity:Number($("boxOpacity").value),
-            fill:$("boxFill").value
-        };
+        item.text=
+            $("objectText").value;
     }
 
-    state.connectors.forEach(line=>{
+    updateConnectorRanges(item.id);
+
+    render();
+    saveLocal();
+};
+
+function updateConnectorRanges(itemId){
+    state.connectors=
+        state.connectors
+            .map(line=>{
+                if(
+                    line.from!==itemId &&
+                    line.to!==itemId
+                ){
+                    return line;
+                }
+
+                const a=
+                    state.items.find(
+                        item=>item.id===line.from
+                    );
+
+                const b=
+                    state.items.find(
+                        item=>item.id===line.to
+                    );
+
+                if(!a || !b){
+                    return null;
+                }
+
+                return {
+                    ...line,
+                    start:
+                        Math.max(
+                            a.start,
+                            b.start
+                        ),
+                    end:
+                        Math.min(
+                            a.end,
+                            b.end
+                        )
+                };
+            })
+            .filter(line=>
+                line &&
+                line.end>line.start
+            );
+}
+
+/* =========================================================
+ * 右クリックメニュー
+ * ======================================================= */
+
+function showContextMenu(
+    x,
+    y,
+    target
+){
+    const menu=$("contextMenu");
+
+    menu.dataset.targetId=
+        target?.id||"";
+
+    menu.dataset.targetType=
+        state.items.includes(target)
+            ? "object"
+            : state.connectors.includes(target)
+                ? "connector"
+                : "stage";
+
+    const isStage=
+        menu.dataset.targetType==="stage";
+
+    menu.querySelectorAll(
+        "[data-action]"
+    ).forEach(button=>{
+        const action=button.dataset.action;
+
+        button.classList.toggle(
+            "hidden",
+            isStage &&
+            ![
+                "comment",
+                "box"
+            ].includes(action)
+        );
 
         if(
-            line.from.itemId===item.id ||
-            line.to.itemId===item.id
+            !isStage &&
+            [
+                "comment",
+                "box"
+            ].includes(action)
         ){
+            button.classList.add(
+                "hidden"
+            );
+        }
 
-            const a=findItem(line.from.itemId);
-            const b=findItem(line.to.itemId);
-
-            if(a && b){
-
-                line.start=Math.max(
-                    a.start,
-                    b.start
-                );
-
-                line.end=Math.min(
-                    a.end,
-                    b.end
-                );
-            }
+        if(
+            menu.dataset.targetType==="connector" &&
+            [
+                "edit",
+                "duplicate"
+            ].includes(action)
+        ){
+            button.classList.add(
+                "hidden"
+            );
         }
     });
 
-    state.connectors=
-        state.connectors.filter(
-            line=>line.end>line.start
+    menu.style.display="block";
+
+    const width=menu.offsetWidth;
+    const height=menu.offsetHeight;
+
+    menu.style.left=
+        `${clamp(x,5,innerWidth-width-5)}px`;
+
+    menu.style.top=
+        `${clamp(y,5,innerHeight-height-5)}px`;
+}
+
+stage.addEventListener(
+    "contextmenu",
+    event=>{
+        event.preventDefault();
+
+        const rect=
+            stage.getBoundingClientRect();
+
+        state.contextPoint={
+            x:clamp(
+                (
+                    event.clientX-
+                    rect.left
+                )/
+                rect.width*100,
+                0,
+                90
+            ),
+            y:clamp(
+                (
+                    event.clientY-
+                    rect.top
+                )/
+                rect.height*100,
+                0,
+                90
+            )
+        };
+
+        const target=
+            currentSelection();
+
+        showContextMenu(
+            event.clientX,
+            event.clientY,
+            target
+        );
+    }
+);
+
+$("contextMenu").onclick=event=>{
+    const button=
+        event.target.closest(
+            "button[data-action]"
         );
 
-    render();
-    saveLocal();
-};
-
-/* ---------------------------
-   コネクタ適用
---------------------------- */
-
-$("applyConnector").onclick=()=>{
-
-    const line=currentSelection();
-
-    if(
-        !line ||
-        !state.connectors.includes(line)
-    ){
+    if(!button){
         return;
     }
 
-    const range=validRange(
-        $("connectorStart").value,
-        $("connectorEnd").value
-    );
+    const action=
+        button.dataset.action;
 
-    if(!range){
-        return notify(
-            "線の開始・終了時間を正しく入力してください。"
-        );
+    const id=
+        $("contextMenu").dataset.targetId;
+
+    const type=
+        $("contextMenu").dataset.targetType;
+
+    const target=
+        type==="object"
+            ? state.items.find(
+                item=>item.id===id
+            )
+            : type==="connector"
+                ? state.connectors.find(
+                    line=>line.id===id
+                )
+                : null;
+
+    $("contextMenu").style.display=
+        "none";
+
+    if(action==="format" && target){
+        openFormatPanel(target);
+        return;
     }
 
-    line.start=range.start;
-    line.end=range.end;
+    if(action==="delete" && target){
+        state.selected=target.id;
+        deleteSelected();
+        return;
+    }
 
-    line.shape=$("lineShape").value;
+    if(action==="edit" && target){
+        state.selected=target.id;
+        render();
 
-    line.style={
-        ...(line.style || {}),
+        if(target.type==="comment"){
+            const el=
+                [...$("objects").children]
+                    .find(el=>{
+                        return el.classList.contains(
+                            "comment"
+                        );
+                    });
 
-        color:$("lineColor").value,
+            if(el){
+                editCommentDirectly(
+                    target,
+                    el
+                );
+            }
+        }
 
-        width:Number(
-            $("lineWidth").value
-        )||3,
+        return;
+    }
 
-        opacity:Number(
-            $("lineOpacity").value
-        ),
+    if(action==="duplicate" && target){
+        const copy=
+            structuredClone(target);
 
-        dash:$("lineDash").value,
+        copy.id=uid();
 
-        startArrow:$("startArrow").value,
+        copy.x=
+            clamp(
+                Number(copy.x)+3,
+                0,
+                100-copy.w
+            );
 
-        endArrow:$("endArrow").value
-    };
+        copy.y=
+            clamp(
+                Number(copy.y)+3,
+                0,
+                100-copy.h
+            );
 
-    render();
-    saveLocal();
+        state.items.push(copy);
+
+        state.selected=copy.id;
+
+        render();
+        saveLocal();
+
+        return;
+    }
+
+    if(action==="connect"){
+        $("connect").click();
+        return;
+    }
+
+    if(action==="comment"){
+        addItem(
+            "comment",
+            state.contextPoint
+        );
+        return;
+    }
+
+    if(action==="box"){
+        addItem(
+            "box",
+            state.contextPoint
+        );
+    }
 };
 
-/* ---------------------------
-   削除
---------------------------- */
-
-function deleteSelected(){
-
-    if(!state.selected){
-        return notify(
-            "削除する項目を選択してください。"
-        );
-    }
-
-    const id=state.selected;
-
-    state.items=
-        state.items.filter(
-            item=>item.id!==id
-        );
-
-    state.connectors=
-        state.connectors.filter(
-            line=>
-                line.id!==id &&
-                findItem(line.from.itemId) &&
-                findItem(line.to.itemId)
-        );
-
-    state.selected=null;
-
-    render();
-    saveLocal();
-}
-
-$("deleteSelected").onclick=deleteSelected;
-
 document.addEventListener(
-    "keydown",
+    "pointerdown",
     event=>{
+        const menu=$("contextMenu");
 
         if(
-            $("editor").style.display==="none"
+            !menu.contains(event.target)
         ){
-            return;
-        }
-
-        if(event.key==="Escape"){
-
-            state.connectMode=false;
-            state.connectFrom=null;
-
-            $("connect").textContent="線でつなぐ";
-
-            $("contextMenu").style.display="none";
-
-            return;
-        }
-
-        const tag=
-            document.activeElement?.tagName;
-
-        if(
-            (event.key==="Delete" ||
-             event.key==="Backspace") &&
-            !["INPUT","TEXTAREA","SELECT"].includes(tag) &&
-            state.selected
-        ){
-
-            event.preventDefault();
-
-            deleteSelected();
+            menu.style.display="none";
         }
     }
 );
 
-/* ---------------------------
-   リスト
---------------------------- */
+/* =========================================================
+ * 書式変更パネル
+ * ======================================================= */
+
+function openFormatPanel(target){
+
+    state.formatTarget=target;
+
+    const panel=$("formatPanel");
+
+    const isConnector=
+        state.connectors.includes(target);
+
+    $("formatTitle").textContent=
+        isConnector
+            ? "接続線の書式変更"
+            : target.type==="comment"
+                ? "コメントの書式変更"
+                : "強調枠の書式変更";
+
+    $("formatObject").classList.toggle(
+        "hidden",
+        isConnector
+    );
+
+    $("formatConnector").classList.toggle(
+        "hidden",
+        !isConnector
+    );
+
+    if(isConnector){
+        loadConnectorFormat(target);
+    }else{
+        loadObjectFormat(target);
+    }
+
+    panel.style.display="block";
+
+    const menu=$("contextMenu");
+
+    const rect=
+        menu.getBoundingClientRect();
+
+    panel.style.left=
+        `${clamp(
+            rect.left,
+            5,
+            innerWidth-panel.offsetWidth-5
+        )}px`;
+
+    panel.style.top=
+        `${clamp(
+            rect.bottom+5,
+            5,
+            innerHeight-panel.offsetHeight-5
+        )}px`;
+
+    requestAnimationFrame(()=>{
+        panel.style.left=
+            `${clamp(
+                rect.left,
+                5,
+                innerWidth-panel.offsetWidth-5
+            )}px`;
+
+        panel.style.top=
+            `${clamp(
+                rect.bottom+5,
+                5,
+                innerHeight-panel.offsetHeight-5
+            )}px`;
+    });
+
+    updateFormatPreview();
+}
+
+function loadObjectFormat(item){
+
+    const s=item.style||{};
+
+    $("fmtColor").value=
+        s.color||"#ffffff";
+
+    $("fmtBackground").value=
+        s.background||"#111111";
+
+    $("fmtFontSize").value=
+        Number(s.fontSize)||18;
+
+    $("fmtFontFamily").value=
+        s.fontFamily||"system-ui";
+
+    $("fmtBold").checked=
+        !!s.bold;
+
+    $("fmtItalic").checked=
+        !!s.italic;
+
+    $("fmtBgOpacity").value=
+        Number.isFinite(
+            Number(s.bgOpacity)
+        )
+            ? Number(s.bgOpacity)
+            : 0.86;
+
+    $("fmtBorderColor").value=
+        s.borderColor||"#ffffff";
+
+    $("fmtBorderWidth").value=
+        Number(s.borderWidth)||1;
+
+    $("fmtRadius").value=
+        Number(s.radius)||0;
+
+    $("fmtPadding").value=
+        Number(s.padding)||8;
+}
+
+function loadConnectorFormat(line){
+
+    const s=line.style||{};
+
+    $("lineColor").value=
+        s.color||"#ffffff";
+
+    $("lineWidth").value=
+        Number(s.width)||3;
+
+    $("lineDash").value=
+        s.dash||"solid";
+
+    $("lineStartPoint").value=
+        line.fromPoint||"e";
+
+    $("lineEndPoint").value=
+        line.toPoint||"w";
+
+    $("lineStartArrow").value=
+        s.startArrow||"none";
+
+    $("lineEndArrow").value=
+        s.endArrow||"arrow";
+}
+
+function updateFormatPreview(){
+
+    const preview=$("formatPreview");
+
+    if(!state.formatTarget){
+        return;
+    }
+
+    const item=state.formatTarget;
+
+    if(state.connectors.includes(item)){
+        return;
+    }
+
+    const bg=
+        $("fmtBackground").value;
+
+    const opacity=
+        Number($("fmtBgOpacity").value);
+
+    preview.textContent=
+        item.type==="comment"
+            ? (item.text||"コメント")
+            : "強調枠";
+
+    preview.style.color=
+        $("fmtColor").value;
+
+    preview.style.background=
+        rgba(bg,opacity);
+
+    preview.style.fontSize=
+        `${Number(
+            $("fmtFontSize").value
+        )||18}px`;
+
+    preview.style.fontFamily=
+        $("fmtFontFamily").value;
+
+    preview.style.fontWeight=
+        $("fmtBold").checked
+            ? "700"
+            : "400";
+
+    preview.style.fontStyle=
+        $("fmtItalic").checked
+            ? "italic"
+            : "normal";
+
+    preview.style.border=
+        `${
+            Number(
+                $("fmtBorderWidth").value
+            )||0
+        }px solid ${
+            $("fmtBorderColor").value
+        }`;
+
+    preview.style.borderRadius=
+        `${
+            Number(
+                $("fmtRadius").value
+            )||0
+        }px`;
+}
+
+[
+    "fmtColor",
+    "fmtBackground",
+    "fmtFontSize",
+    "fmtFontFamily",
+    "fmtBold",
+    "fmtItalic",
+    "fmtBgOpacity",
+    "fmtBorderColor",
+    "fmtBorderWidth",
+    "fmtRadius",
+    "fmtPadding"
+].forEach(id=>{
+    $(id).addEventListener(
+        "input",
+        updateFormatPreview
+    );
+
+    $(id).addEventListener(
+        "change",
+        updateFormatPreview
+    );
+});
+
+$("formatCancel").onclick=()=>{
+    $("formatPanel").style.display="none";
+    state.formatTarget=null;
+};
+
+$("formatApply").onclick=()=>{
+    const target=
+        state.formatTarget;
+
+    if(!target){
+        return;
+    }
+
+    if(state.items.includes(target)){
+
+        target.style={
+            color:$("fmtColor").value,
+            background:$("fmtBackground").value,
+            bgOpacity:Number(
+                $("fmtBgOpacity").value
+            ),
+            fontSize:Number(
+                $("fmtFontSize").value
+            ),
+            fontFamily:
+                $("fmtFontFamily").value,
+            bold:$("fmtBold").checked,
+            italic:$("fmtItalic").checked,
+            borderColor:
+                $("fmtBorderColor").value,
+            borderWidth:Number(
+                $("fmtBorderWidth").value
+            ),
+            radius:Number(
+                $("fmtRadius").value
+            ),
+            padding:Number(
+                $("fmtPadding").value
+            )
+        };
+
+    }else if(
+        state.connectors.includes(target)
+    ){
+
+        target.style={
+            color:$("lineColor").value,
+            width:Number(
+                $("lineWidth").value
+            ),
+            dash:$("lineDash").value,
+            startArrow:
+                $("lineStartArrow").value,
+            endArrow:
+                $("lineEndArrow").value
+        };
+
+        target.fromPoint=
+            $("lineStartPoint").value;
+
+        target.toPoint=
+            $("lineEndPoint").value;
+    }
+
+    $("formatPanel").style.display=
+        "none";
+
+    state.formatTarget=null;
+
+    render();
+    saveLocal();
+
+    notify(
+        "書式を変更しました。",
+        true
+    );
+};
+
+/* =========================================================
+ * 一覧
+ * ======================================================= */
 
 function renderLists(){
 
-    const objects=$("objectList");
+    const objects=
+        $("objectList");
 
     objects.replaceChildren();
 
     state.items.forEach(item=>{
 
-        const row=document.createElement("div");
+        const row=
+            document.createElement("div");
 
         row.className=
             "list-item"+
             (
                 state.selected===item.id
-                ? " selected"
-                : ""
+                    ? " selected"
+                    : ""
             );
 
-        const label=document.createElement("div");
+        const label=
+            document.createElement("div");
 
         label.textContent=
             `${
                 item.type==="comment"
-                ? `コメント: ${item.text}`
-                : "強調枠"
-            }　${formatTime(item.start)}～${formatTime(item.end)}`;
+                    ? "コメント: "+(
+                        item.text||""
+                    )
+                    : "強調枠"
+            }　${
+                formatTime(item.start)
+            }～${
+                formatTime(item.end)
+            }`;
 
         row.appendChild(label);
 
-        const buttons=document.createElement("div");
+        const actions=
+            document.createElement("div");
 
-        buttons.className="buttons";
+        actions.className="actions";
 
-        const jump=document.createElement("button");
+        const jump=
+            document.createElement("button");
 
-        jump.textContent="選択";
+        jump.textContent="選択・移動";
 
         jump.onclick=()=>{
-            video.currentTime=item.start;
-            selectItem(item);
+            video.currentTime=
+                item.start;
+
+            state.selected=item.id;
+
+            render();
         };
 
-        const remove=document.createElement("button");
+        const format=
+            document.createElement("button");
+
+        format.textContent="書式";
+
+        format.onclick=()=>{
+            state.selected=item.id;
+            openFormatPanel(item);
+            render();
+        };
+
+        const remove=
+            document.createElement("button");
 
         remove.textContent="削除";
 
@@ -3215,62 +4155,69 @@ function renderLists(){
             deleteSelected();
         };
 
-        buttons.append(
+        actions.append(
             jump,
+            format,
             remove
         );
 
-        row.appendChild(buttons);
+        row.appendChild(actions);
 
         objects.appendChild(row);
     });
 
     state.connectors.forEach(line=>{
 
-        const row=document.createElement("div");
+        const row=
+            document.createElement("div");
 
         row.className=
             "list-item"+
             (
                 state.selected===line.id
-                ? " selected"
-                : ""
+                    ? " selected"
+                    : ""
             );
 
-        const from=findItem(
-            line.from.itemId
-        );
+        const a=
+            state.items.find(
+                item=>item.id===line.from
+            );
 
-        const to=findItem(
-            line.to.itemId
-        );
+        const b=
+            state.items.find(
+                item=>item.id===line.to
+            );
 
         row.textContent=
             `線: ${
-                from?.type==="comment"
-                ? from.text
-                : "要素"
+                a?.text ||
+                a?.type ||
+                "要素"
             } → ${
-                to?.type==="comment"
-                ? to.text
-                : "要素"
+                b?.text ||
+                b?.type ||
+                "要素"
             }`;
 
-        const buttons=document.createElement("div");
+        const actions=
+            document.createElement("div");
 
-        buttons.className="buttons";
+        actions.className="actions";
 
-        const select=document.createElement("button");
+        const format=
+            document.createElement("button");
 
-        select.textContent="選択";
+        format.textContent="書式・接点";
 
-        select.onclick=()=>{
-            video.currentTime=line.start;
+        format.onclick=()=>{
             state.selected=line.id;
+            openFormatPanel(line);
             render();
         };
 
-        const remove=document.createElement("button");
+        const remove=
+            document.createElement("button");
 
         remove.textContent="削除";
 
@@ -3279,12 +4226,12 @@ function renderLists(){
             deleteSelected();
         };
 
-        buttons.append(
-            select,
+        actions.append(
+            format,
             remove
         );
 
-        row.appendChild(buttons);
+        row.appendChild(actions);
 
         objects.appendChild(row);
     });
@@ -3293,43 +4240,48 @@ function renderLists(){
 
     skips.replaceChildren();
 
-    state.skips.forEach((range,index)=>{
+    state.skips.forEach(
+        (range,index)=>{
 
-        const row=document.createElement("div");
+            const row=
+                document.createElement("div");
 
-        row.className="list-item";
+            row.className="list-item";
 
-        row.textContent=
-            `${formatTime(range.start)}～${formatTime(range.end)} `;
+            row.textContent=
+                `${formatTime(
+                    range.start
+                )}～${formatTime(
+                    range.end
+                )} `;
 
-        const remove=document.createElement("button");
+            const remove=
+                document.createElement("button");
 
-        remove.textContent="削除";
+            remove.textContent="削除";
 
-        remove.onclick=()=>{
+            remove.onclick=()=>{
+                state.skips.splice(
+                    index,
+                    1
+                );
 
-            state.skips.splice(
-                index,
-                1
-            );
+                render();
+                saveLocal();
+            };
 
-            render();
-            saveLocal();
-        };
+            row.appendChild(remove);
 
-        row.appendChild(remove);
-
-        skips.appendChild(row);
-    });
+            skips.appendChild(row);
+        }
+    );
 }
-
-/* ---------------------------
-   タイムライン
---------------------------- */
 
 function renderTracks(){
 
-    const tracks=[
+    const max=duration();
+
+    [
         [
             "commentTrack",
             state.items.filter(
@@ -3354,24 +4306,23 @@ function renderTracks(){
             state.skips,
             "skip"
         ]
-    ];
-
-    const max=duration();
-
-    tracks.forEach(
-        ([trackId,data,className])=>{
+    ].forEach(
+        ([trackId,data,cls])=>{
 
             const track=$(trackId);
 
             track.replaceChildren();
 
-            if(!max) return;
+            if(!max){
+                return;
+            }
 
             data.forEach(entry=>{
 
-                const marker=document.createElement("span");
+                const marker=
+                    document.createElement("span");
 
-                marker.className=className;
+                marker.className=cls;
 
                 marker.style.left=
                     `${clamp(
@@ -3382,22 +4333,30 @@ function renderTracks(){
 
                 marker.style.width=
                     `${clamp(
-                        (entry.end-entry.start)/
-                        max*100,
+                        (
+                            entry.end-entry.start
+                        )/max*100,
                         0,
                         100
                     )}%`;
 
                 marker.title=
-                    `${formatTime(entry.start)}～${formatTime(entry.end)}`;
+                    `${formatTime(
+                        entry.start
+                    )}～${formatTime(
+                        entry.end
+                    )}`;
 
                 marker.onclick=()=>{
-                    video.currentTime=entry.start;
+                    video.currentTime=
+                        entry.start;
 
                     if(entry.id){
-                        state.selected=entry.id;
-                        render();
+                        state.selected=
+                            entry.id;
                     }
+
+                    render();
                 };
 
                 track.appendChild(marker);
@@ -3406,42 +4365,59 @@ function renderTracks(){
     );
 }
 
-/* ---------------------------
-   再生
---------------------------- */
+/* =========================================================
+ * render
+ * ======================================================= */
+
+function render(){
+    fitStage();
+    drawConnectors();
+    drawObjects();
+    renderLists();
+    renderTracks();
+    updateSelection();
+}
+
+/* =========================================================
+ * 再生
+ * ======================================================= */
 
 function refreshPlayback(){
 
     const max=duration();
-    const t=video.currentTime || 0;
+    const t=video.currentTime||0;
 
     $("seek").max=max;
     $("seek").value=t;
 
     $("timeReadout").textContent=
-        `${formatTime(t)} / ${formatTime(max)}`;
+        `${formatTime(t)} / ${
+            formatTime(max)
+        }`;
 
+    drawConnectors();
     drawObjects();
-    renderConnectorsOnly();
 
-    if(video.paused) return;
+    if(video.paused){
+        return;
+    }
 
-    const skip=state.skips.find(
-        range=>
-            t>=range.start &&
-            t<range.end
-    );
+    const skip=
+        state.skips.find(
+            range=>
+                t>=range.start &&
+                t<range.end
+        );
 
     if(
         skip &&
         Math.abs(
             state.lastSkipAt-t
-        )>.05
+        )>0.05
     ){
-
         state.lastSkipAt=t;
-
-        video.currentTime=skip.end;
+        video.currentTime=
+            skip.end;
     }
 }
 
@@ -3471,8 +4447,9 @@ video.addEventListener(
     }
 );
 
-$("seek").oninput=e=>{
-    video.currentTime=Number(e.target.value);
+$("seek").oninput=event=>{
+    video.currentTime=
+        Number(event.target.value);
 };
 
 $("back5").onclick=()=>{
@@ -3491,12 +4468,7 @@ $("forward5").onclick=()=>{
         );
 };
 
-/* ---------------------------
-   スキップ
---------------------------- */
-
 $("skipFromCurrent").onclick=()=>{
-
     $("skipStart").value=
         video.currentTime.toFixed(1);
 
@@ -3508,16 +4480,16 @@ $("skipFromCurrent").onclick=()=>{
 };
 
 $("addSkip").onclick=()=>{
-
     const range=validRange(
         $("skipStart").value,
         $("skipEnd").value
     );
 
     if(!range){
-        return notify(
+        notify(
             "スキップの開始・終了時間を正しく入力してください。"
         );
+        return;
     }
 
     state.skips.push(range);
@@ -3530,682 +4502,78 @@ $("addSkip").onclick=()=>{
     saveLocal();
 };
 
-$("clearEdits").onclick=()=>{
-
-    if(!confirm(
-        "コメント・強調枠・接続線・スキップ範囲をすべて削除しますか？"
-    )){
-        return;
-    }
-
-    state.items=[];
-    state.connectors=[];
-    state.skips=[];
-    state.selected=null;
-
-    render();
-    saveLocal();
-};
-
-/* ---------------------------
-   JSON
---------------------------- */
-
-function validateProject(project){
-
-    if(
-        !project ||
-        ![1,2].includes(project.version) ||
-        !Array.isArray(project.items) ||
-        !Array.isArray(project.connectors) ||
-        !Array.isArray(project.skips)
-    ){
-        throw new Error(
-            "編集データの形式が正しくありません。"
-        );
-    }
-
-    const ids=new Set();
-
-    project.items.forEach(item=>{
-
-        if(
-            !item ||
-            !["comment","box"].includes(item.type) ||
-            typeof item.id!=="string" ||
-            ids.has(item.id)
-        ){
-            throw new Error(
-                "編集要素のデータが正しくありません。"
-            );
-        }
-
-        if(
-            !Number.isFinite(Number(item.start)) ||
-            !Number.isFinite(Number(item.end)) ||
-            Number(item.start)<0 ||
-            Number(item.end)<=Number(item.start)
-        ){
-            throw new Error(
-                "編集要素の時間が不正です。"
-            );
-        }
-
-        ids.add(item.id);
-    });
-
-    project.connectors.forEach(line=>{
-
-        const fromId=
-            line.from?.itemId ||
-            line.from;
-
-        const toId=
-            line.to?.itemId ||
-            line.to;
-
-        if(
-            !line ||
-            typeof line.id!=="string" ||
-            !ids.has(fromId) ||
-            !ids.has(toId)
-        ){
-            throw new Error(
-                "接続線のデータが正しくありません。"
-            );
-        }
-    });
-
-    project.skips.forEach(range=>{
-
-        if(
-            !range ||
-            Number(range.start)<0 ||
-            Number(range.end)<=Number(range.start)
-        ){
-            throw new Error(
-                "スキップ範囲が不正です。"
-            );
-        }
-    });
-
-    return project;
-}
-
-function migrateProject(project){
-
-    validateProject(project);
-
-    const result=
-        structuredClone(project);
-
-    result.version=2;
-
-    result.items.forEach(item=>{
-
-        if(item.type==="comment"){
-
-            item.style={
-                ...defaultCommentStyle(),
-                ...(item.style || {})
-            };
-
-        }else{
-
-            item.style={
-                ...defaultBoxStyle(),
-                ...(item.style || {})
-            };
-        }
-    });
-
-    result.connectors=
-        result.connectors.map(line=>{
-
-            if(typeof line.from==="string"){
-
-                const a=findItem(line.from);
-                const b=findItem(line.to);
-
-                return {
-                    id:line.id,
-                    from:{
-                        itemId:line.from,
-                        x:100,
-                        y:50
-                    },
-                    to:{
-                        itemId:line.to,
-                        x:0,
-                        y:50
-                    },
-                    start:line.start,
-                    end:line.end,
-                    shape:"line",
-                    style:{
-                        color:"#ffffff",
-                        width:3,
-                        opacity:1,
-                        dash:"solid",
-                        startArrow:"none",
-                        endArrow:"arrow"
-                    }
-                };
-            }
-
-            line.from={
-                itemId:line.from.itemId,
-                x:Number(line.from.x ?? 100),
-                y:Number(line.from.y ?? 50)
-            };
-
-            line.to={
-                itemId:line.to.itemId,
-                x:Number(line.to.x ?? 0),
-                y:Number(line.to.y ?? 50)
-            };
-
-            line.style={
-                color:"#ffffff",
-                width:3,
-                opacity:1,
-                dash:"solid",
-                startArrow:"none",
-                endArrow:"arrow",
-                ...(line.style || {})
-            };
-
-            line.shape=line.shape || "line";
-
-            return line;
-        });
-
-    return result;
-}
-
-$("saveProject").onclick=()=>{
-
-    const project=projectData();
-
-    download(
-        new Blob(
-            [
-                JSON.stringify(
-                    project,
-                    null,
-                    2
-                )
-            ],
-            {type:"application/json"}
-        ),
-        `screen-recording-edits-${fileStamp()}.json`
-    );
-};
-
-$("loadProject").onclick=()=>{
-    $("projectFile").click();
-};
-
-$("projectFile").onchange=async event=>{
-
-    const file=event.target.files?.[0];
-
-    if(!file) return;
-
-    try{
-
-        const project=
-            JSON.parse(
-                await file.text()
-            );
-
-        const migrated=
-            migrateProject(project);
-
-        state.items=migrated.items;
-        state.connectors=migrated.connectors;
-        state.skips=migrated.skips;
-
-        state.selected=null;
-
-        render();
-        saveLocal();
-
-        notify(
-            "編集内容を読み込みました。",
-            true
-        );
-
-    }catch(error){
-
-        notify(
-            `読み込みに失敗しました。${
-                error.message || ""
-            }`
-        );
-
-    }finally{
-
-        event.target.value="";
-    }
-};
-
-/* ---------------------------
-   サーバー保存
---------------------------- */
-
-async function uploadVideo(){
-
-    if(!state.blob){
-        throw new Error(
-            "録画動画がありません。"
-        );
-    }
-
-    if(!state.projectId){
-        state.projectId=uid();
-    }
-
-    const form=new FormData();
-
-    form.append(
-        "id",
-        state.projectId
-    );
-
-    form.append(
-        "video",
-        state.blob,
-        `recording-${fileStamp()}.webm`
-    );
-
-    const response=
-        await fetch(
-            "?api=upload",
-            {
-                method:"POST",
-                body:form
-            }
-        );
-
-    const data=await response.json();
-
-    if(!data.ok){
-        throw new Error(
-            data.error ||
-            "動画保存に失敗しました。"
-        );
-    }
-
-    state.videoFile=data.file;
-
-    return data;
-}
-
-async function saveServer(){
-
-    if(!state.blob){
-        throw new Error(
-            "録画動画がありません。"
-        );
-    }
-
-    if(!state.projectId){
-        state.projectId=uid();
-    }
-
-    $("status").textContent=
-        "動画をサーバーへ保存中";
-
-    await uploadVideo();
-
-    $("status").textContent=
-        "編集内容をサーバーへ保存中";
-
-    const response=
-        await fetch(
-            "?api=save",
-            {
-                method:"POST",
-                headers:{
-                    "Content-Type":
-                        "application/json"
-                },
-                body:JSON.stringify({
-                    id:state.projectId,
-                    name:$("projectName").value.trim() ||
-                        "無題の動画編集",
-                    videoFile:state.videoFile,
-                    project:projectData()
-                })
-            }
-        );
-
-    const data=await response.json();
-
-    if(!data.ok){
-        throw new Error(
-            data.error ||
-            "編集内容の保存に失敗しました。"
-        );
-    }
-
-    state.projectName=
-        $("projectName").value.trim();
-
-    $("status").textContent=
-        "サーバー保存完了";
-
-    notify(
-        "動画と編集内容をサーバーへ保存しました。",
-        true
-    );
-
-    await loadServerProjects();
-}
-
-$("serverSave").onclick=async()=>{
-
-    try{
-
-        $("serverSave").disabled=true;
-
-        await saveServer();
-
-    }catch(error){
-
-        notify(
-            `サーバー保存に失敗しました。${
-                error.message || ""
-            }`
-        );
-
-    }finally{
-
-        $("serverSave").disabled=false;
-    }
-};
-
-async function loadServerProjects(){
-
-    try{
-
-        const response=
-            await fetch("?api=list");
-
-        const data=
-            await response.json();
-
-        if(!data.ok) return;
-
-        const container=
-            $("serverProjectList");
-
-        container.replaceChildren();
-
-        data.projects.forEach(project=>{
-
-            const row=
-                document.createElement("div");
-
-            row.className="list-item";
-
-            const title=
-                document.createElement("div");
-
-            title.textContent=
-                project.name ||
-                "無題の動画編集";
-
-            row.appendChild(title);
-
-            const date=
-                document.createElement("div");
-
-            date.className="help";
-
-            date.textContent=
-                project.updated_at;
-
-            row.appendChild(date);
-
-            const buttons=
-                document.createElement("div");
-
-            buttons.className="buttons";
-
-            const load=
-                document.createElement("button");
-
-            load.textContent="読み込む";
-
-            load.onclick=async()=>{
-
-                try{
-
-                    await loadServerProject(
-                        project.id
-                    );
-
-                }catch(error){
-
-                    notify(
-                        error.message ||
-                        "読み込みに失敗しました。"
-                    );
-                }
-            };
-
-            buttons.appendChild(load);
-
-            row.appendChild(buttons);
-
-            container.appendChild(row);
-        });
-
-    }catch{
-
-        // サーバー保存が使えない場合でも
-        // ローカル編集は継続可能。
-    }
-}
-
-async function loadServerProject(id){
-
-    const response=
-        await fetch(
-            `?api=load&id=${encodeURIComponent(id)}`
-        );
-
-    const data=
-        await response.json();
-
-    if(!data.ok){
-        throw new Error(
-            data.error ||
-            "プロジェクトを読み込めません。"
-        );
-    }
-
-    const project=
-        migrateProject(data.project);
-
-    state.projectId=data.id;
-    state.projectName=data.name;
-    state.videoFile=data.videoFile || "";
-
-    $("projectName").value=
-        data.name || "無題の動画編集";
-
-    state.items=project.items;
-    state.connectors=project.connectors;
-    state.skips=project.skips;
-    state.selected=null;
-
-    if(data.videoFile){
-
-        const videoUrl=
-            `?api=video&file=${encodeURIComponent(
-                data.videoFile
-            )}`;
-
-        if(state.url){
-            URL.revokeObjectURL(state.url);
-            state.url=null;
-        }
-
-        state.blob=null;
-
-        video.src=videoUrl;
-        video.load();
-    }
-
-    render();
-
-    notify(
-        "サーバーからプロジェクトを読み込みました。",
-        true
-    );
-}
-
-$("serverLoad").onclick=async()=>{
-    await loadServerProjects();
-    notify(
-        "サーバー上のプロジェクト一覧を更新しました。",
-        true
-    );
-};
-
-/* ---------------------------
-   右クリックメニュー
---------------------------- */
-
-stage.addEventListener(
-    "contextmenu",
+/* =========================================================
+ * キーボード
+ * ======================================================= */
+
+document.addEventListener(
+    "keydown",
     event=>{
 
-        if(!state.blob && !state.videoFile){
+        if(
+            $("editor").style.display==="none"
+        ){
             return;
         }
 
-        event.preventDefault();
+        if(event.key==="Escape"){
 
-        const rect=
-            stage.getBoundingClientRect();
+            $("contextMenu").style.display=
+                "none";
 
-        state.contextPoint={
-            x:clamp(
-                (event.clientX-rect.left)/
-                rect.width*100,
-                0,
-                70
-            ),
-            y:clamp(
-                (event.clientY-rect.top)/
-                rect.height*100,
-                0,
-                70
-            )
-        };
+            $("formatPanel").style.display=
+                "none";
 
-        const menu=
-            $("contextMenu");
+            state.connectMode=false;
+            state.connectFrom=null;
 
-        menu.style.left=
-            `${clamp(
-                event.clientX,
-                0,
-                innerWidth-190
-            )}px`;
+            $("connect").textContent=
+                "線でつなぐ";
 
-        menu.style.top=
-            `${clamp(
-                event.clientY,
-                0,
-                innerHeight-150
-            )}px`;
+            return;
+        }
 
-        menu.style.display="block";
-    }
-);
-
-$("contextMenu").onclick=event=>{
-
-    const action=
-        event.target
-            .closest("button")
-            ?.dataset.action;
-
-    if(
-        action==="comment" ||
-        action==="box"
-    ){
-
-        addItem(
-            action,
-            state.contextPoint
-        );
-    }
-
-    if(action==="connect"){
-        $("connect").click();
-    }
-
-    $("contextMenu").style.display="none";
-};
-
-document.addEventListener(
-    "pointerdown",
-    event=>{
+        const tag=
+            document.activeElement?.tagName;
 
         if(
-            !$("contextMenu").contains(
-                event.target
-            )
+            (
+                event.key==="Delete" ||
+                event.key==="Backspace"
+            ) &&
+            ![
+                "INPUT",
+                "TEXTAREA",
+                "SELECT"
+            ].includes(tag) &&
+            state.selected
         ){
-            $("contextMenu").style.display="none";
+            event.preventDefault();
+
+            deleteSelected();
         }
     }
 );
 
-/* ---------------------------
-   ローカル復元
---------------------------- */
+/* =========================================================
+ * 初期化
+ * ======================================================= */
 
-try{
+(function init(){
 
-    const saved=
-        localStorage.getItem(
-            STORAGE_KEY
-        );
+    state.projectId=
+        newProjectId();
 
-    if(saved){
+    $("projectId").value=
+        state.projectId;
 
-        const project=
-            migrateProject(
-                JSON.parse(saved)
-            );
+    restoreLocal();
 
-        state.items=project.items;
-        state.connectors=project.connectors;
-        state.skips=project.skips;
-    }
+    updateRecordingButtons();
 
-}catch{
+    render();
 
-    notify(
-        "前回の編集内容を復元できませんでした。"
-    );
-}
-
-/* ---------------------------
-   初期化
---------------------------- */
-
-updateRecordingButtons();
-
-loadServerProjects();
-
+})();
 </script>
 
 </body>
