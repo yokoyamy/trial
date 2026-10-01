@@ -1,14 +1,17 @@
 <?php
 declare(strict_types=1);
 
-const APP_VERSION = '5.0.1';
+const APP_VERSION = '5.1.0';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
     if ($action === 'health') {
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['ok'=>true,'version'=>APP_VERSION], JSON_UNESCAPED_UNICODE);
+        echo json_encode(
+            ['ok' => true, 'version' => APP_VERSION],
+            JSON_UNESCAPED_UNICODE
+        );
         exit;
     }
 
@@ -18,7 +21,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($project === '') {
             http_response_code(400);
             header('Content-Type: application/json; charset=utf-8');
-            echo json_encode(['ok'=>false,'error'=>'project is required'], JSON_UNESCAPED_UNICODE);
+            echo json_encode(
+                ['ok' => false, 'error' => 'project is required'],
+                JSON_UNESCAPED_UNICODE
+            );
             exit;
         }
 
@@ -27,12 +33,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (json_last_error() !== JSON_ERROR_NONE) {
             http_response_code(400);
             header('Content-Type: application/json; charset=utf-8');
-            echo json_encode(['ok'=>false,'error'=>'invalid json'], JSON_UNESCAPED_UNICODE);
+            echo json_encode(
+                ['ok' => false, 'error' => 'invalid json'],
+                JSON_UNESCAPED_UNICODE
+            );
             exit;
         }
 
         header('Content-Type: application/json; charset=utf-8');
-        header('Content-Disposition: attachment; filename="video-editor-project.json"');
+        header(
+            'Content-Disposition: attachment; filename="video-editor-project.json"'
+        );
         echo $project;
         exit;
     }
@@ -55,6 +66,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     --muted:#94a3b8;
     --blue:#2563eb;
     --red:#ef4444;
+
     --label:120px;
     --track:56px;
 }
@@ -65,12 +77,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 html,
 body{
-    margin:0;
     width:100%;
     height:100%;
+    margin:0;
     overflow:hidden;
+
     background:var(--bg);
     color:var(--text);
+
     font-family:
         -apple-system,
         BlinkMacSystemFont,
@@ -100,18 +114,27 @@ button:disabled{
 }
 
 .app{
-    height:100vh;
+    width:100%;
+    height:100%;
     display:flex;
     flex-direction:column;
 }
 
+
+/* ========================================
+   上部操作バー
+======================================== */
+
 .topbar{
     height:52px;
     flex:none;
+
     display:flex;
     align-items:center;
     gap:7px;
+
     padding:7px 10px;
+
     background:#080f1b;
     border-bottom:1px solid var(--line);
 }
@@ -125,8 +148,10 @@ button:disabled{
 .btn{
     border:1px solid #40516a;
     border-radius:6px;
+
     background:#243247;
     color:var(--text);
+
     padding:7px 11px;
 }
 
@@ -139,11 +164,6 @@ button:disabled{
     border-color:#3b82f6;
 }
 
-.btn.danger{
-    background:#7f1d1d;
-    border-color:#991b1b;
-}
-
 .btn.small{
     padding:5px 8px;
     font-size:12px;
@@ -151,8 +171,10 @@ button:disabled{
 
 .status{
     margin-left:auto;
+
     color:var(--muted);
     font-size:12px;
+
     white-space:nowrap;
 }
 
@@ -160,28 +182,45 @@ button:disabled{
     display:none;
 }
 
+
+/* ========================================
+   メイン
+======================================== */
+
 .main{
     min-height:0;
     flex:1;
+
     display:flex;
     flex-direction:column;
 }
 
+
+/* ========================================
+   動画エリア
+======================================== */
+
 .video-area{
     min-height:260px;
     flex:1;
+
     display:flex;
     align-items:center;
     justify-content:center;
+
     padding:12px;
+
     background:#050a11;
+
     overflow:hidden;
 }
 
 .video-wrap{
     position:relative;
+
     width:min(1000px,100%);
     height:100%;
+
     display:flex;
     align-items:center;
     justify-content:center;
@@ -189,23 +228,124 @@ button:disabled{
 
 #video{
     display:block;
+
     max-width:100%;
     max-height:100%;
+
     background:#000;
 }
 
+
+/*
+ * 動画上の編集領域
+ *
+ * SVGもここに配置する。
+ * タイムラインには接続線を配置しない。
+ */
 .video-overlay{
     position:absolute;
     inset:0;
+
     pointer-events:none;
 }
 
+
+/*
+ * 動画上の接続線
+ */
+.video-connection-svg{
+    position:absolute;
+
+    z-index:5;
+
+    overflow:visible;
+
+    pointer-events:none;
+}
+
+
+/*
+ * 接続線の外周。
+ * 背景が明るい動画でも線を視認しやすくする。
+ */
+.video-connection-halo{
+    fill:none;
+
+    stroke:#000;
+    stroke-width:8;
+
+    stroke-linecap:round;
+    stroke-linejoin:round;
+
+    opacity:.75;
+}
+
+
+/*
+ * 接続線本体
+ */
+.video-connection-path{
+    fill:none;
+
+    stroke:#f8fafc;
+    stroke-width:3;
+
+    stroke-linecap:round;
+    stroke-linejoin:round;
+
+    filter:
+        drop-shadow(
+            0 1px 2px rgba(0,0,0,.8)
+        );
+}
+
+
+/*
+ * 選択された接続線
+ */
+.video-connection-path.selected{
+    stroke:#fbbf24;
+    stroke-width:5;
+}
+
+
+/*
+ * 接続先の丸印
+ */
+.video-connection-endpoint{
+    stroke:#000;
+    stroke-width:2;
+}
+
+
+/*
+ * 接続先の矢印
+ */
+.video-connection-arrow{
+    stroke:#000;
+    stroke-width:1;
+}
+
+
+/* ========================================
+   動画上の要素
+======================================== */
+
 .overlay-element{
     position:absolute;
-    min-width:30px;
+
+    min-width:24px;
     min-height:20px;
+
     pointer-events:auto;
+
     user-select:none;
+
+    touch-action:none;
+
+    cursor:move;
+
+    z-index:10;
 }
 
 .overlay-element.selected{
@@ -216,71 +356,183 @@ button:disabled{
     outline:2px solid #fbbf24;
 }
 
+
+/*
+ * 要素のリサイズハンドル
+ */
+.resize-handle{
+    position:absolute;
+
+    width:10px;
+    height:10px;
+
+    border:2px solid #fff;
+
+    background:#2563eb;
+
+    border-radius:2px;
+
+    z-index:30;
+
+    opacity:0;
+}
+
+.overlay-element.selected .resize-handle{
+    opacity:1;
+}
+
+.resize-handle.nw{
+    left:-6px;
+    top:-6px;
+    cursor:nwse-resize;
+}
+
+.resize-handle.n{
+    left:50%;
+    top:-6px;
+    transform:translateX(-50%);
+    cursor:ns-resize;
+}
+
+.resize-handle.ne{
+    right:-6px;
+    top:-6px;
+    cursor:nesw-resize;
+}
+
+.resize-handle.e{
+    right:-6px;
+    top:50%;
+    transform:translateY(-50%);
+    cursor:ew-resize;
+}
+
+.resize-handle.se{
+    right:-6px;
+    bottom:-6px;
+    cursor:nwse-resize;
+}
+
+.resize-handle.s{
+    left:50%;
+    bottom:-6px;
+    transform:translateX(-50%);
+    cursor:ns-resize;
+}
+
+.resize-handle.sw{
+    left:-6px;
+    bottom:-6px;
+    cursor:nesw-resize;
+}
+
+.resize-handle.w{
+    left:-6px;
+    top:50%;
+    transform:translateY(-50%);
+    cursor:ew-resize;
+}
+
+
 .overlay-text{
     width:100%;
     height:100%;
+
     display:flex;
     align-items:center;
     justify-content:center;
+
     padding:4px;
+
     overflow:hidden;
+
     white-space:pre-wrap;
+
+    text-shadow:
+        0 1px 3px #000,
+        0 0 2px #000;
 }
 
 .overlay-box{
     width:100%;
     height:100%;
+
     border:3px solid currentColor;
+
     background:#ffffff08;
 }
 
 .overlay-skip{
     width:100%;
     height:100%;
+
     display:flex;
     align-items:center;
     justify-content:center;
+
     border:2px dashed #f97316;
+
     color:#fdba74;
+
     background:#f973161f;
 }
 
 .empty-video{
     position:absolute;
+
     text-align:center;
+
     color:#64748b;
+
     line-height:1.8;
+
     pointer-events:none;
 }
 
 .empty-video strong{
     display:block;
+
     color:#94a3b8;
+
     font-size:18px;
 }
+
+
+/* ========================================
+   タイムライン
+======================================== */
 
 .timeline-panel{
     height:330px;
     flex:none;
+
     display:flex;
     flex-direction:column;
+
     border-top:1px solid var(--line);
+
     background:#0e1724;
 }
 
 .timeline-toolbar{
     height:43px;
     flex:none;
+
     display:flex;
     align-items:center;
+
     gap:7px;
+
     padding:5px 8px;
+
     border-bottom:1px solid var(--line);
 }
 
 .time-readout{
     min-width:120px;
+
     font-variant-numeric:tabular-nums;
+
     color:#dbeafe;
 }
 
@@ -291,10 +543,14 @@ button:disabled{
 
 .zoom-control{
     margin-left:auto;
+
     display:flex;
     align-items:center;
+
     gap:6px;
+
     color:var(--muted);
+
     font-size:12px;
 }
 
@@ -304,119 +560,176 @@ button:disabled{
 
 .timeline-scroll{
     position:relative;
+
     flex:1;
     min-height:0;
+
     width:100%;
+
     overflow-y:auto;
     overflow-x:hidden;
 }
 
 .timeline-content{
     position:relative;
+
     width:100%;
     min-width:0;
 }
 
 .axis-row{
     position:sticky;
+
     top:0;
+
     z-index:30;
+
     height:34px;
     width:100%;
+
     display:flex;
+
     background:#131d29;
+
     border-bottom:1px solid var(--line);
 }
 
 .axis-label{
     width:var(--label);
     min-width:var(--label);
+
     flex:none;
+
     display:flex;
     align-items:center;
+
     padding-left:8px;
+
     background:#131d29;
+
     border-right:1px solid var(--line);
+
     font-size:12px;
+
     position:sticky;
     left:0;
+
     z-index:40;
 }
 
 .axis-track{
     position:relative;
+
     height:100%;
+
     flex:1;
+
     min-width:0;
 }
 
 .tick{
     position:absolute;
+
     top:0;
+
     height:100%;
+
     border-left:1px solid #334155;
+
     padding:5px 0 0 3px;
+
     font-size:10px;
+
     color:#64748b;
+
     white-space:nowrap;
+
     pointer-events:none;
 }
 
 .track-row{
     height:var(--track);
     width:100%;
+
     display:flex;
+
     border-bottom:1px solid #263445;
 }
 
 .track-label{
     width:var(--label);
     min-width:var(--label);
+
     flex:none;
+
     display:flex;
     align-items:center;
+
     gap:5px;
+
     padding:0 8px;
+
     background:#111b27;
+
     border-right:1px solid var(--line);
+
     font-size:12px;
+
     position:sticky;
     left:0;
+
     z-index:20;
 }
 
 .type-dot{
     width:8px;
     height:8px;
+
     border-radius:50%;
+
     flex:none;
 }
 
 .track-lane{
     position:relative;
+
     flex:1;
+
     min-width:0;
 }
 
 .track-grid{
     position:absolute;
+
     inset:0;
+
     pointer-events:none;
 }
 
 .element-bar{
     position:absolute;
+
     top:9px;
+
     height:38px;
+
     min-width:12px;
+
     border:1px solid currentColor;
+
     border-radius:5px;
+
     display:flex;
     align-items:center;
+
     overflow:visible;
+
     cursor:grab;
+
     user-select:none;
+
     touch-action:none;
+
     z-index:5;
 }
 
@@ -425,194 +738,191 @@ button:disabled{
 }
 
 .element-bar.selected{
-    box-shadow:0 0 0 2px #60a5fa;
+    box-shadow:
+        0 0 0 2px #60a5fa;
 }
 
 .element-bar.multi-selected{
-    box-shadow:0 0 0 2px #fbbf24;
+    box-shadow:
+        0 0 0 2px #fbbf24;
 }
 
 .bar-label{
     padding:0 8px;
+
     overflow:hidden;
+
     text-overflow:ellipsis;
+
     white-space:nowrap;
+
     font-size:11px;
+
     pointer-events:none;
 }
 
 .element-bar .handle{
     position:absolute;
+
     top:0;
+
     width:10px;
+
     height:100%;
+
     z-index:8;
 }
 
 .element-bar .handle.left{
     left:-5px;
+
     cursor:ew-resize;
 }
 
 .element-bar .handle.right{
     right:-5px;
+
     cursor:ew-resize;
 }
 
 .playhead{
     position:absolute;
+
     top:34px;
     bottom:0;
+
     width:2px;
+
     z-index:50;
+
     pointer-events:none;
+
     background:var(--red);
-    box-shadow:0 0 4px #ef444499;
+
+    box-shadow:
+        0 0 4px #ef444499;
 }
 
 .playhead::before{
     content:"";
+
     position:absolute;
+
     top:-1px;
     left:-5px;
+
     width:12px;
     height:12px;
+
     background:var(--red);
-    clip-path:polygon(0 0,100% 0,50% 100%);
+
+    clip-path:
+        polygon(
+            0 0,
+            100% 0,
+            50% 100%
+        );
 }
 
 .playhead-label{
     position:absolute;
+
     top:12px;
     left:5px;
+
     padding:2px 4px;
+
     background:var(--red);
+
     color:#fff;
+
     font-size:10px;
+
     white-space:nowrap;
+
     border-radius:3px;
 }
 
-/*
- * 接続線
- *
- * SVG自体を「接続線を描画する領域」として扱う。
- * 元実装では、SVGの左位置が--label分ずれている一方、
- * 座標はtimeline-content基準だったため、接続線の位置が
- * 要素と一致しないケースがあった。
- */
-.connection-svg{
-    position:absolute;
-    left:var(--label);
-    right:0;
-    top:34px;
-    width:calc(100% - var(--label));
-    height:calc(100% - 34px);
-    z-index:45;
-    overflow:visible;
-    pointer-events:none;
-}
 
-/*
- * 接続線本体。
- * 白い外周を先に描くことで暗い背景でも視認しやすくする。
- */
-.connection-path-halo{
-    fill:none;
-    stroke:#020617;
-    stroke-width:7;
-    stroke-linecap:round;
-    stroke-linejoin:round;
-    opacity:.95;
-    pointer-events:none;
-}
-
-.connection-path{
-    fill:none;
-    stroke:#f8fafc;
-    stroke-width:3;
-    stroke-linecap:round;
-    stroke-linejoin:round;
-    pointer-events:stroke;
-    cursor:pointer;
-    filter:drop-shadow(0 1px 2px rgba(0,0,0,.8));
-}
-
-.connection-path.selected{
-    stroke:#fbbf24;
-    stroke-width:5;
-}
-
-.connection-endpoint{
-    pointer-events:none;
-    stroke:#020617;
-    stroke-width:2;
-}
-
-.connection-preview{
-    fill:none;
-    stroke:#fbbf24;
-    stroke-width:3;
-    stroke-dasharray:6 4;
-}
-
-.connection-arrow{
-    pointer-events:none;
-}
+/* ========================================
+   モーダル
+======================================== */
 
 .modal-backdrop{
     position:fixed;
+
     inset:0;
+
     z-index:3000;
+
     display:none;
+
     align-items:center;
     justify-content:center;
+
     padding:20px;
+
     background:#000a;
 }
 
 .modal{
     width:min(520px,100%);
+
     background:#182231;
+
     border:1px solid #475569;
+
     border-radius:8px;
+
     overflow:hidden;
 }
 
 .modal-head,
 .modal-foot{
     padding:12px 15px;
+
     border-color:var(--line);
 }
 
 .modal-head{
     display:flex;
+
     justify-content:space-between;
+
     border-bottom:1px solid var(--line);
 }
 
 .modal-body{
     padding:15px;
+
     display:grid;
+
     gap:12px;
+
     max-height:75vh;
+
     overflow:auto;
 }
 
 .modal-foot{
     display:flex;
+
     justify-content:flex-end;
+
     gap:8px;
+
     border-top:1px solid var(--line);
 }
 
 .field{
     display:grid;
+
     gap:5px;
 }
 
 .field label{
     font-size:12px;
+
     color:var(--muted);
 }
 
@@ -620,55 +930,89 @@ button:disabled{
 .field select,
 .field textarea{
     width:100%;
+
     padding:7px;
+
     background:#0f1722;
+
     color:var(--text);
+
     border:1px solid #40516a;
+
     border-radius:5px;
 }
 
 .field textarea{
     min-height:80px;
+
     resize:vertical;
 }
 
 .color-grid{
     display:grid;
-    grid-template-columns:repeat(6,1fr);
+
+    grid-template-columns:
+        repeat(6,1fr);
+
     gap:6px;
 }
 
 .color-choice{
     height:28px;
+
     border:2px solid transparent;
+
     border-radius:4px;
 }
 
 .color-choice.active{
     border-color:#fff;
-    box-shadow:0 0 0 1px #60a5fa;
+
+    box-shadow:
+        0 0 0 1px #60a5fa;
 }
+
+
+/* ========================================
+   コンテキストメニュー
+======================================== */
 
 .context-menu{
     position:fixed;
+
     display:none;
+
     z-index:2000;
+
     min-width:210px;
+
     padding:5px;
+
     background:#172235;
+
     border:1px solid #475569;
+
     border-radius:6px;
-    box-shadow:0 12px 30px #0006;
+
+    box-shadow:
+        0 12px 30px #0006;
 }
 
 .context-menu button{
     display:block;
+
     width:100%;
+
     padding:8px;
+
     border:0;
+
     background:transparent;
+
     color:var(--text);
+
     text-align:left;
+
     border-radius:4px;
 }
 
@@ -676,45 +1020,75 @@ button:disabled{
     background:#293a52;
 }
 
+
+/* ========================================
+   保存データ
+======================================== */
+
 .storage-item{
     display:flex;
+
     align-items:center;
+
     gap:8px;
+
     padding:10px;
+
     border-bottom:1px solid #334155;
 }
 
 .storage-item .info{
     min-width:0;
+
     flex:1;
 }
 
 .storage-item .name{
     font-weight:600;
+
     overflow:hidden;
+
     text-overflow:ellipsis;
+
     white-space:nowrap;
 }
 
 .storage-item .meta{
     font-size:11px;
+
     color:#64748b;
 }
 
+
+/* ========================================
+   通知
+======================================== */
+
 .toast{
     position:fixed;
+
     right:15px;
     bottom:15px;
+
     z-index:5000;
+
     display:none;
+
     padding:10px 14px;
+
     background:#1e293b;
+
     border:1px solid #475569;
+
     border-radius:6px;
-    box-shadow:0 10px 30px #0006;
+
+    box-shadow:
+        0 10px 30px #0006;
 }
 
+
 @media(max-width:800px){
+
     :root{
         --label:95px;
     }
@@ -818,6 +1192,9 @@ button:disabled{
             playsinline
         ></video>
 
+        <!--
+         * 動画上の要素・接続線を表示する領域
+         -->
         <div
             class="video-overlay"
             id="videoOverlay"
@@ -920,20 +1297,6 @@ button:disabled{
 
     <div id="tracksContainer"></div>
 
-    <svg
-        class="connection-svg"
-        id="connectionSvg"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-    ></svg>
-
-    <svg
-        class="connection-svg"
-        id="connectionPreviewSvg"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-    ></svg>
-
     <div
         class="playhead"
         id="playhead"
@@ -956,6 +1319,8 @@ button:disabled{
 
 </div>
 
+
+<!-- コンテキストメニュー -->
 
 <div
     class="context-menu"
@@ -993,6 +1358,8 @@ button:disabled{
 </div>
 
 
+<!-- 要素編集 -->
+
 <div
     class="modal-backdrop"
     id="elementModal"
@@ -1018,40 +1385,68 @@ button:disabled{
     <div class="modal-body">
 
         <div class="field">
-            <label>要素名</label>
-            <input id="elementName">
+
+            <label>
+                要素名
+            </label>
+
+            <input
+                id="elementName"
+            >
+
         </div>
 
         <div
             class="field"
             id="textField"
         >
-            <label>テキスト</label>
-            <textarea id="elementText"></textarea>
+
+            <label>
+                テキスト
+            </label>
+
+            <textarea
+                id="elementText"
+            ></textarea>
+
         </div>
 
         <div class="field">
-            <label>開始時間</label>
+
+            <label>
+                開始時間
+            </label>
+
             <input
                 id="elementStart"
                 type="number"
                 min="0"
                 step=".001"
             >
+
         </div>
 
         <div class="field">
-            <label>終了時間</label>
+
+            <label>
+                終了時間
+            </label>
+
             <input
                 id="elementEnd"
                 type="number"
                 min="0"
                 step=".001"
             >
+
         </div>
 
         <div class="field">
-            <label>横位置（%）</label>
+
+            <label>
+                横位置（%）
+            </label>
+
             <input
                 id="elementX"
                 type="number"
@@ -1059,10 +1454,15 @@ button:disabled{
                 max="100"
                 step=".1"
             >
+
         </div>
 
         <div class="field">
-            <label>縦位置（%）</label>
+
+            <label>
+                縦位置（%）
+            </label>
+
             <input
                 id="elementY"
                 type="number"
@@ -1070,10 +1470,15 @@ button:disabled{
                 max="100"
                 step=".1"
             >
+
         </div>
 
         <div class="field">
-            <label>幅（%）</label>
+
+            <label>
+                幅（%）
+            </label>
+
             <input
                 id="elementW"
                 type="number"
@@ -1081,10 +1486,15 @@ button:disabled{
                 max="100"
                 step=".1"
             >
+
         </div>
 
         <div class="field">
-            <label>高さ（%）</label>
+
+            <label>
+                高さ（%）
+            </label>
+
             <input
                 id="elementH"
                 type="number"
@@ -1092,39 +1502,65 @@ button:disabled{
                 max="100"
                 step=".1"
             >
+
         </div>
 
         <div
             class="field"
             id="fontField"
         >
-            <label>文字サイズ</label>
+
+            <label>
+                文字サイズ
+            </label>
+
             <input
                 id="elementFontSize"
                 type="number"
                 min="8"
                 max="100"
             >
+
         </div>
 
         <div
             class="field"
             id="weightField"
         >
-            <label>文字太さ</label>
+
+            <label>
+                文字太さ
+            </label>
+
             <select id="elementFontWeight">
-                <option value="400">標準</option>
-                <option value="700">太字</option>
-                <option value="900">極太</option>
+
+                <option value="400">
+                    標準
+                </option>
+
+                <option value="700">
+                    太字
+                </option>
+
+                <option value="900">
+                    極太
+                </option>
+
             </select>
+
         </div>
 
         <div class="field">
-            <label>色</label>
+
+            <label>
+                色
+            </label>
+
             <div
                 class="color-grid"
                 id="colorGrid"
             ></div>
+
         </div>
 
     </div>
@@ -1151,6 +1587,8 @@ button:disabled{
 
 </div>
 
+
+<!-- 保存データ -->
 
 <div
     class="modal-backdrop"
@@ -1185,60 +1623,6 @@ button:disabled{
 
 
 <div
-    class="modal-backdrop"
-    id="nameModal"
->
-
-<div class="modal">
-
-    <div class="modal-head">
-
-        <strong>
-            プロジェクト名
-        </strong>
-
-    </div>
-
-    <div class="modal-body">
-
-        <div class="field">
-
-            <label>
-                名前
-            </label>
-
-            <input
-                id="projectName"
-            >
-
-        </div>
-
-    </div>
-
-    <div class="modal-foot">
-
-        <button
-            class="btn"
-            id="nameCancel"
-        >
-            キャンセル
-        </button>
-
-        <button
-            class="btn primary"
-            id="nameOk"
-        >
-            作成
-        </button>
-
-    </div>
-
-</div>
-
-</div>
-
-
-<div
     class="toast"
     id="toast"
 ></div>
@@ -1247,72 +1631,121 @@ button:disabled{
 <script>
 'use strict';
 
-const $ = id => document.getElementById(id);
+const $ =
+    id => document.getElementById(id);
+
 
 const els = {
-    video: $('video'),
-    videoWrap: $('videoWrap'),
-    overlay: $('videoOverlay'),
-    empty: $('emptyVideo'),
 
-    file: $('videoFile'),
-    open: $('openVideoBtn'),
-    newBtn: $('newProjectBtn'),
-    save: $('saveProjectBtn'),
-    load: $('loadProjectBtn'),
-    exportBtn: $('exportProjectBtn'),
-    import: $('importProjectInput'),
+    video:
+        $('video'),
 
-    status: $('statusText'),
-    play: $('playBtn'),
-    stop: $('stopBtn'),
-    readout: $('timeReadout'),
+    videoWrap:
+        $('videoWrap'),
 
-    hint: $('selectionHint'),
-    zoom: $('zoomRange'),
-    zoomValue: $('zoomValue'),
+    overlay:
+        $('videoOverlay'),
 
-    scroll: $('timelineScroll'),
-    content: $('timelineContent'),
-    axis: $('axisTrack'),
-    tracks: $('tracksContainer'),
+    empty:
+        $('emptyVideo'),
 
-    svg: $('connectionSvg'),
-    preview: $('connectionPreviewSvg'),
+    file:
+        $('videoFile'),
 
-    playhead: $('playhead'),
-    playheadLabel: $('playheadLabel'),
+    open:
+        $('openVideoBtn'),
 
-    menu: $('contextMenu'),
-    modal: $('elementModal'),
-    nameModal: $('nameModal'),
-    storageModal: $('storageModal')
+    save:
+        $('saveProjectBtn'),
+
+    load:
+        $('loadProjectBtn'),
+
+    exportBtn:
+        $('exportProjectBtn'),
+
+    import:
+        $('importProjectInput'),
+
+    status:
+        $('statusText'),
+
+    play:
+        $('playBtn'),
+
+    stop:
+        $('stopBtn'),
+
+    readout:
+        $('timeReadout'),
+
+    hint:
+        $('selectionHint'),
+
+    zoom:
+        $('zoomRange'),
+
+    zoomValue:
+        $('zoomValue'),
+
+    scroll:
+        $('timelineScroll'),
+
+    content:
+        $('timelineContent'),
+
+    axis:
+        $('axisTrack'),
+
+    tracks:
+        $('tracksContainer'),
+
+    playhead:
+        $('playhead'),
+
+    playheadLabel:
+        $('playheadLabel'),
+
+    menu:
+        $('contextMenu'),
+
+    modal:
+        $('elementModal'),
+
+    storageModal:
+        $('storageModal')
 };
 
 
 const state = {
-    project: null,
-    duration: 0,
-    currentTime: 0,
 
-    videoUrl: '',
-    videoBlob: null,
+    project:null,
 
-    selectedIds: new Set(),
-    selectedConnectionId: null,
+    duration:0,
 
-    contextElementId: null,
-    contextConnectionId: null,
+    currentTime:0,
 
-    drag: null,
-    dirty: false,
-    raf: 0,
+    videoUrl:'',
 
-    modalElementId: null,
-    pendingName: null,
-    pendingXY: null,
+    videoBlob:null,
 
-    colors: [
+    selectedIds:new Set(),
+
+    selectedConnectionId:null,
+
+    contextElementId:null,
+
+    contextConnectionId:null,
+
+    pendingXY:null,
+
+    drag:null,
+
+    dirty:false,
+
+    modalElementId:null,
+
+    colors:[
         '#60a5fa',
         '#22c55e',
         '#f59e0b',
@@ -1329,92 +1762,168 @@ const state = {
 };
 
 
-function uid(p = 'id'){
+/* ========================================
+   共通
+======================================== */
+
+function uid(prefix='id'){
+
     return (
-        p +
+        prefix +
         '-' +
         Date.now().toString(36) +
         '-' +
-        Math.random().toString(36).slice(2,8)
+        Math.random()
+            .toString(36)
+            .slice(2,8)
     );
 }
 
 
-function clamp(v,a,b){
-    return Math.max(a,Math.min(b,v));
+function clamp(value,min,max){
+
+    return Math.max(
+        min,
+        Math.min(max,value)
+    );
 }
 
 
-function time(v){
-    v = Math.max(0,Number(v)||0);
+function time(value){
+
+    value =
+        Math.max(
+            0,
+            Number(value) || 0
+        );
 
     return (
-        String(Math.floor(v/60)).padStart(2,'0') +
+        String(
+            Math.floor(value / 60)
+        ).padStart(2,'0') +
         ':' +
-        String(Math.floor(v%60)).padStart(2,'0') +
+        String(
+            Math.floor(value % 60)
+        ).padStart(2,'0') +
         '.' +
-        String(Math.floor(v%1*1000)).padStart(3,'0')
+        String(
+            Math.floor(
+                (value % 1) * 1000
+            )
+        ).padStart(3,'0')
     );
 }
 
 
-function shortTime(v){
-    return v < 60
-        ? v.toFixed(v%1 ? 1 : 0) + 's'
-        : `${String(Math.floor(v/60)).padStart(2,'0')}:${String(Math.floor(v%60)).padStart(2,'0')}`;
+function shortTime(value){
+
+    return value < 60
+
+        ? value.toFixed(
+            value % 1 ? 1 : 0
+        ) + 's'
+
+        : String(
+            Math.floor(value / 60)
+        ).padStart(2,'0') +
+        ':' +
+        String(
+            Math.floor(value % 60)
+        ).padStart(2,'0');
 }
 
 
-function color(type){
-    return type === 'text'
-        ? '#60a5fa'
-        : type === 'box'
-            ? '#22c55e'
-            : '#f97316';
+function elementColor(type){
+
+    if(type === 'text'){
+        return '#60a5fa';
+    }
+
+    if(type === 'box'){
+        return '#22c55e';
+    }
+
+    return '#f97316';
 }
 
 
-function rgba(hex,a){
-    const n = parseInt(hex.slice(1),16);
+function rgba(hex,alpha){
 
-    return `rgba(${n>>16},${n>>8&255},${n&255},${a})`;
+    const n =
+        parseInt(
+            hex.slice(1),
+            16
+        );
+
+    return (
+        `rgba(` +
+        `${n >> 16},` +
+        `${(n >> 8) & 255},` +
+        `${n & 255},` +
+        `${alpha})`
+    );
 }
 
 
-function toast(s,error=false){
+function toast(
+    message,
+    error=false
+){
 
-    els.status.textContent = s;
+    els.status.textContent =
+        message;
 
-    const t = $('toast');
+    const t =
+        $('toast');
 
-    t.textContent = s;
-    t.style.display = 'block';
+    t.textContent =
+        message;
+
+    t.style.display =
+        'block';
+
     t.style.borderColor =
-        error ? '#ef4444' : '#475569';
+        error
+            ? '#ef4444'
+            : '#475569';
 
-    clearTimeout(toast.timer);
+    clearTimeout(
+        toast.timer
+    );
 
     toast.timer =
         setTimeout(
-            () => t.style.display = 'none',
+            () => {
+                t.style.display =
+                    'none';
+            },
             2200
         );
 }
 
 
-function setStatus(s){
-    els.status.textContent = s;
+function setStatus(message){
+
+    els.status.textContent =
+        message;
 }
 
 
 function markDirty(){
-    state.dirty = true;
-    setStatus('変更あり');
+
+    state.dirty =
+        true;
+
+    setStatus(
+        '変更あり'
+    );
 }
 
 
 function markClean(){
-    state.dirty = false;
+
+    state.dirty =
+        false;
 
     setStatus(
         state.project
@@ -1425,178 +1934,292 @@ function markClean(){
 
 
 function emptyProject(
-    name = '新規プロジェクト'
+    name='新規プロジェクト'
 ){
+
     return {
-        version: 5,
+
+        version:5,
+
         name,
-        duration: state.duration,
-        videoName: state.videoBlob?.name || 'video',
-        elements: [],
-        connections: []
+
+        duration:
+            state.duration,
+
+        videoName:
+            state.videoBlob?.name ||
+            'video',
+
+        elements:[],
+
+        connections:[]
     };
 }
 
 
-function get(id){
+function getElement(id){
+
     return (
         state.project?.elements.find(
             e => e.id === id
-        ) || null
+        ) ||
+        null
     );
 }
 
 
 function canEdit(){
-    return !!state.project && state.duration > 0;
-}
 
-
-function visible(e){
     return (
-        state.currentTime >= e.start &&
-        state.currentTime < e.end
+        !!state.project &&
+        state.duration > 0
     );
 }
 
 
-function normalizeProject(p){
+function visible(element){
 
-    if(!p || typeof p !== 'object'){
-        throw Error('プロジェクト形式が不正です');
+    return (
+        state.currentTime >=
+            element.start &&
+        state.currentTime <
+            element.end
+    );
+}
+
+
+/* ========================================
+   プロジェクト
+======================================== */
+
+function normalizeProject(project){
+
+    if(
+        !project ||
+        typeof project !== 'object'
+    ){
+
+        throw Error(
+            'プロジェクト形式が不正です'
+        );
     }
 
-    p.version = 5;
-    p.name = String(p.name || 'プロジェクト');
-    p.duration = Number(p.duration) || state.duration;
 
-    p.elements =
-        Array.isArray(p.elements)
-            ? p.elements
+    project.version =
+        5;
+
+    project.name =
+        String(
+            project.name ||
+            'プロジェクト'
+        );
+
+    project.duration =
+        Number(project.duration) ||
+        state.duration;
+
+
+    project.elements =
+        Array.isArray(
+            project.elements
+        )
+            ? project.elements
             : [];
 
-    p.connections =
-        Array.isArray(p.connections)
-            ? p.connections
+
+    project.connections =
+        Array.isArray(
+            project.connections
+        )
+            ? project.connections
             : [];
 
-    p.elements =
-        p.elements.map(e => ({
 
-            id: String(e.id || uid('el')),
+    project.elements =
+        project.elements.map(
+            element => {
 
-            type:
-                ['text','box','skip'].includes(e.type)
-                    ? e.type
-                    : 'text',
-
-            name: String(e.name || '要素'),
-            text: String(e.text || ''),
-
-            start:
-                clamp(
-                    Number(e.start) || 0,
-                    0,
-                    p.duration
-                ),
-
-            end:
-                clamp(
-                    Number(e.end) ||
-                    Math.min(
-                        p.duration,
-                        (Number(e.start)||0) + 2
-                    ),
-                    .05,
-                    p.duration
-                ),
-
-            x:
-                clamp(
-                    Number(e.x) || 10,
-                    0,
-                    99
-                ),
-
-            y:
-                clamp(
-                    Number(e.y) || 10,
-                    0,
-                    99
-                ),
-
-            w:
-                clamp(
-                    Number(e.w) || 30,
-                    1,
-                    100
-                ),
-
-            h:
-                clamp(
-                    Number(e.h) || 15,
-                    1,
-                    100
-                ),
-
-            color:
-                e.color || color(e.type),
-
-            fontSize:
-                Number(e.fontSize) || 28,
-
-            fontWeight:
-                String(e.fontWeight || '700')
-        }));
+                const type =
+                    [
+                        'text',
+                        'box',
+                        'skip'
+                    ].includes(
+                        element.type
+                    )
+                        ? element.type
+                        : 'text';
 
 
-    p.elements.forEach(e => {
+                const start =
+                    clamp(
+                        Number(
+                            element.start
+                        ) || 0,
+                        0,
+                        project.duration
+                    );
 
-        if(e.end <= e.start){
-            e.end =
-                Math.min(
-                    p.duration,
-                    e.start + .05
-                );
-        }
 
-    });
+                const end =
+                    clamp(
+                        Number(
+                            element.end
+                        ) ||
+                        Math.min(
+                            project.duration,
+                            start + 2
+                        ),
+                        .05,
+                        project.duration
+                    );
+
+
+                return {
+
+                    id:
+                        String(
+                            element.id ||
+                            uid('el')
+                        ),
+
+                    type,
+
+                    name:
+                        String(
+                            element.name ||
+                            '要素'
+                        ),
+
+                    text:
+                        String(
+                            element.text ||
+                            ''
+                        ),
+
+                    start,
+
+                    end:
+                        end <= start
+                            ? Math.min(
+                                project.duration,
+                                start + .05
+                            )
+                            : end,
+
+                    x:
+                        clamp(
+                            Number(
+                                element.x
+                            ) || 10,
+                            0,
+                            99
+                        ),
+
+                    y:
+                        clamp(
+                            Number(
+                                element.y
+                            ) || 10,
+                            0,
+                            99
+                        ),
+
+                    w:
+                        clamp(
+                            Number(
+                                element.w
+                            ) || 30,
+                            1,
+                            100
+                        ),
+
+                    h:
+                        clamp(
+                            Number(
+                                element.h
+                            ) || 15,
+                            1,
+                            100
+                        ),
+
+                    color:
+                        element.color ||
+                        elementColor(type),
+
+                    fontSize:
+                        Number(
+                            element.fontSize
+                        ) || 28,
+
+                    fontWeight:
+                        String(
+                            element.fontWeight ||
+                            '700'
+                        )
+                };
+            }
+        );
 
 
     const ids =
         new Set(
-            p.elements.map(e => e.id)
+            project.elements.map(
+                e => e.id
+            )
         );
 
 
-    p.connections =
-        p.connections
+    project.connections =
+        project.connections
+
             .filter(
-                c =>
-                    c &&
-                    c.from !== c.to &&
-                    ids.has(c.from) &&
-                    ids.has(c.to)
+                connection =>
+                    connection &&
+                    connection.from !==
+                        connection.to &&
+                    ids.has(
+                        connection.from
+                    ) &&
+                    ids.has(
+                        connection.to
+                    )
             )
-            .map(c => ({
 
-                id: String(c.id || uid('c')),
+            .map(
+                connection => ({
 
-                from: c.from,
-                to: c.to,
+                    id:
+                        String(
+                            connection.id ||
+                            uid('c')
+                        ),
 
-                color:
-                    c.color || '#60a5fa',
+                    from:
+                        connection.from,
 
-                width:
-                    Number(c.width) || 3
+                    to:
+                        connection.to,
 
-            }));
+                    color:
+                        connection.color ||
+                        '#60a5fa',
+
+                    width:
+                        Number(
+                            connection.width
+                        ) || 3
+                })
+            );
 
 
-    return p;
+    return project;
 }
 
+
+/* ========================================
+   全体描画
+======================================== */
 
 function renderAll(){
 
@@ -1604,7 +2227,7 @@ function renderAll(){
 
     renderOverlay();
 
-    renderConnections();
+    renderVideoConnections();
 
     updatePlayhead();
 
@@ -1612,57 +2235,66 @@ function renderAll(){
 }
 
 
+/* ========================================
+   タイムライン
+======================================== */
+
 function timelineGeometry(){
 
-    const r =
+    const rect =
         els.axis.getBoundingClientRect();
 
     return {
-        left: r.left,
-        width: r.width
+
+        left:
+            rect.left,
+
+        width:
+            rect.width
     };
-}
-
-
-function timeToX(t){
-
-    const g =
-        timelineGeometry();
-
-    return (
-        g.left +
-        clamp(
-            t / state.duration,
-            0,
-            1
-        ) * g.width
-    );
 }
 
 
 function xToTime(clientX){
 
-    const g =
+    const geometry =
         timelineGeometry();
 
-    return (
-        !g.width || !state.duration
-            ? 0
-            : clamp(
-                (
-                    (clientX - g.left) /
-                    g.width
-                ) * state.duration,
-                0,
-                state.duration
-            )
+
+    if(
+        !geometry.width ||
+        !state.duration
+    ){
+
+        return 0;
+    }
+
+
+    return clamp(
+
+        (
+            (
+                clientX -
+                geometry.left
+            ) /
+            geometry.width
+        ) *
+        state.duration,
+
+        0,
+
+        state.duration
     );
 }
 
 
-function chooseStep(duration,width){
+function chooseStep(
+    duration,
+    width
+){
 
-    const target = 85;
+    const target =
+        85;
 
     const approx =
         duration /
@@ -1670,6 +2302,7 @@ function chooseStep(duration,width){
             1,
             width / target
         );
+
 
     return [
         .1,
@@ -1693,132 +2326,178 @@ function chooseStep(duration,width){
 
 function renderAxis(){
 
-    els.axis.innerHTML = '';
+    els.axis.innerHTML =
+        '';
+
 
     if(!state.duration){
         return;
     }
 
-    const w = els.axis.clientWidth;
+
+    const width =
+        els.axis.clientWidth;
+
 
     const step =
         chooseStep(
             state.duration,
-            w
+            width
         );
 
 
     for(
         let t = 0;
-        t <= state.duration + .0001;
+        t <=
+            state.duration +
+            .0001;
         t += step
     ){
 
-        const n =
-            document.createElement('div');
+        const tick =
+            document.createElement(
+                'div'
+            );
 
-        n.className = 'tick';
+        tick.className =
+            'tick';
 
-        n.style.left =
-            `${t/state.duration*100}%`;
+        tick.style.left =
+            `${t / state.duration * 100}%`;
 
-        n.textContent =
+        tick.textContent =
             shortTime(t);
 
-        els.axis.appendChild(n);
+        els.axis.appendChild(
+            tick
+        );
     }
 }
 
 
 function renderTimeline(){
 
-    els.tracks.innerHTML = '';
+    els.tracks.innerHTML =
+        '';
 
-    els.content.style.width = '100%';
 
     const groups = [
+
         ['text','テキスト'],
+
         ['box','強調枠'],
+
         ['skip','スキップ']
     ];
 
 
-    for(const [type,label] of groups){
+    for(
+        const [type,label]
+        of groups
+    ){
 
         const row =
-            document.createElement('div');
+            document.createElement(
+                'div'
+            );
 
         row.className =
             'track-row';
 
 
-        const l =
-            document.createElement('div');
+        const trackLabel =
+            document.createElement(
+                'div'
+            );
 
-        l.className =
+        trackLabel.className =
             'track-label';
 
 
         const dot =
-            document.createElement('span');
+            document.createElement(
+                'span'
+            );
 
         dot.className =
             'type-dot';
 
         dot.style.background =
-            color(type);
+            elementColor(type);
 
 
-        l.append(
+        trackLabel.append(
             dot,
-            document.createTextNode(label)
+            document.createTextNode(
+                label
+            )
         );
 
 
         const lane =
-            document.createElement('div');
+            document.createElement(
+                'div'
+            );
 
         lane.className =
             'track-lane';
 
 
         const grid =
-            document.createElement('div');
+            document.createElement(
+                'div'
+            );
 
         grid.className =
             'track-grid';
 
-
         grid.style.backgroundImage =
-            'linear-gradient(to right,rgba(148,163,184,.09) 1px,transparent 1px)';
+            'linear-gradient(' +
+            'to right,' +
+            'rgba(148,163,184,.09) 1px,' +
+            'transparent 1px' +
+            ')';
 
 
         grid.style.backgroundSize =
-            `${Math.max(10,100/state.duration)}% 100%`;
+            `${Math.max(
+                10,
+                100 / state.duration
+            )}% 100%`;
 
 
-        lane.appendChild(grid);
+        lane.appendChild(
+            grid
+        );
 
 
         (
-            state.project?.elements || []
+            state.project?.elements ||
+            []
         )
             .filter(
-                e => e.type === type
+                element =>
+                    element.type === type
             )
             .forEach(
-                e => lane.appendChild(
-                    bar(e)
-                )
+                element =>
+                    lane.appendChild(
+                        createTimelineBar(
+                            element
+                        )
+                    )
             );
 
 
         row.append(
-            l,
+            trackLabel,
             lane
         );
 
-        els.tracks.appendChild(row);
+
+        els.tracks.appendChild(
+            row
+        );
     }
 
 
@@ -1826,21 +2505,29 @@ function renderTimeline(){
 }
 
 
-function bar(e){
+function createTimelineBar(
+    element
+){
 
-    const b =
-        document.createElement('div');
+    const bar =
+        document.createElement(
+            'div'
+        );
 
-    b.className =
+    bar.className =
         'element-bar';
 
-    b.dataset.id =
-        e.id;
+    bar.dataset.id =
+        element.id;
 
 
-    if(state.selectedIds.has(e.id)){
+    if(
+        state.selectedIds.has(
+            element.id
+        )
+    ){
 
-        b.classList.add(
+        bar.classList.add(
             state.selectedIds.size > 1
                 ? 'multi-selected'
                 : 'selected'
@@ -1848,132 +2535,166 @@ function bar(e){
     }
 
 
-    b.style.left =
-        `${e.start/state.duration*100}%`;
+    bar.style.left =
+        `${
+            element.start /
+            state.duration *
+            100
+        }%`;
 
-    b.style.width =
+
+    bar.style.width =
         `${Math.max(
             .001,
-            (e.end-e.start)/state.duration*100
+            (
+                element.end -
+                element.start
+            ) /
+            state.duration *
+            100
         )}%`;
 
-    b.style.color =
-        e.color;
 
-    b.style.background =
-        rgba(e.color,.2);
+    bar.style.color =
+        element.color;
+
+
+    bar.style.background =
+        rgba(
+            element.color,
+            .2
+        );
 
 
     const label =
-        document.createElement('span');
+        document.createElement(
+            'span'
+        );
 
     label.className =
         'bar-label';
 
     label.textContent =
-        `${e.name} ${time(e.start)} ～ ${time(e.end)}`;
+        `${element.name} ` +
+        `${time(element.start)} ～ ` +
+        `${time(element.end)}`;
 
 
-    const lh =
-        document.createElement('span');
+    const left =
+        document.createElement(
+            'span'
+        );
 
-    lh.className =
+    left.className =
         'handle left';
 
-    lh.dataset.edge =
+    left.dataset.edge =
         'left';
 
 
-    const rh =
-        document.createElement('span');
+    const right =
+        document.createElement(
+            'span'
+        );
 
-    rh.className =
+    right.className =
         'handle right';
 
-    rh.dataset.edge =
+    right.dataset.edge =
         'right';
 
 
-    b.append(
+    bar.append(
         label,
-        lh,
-        rh
+        left,
+        right
     );
 
 
-    b.addEventListener(
+    bar.addEventListener(
         'pointerdown',
-        beginDrag
+        beginTimelineDrag
     );
 
 
-    b.addEventListener(
+    bar.addEventListener(
         'click',
-        ev => {
+        event => {
 
-            ev.stopPropagation();
+            event.stopPropagation();
 
             selectElement(
-                e.id,
-                ev.shiftKey
+                element.id,
+                event.shiftKey
             );
-
         }
     );
 
 
-    b.addEventListener(
+    bar.addEventListener(
         'dblclick',
-        ev => {
+        event => {
 
-            ev.stopPropagation();
+            event.stopPropagation();
 
-            openElement(e.id);
-
+            openElement(
+                element.id
+            );
         }
     );
 
 
-    b.addEventListener(
+    bar.addEventListener(
         'contextmenu',
-        ev => {
+        event => {
 
-            ev.preventDefault();
-            ev.stopPropagation();
+            event.preventDefault();
+
+            event.stopPropagation();
 
             selectElement(
-                e.id,
-                ev.shiftKey
+                element.id,
+                event.shiftKey
             );
 
             openMenu(
-                ev.clientX,
-                ev.clientY,
-                e.id,
+                event.clientX,
+                event.clientY,
+                element.id,
                 null
             );
-
         }
     );
 
 
-    return b;
+    return bar;
 }
 
 
+/* ========================================
+   選択・接続
+======================================== */
+
 function selectElement(
     id,
-    additive = false
+    additive=false
 ){
 
-    const e = get(id);
+    const element =
+        getElement(id);
 
-    if(!e){
+
+    if(!element){
         return;
     }
 
 
+    state.selectedConnectionId =
+        null;
+
+
     if(!additive){
+
         state.selectedIds.clear();
     }
 
@@ -1983,12 +2704,15 @@ function selectElement(
         state.selectedIds.has(id)
     ){
 
-        state.selectedIds.delete(id);
+        state.selectedIds.delete(
+            id
+        );
 
     }else{
 
-        state.selectedIds.add(id);
-
+        state.selectedIds.add(
+            id
+        );
     }
 
 
@@ -1997,8 +2721,9 @@ function selectElement(
         !additive
     ){
 
-        seek(e.start);
-
+        seek(
+            element.start
+        );
     }
 
 
@@ -2006,12 +2731,18 @@ function selectElement(
 
     renderTimeline();
 
-    renderConnections();
-
     renderOverlay();
 
+    renderVideoConnections();
 
-    if(state.selectedIds.size === 2){
+
+    /*
+     * 2要素を選択したら接続する。
+     */
+    if(
+        state.selectedIds.size === 2
+    ){
+
         connectSelected();
     }
 }
@@ -2019,24 +2750,41 @@ function selectElement(
 
 function connectSelected(){
 
-    const ids =
-        [...state.selectedIds];
+    if(
+        !state.project ||
+        state.selectedIds.size !== 2
+    ){
 
-    if(ids.length !== 2){
         return;
     }
 
 
-    const [a,b] = ids;
+    const ids =
+        [...state.selectedIds];
 
 
-    if(
+    const from =
+        ids[0];
+
+    const to =
+        ids[1];
+
+
+    const exists =
         state.project.connections.some(
-            c =>
-                (c.from === a && c.to === b) ||
-                (c.from === b && c.to === a)
-        )
-    ){
+            connection =>
+                (
+                    connection.from === from &&
+                    connection.to === to
+                ) ||
+                (
+                    connection.from === to &&
+                    connection.to === from
+                )
+        );
+
+
+    if(exists){
 
         toast(
             'この2要素はすでに接続されています'
@@ -2046,28 +2794,30 @@ function connectSelected(){
     }
 
 
-    const e = get(a);
+    const source =
+        getElement(from);
 
 
     state.project.connections.push({
 
-        id: uid('c'),
+        id:
+            uid('c'),
 
-        from: a,
+        from,
 
-        to: b,
+        to,
 
         color:
-            e?.color || '#60a5fa',
+            source?.color ||
+            '#60a5fa',
 
-        width: 3
-
+        width:3
     });
 
 
     markDirty();
 
-    renderConnections();
+    renderVideoConnections();
 
     toast(
         '2要素を接続しました'
@@ -2084,37 +2834,178 @@ function updateHint(){
 }
 
 
+/* ========================================
+   動画上の要素
+======================================== */
+
+function getVideoRect(){
+
+    const rect =
+        els.video.getBoundingClientRect();
+
+
+    return {
+
+        left:
+            rect.left,
+
+        top:
+            rect.top,
+
+        width:
+            rect.width,
+
+        height:
+            rect.height
+    };
+}
+
+
+function elementPixelRect(
+    element
+){
+
+    const video =
+        getVideoRect();
+
+
+    return {
+
+        left:
+            video.left +
+            video.width *
+            element.x /
+            100,
+
+        top:
+            video.top +
+            video.height *
+            element.y /
+            100,
+
+        width:
+            video.width *
+            element.w /
+            100,
+
+        height:
+            video.height *
+            element.h /
+            100
+    };
+}
+
+
 function renderOverlay(){
 
-    els.overlay.innerHTML = '';
+    els.overlay.innerHTML =
+        '';
+
 
     if(!canEdit()){
         return;
     }
 
 
-    for(
-        const e of state.project.elements
+    /*
+     * SVGは要素より下、要素はその上に表示する。
+     */
+    const connectionSvg =
+        document.createElementNS(
+            'http://www.w3.org/2000/svg',
+            'svg'
+        );
+
+    connectionSvg.id =
+        'videoConnectionSvg';
+
+    connectionSvg.classList.add(
+        'video-connection-svg'
+    );
+
+    connectionSvg.style.pointerEvents =
+        'none';
+
+
+    els.overlay.appendChild(
+        connectionSvg
+    );
+
+
+    const videoRect =
+        getVideoRect();
+
+
+    if(
+        !videoRect.width ||
+        !videoRect.height
     ){
 
-        if(!visible(e)){
+        return;
+    }
+
+
+    connectionSvg.style.left =
+        `${videoRect.left -
+          els.videoWrap.getBoundingClientRect().left}px`;
+
+
+    connectionSvg.style.top =
+        `${videoRect.top -
+          els.videoWrap.getBoundingClientRect().top}px`;
+
+
+    connectionSvg.setAttribute(
+        'width',
+        videoRect.width
+    );
+
+    connectionSvg.setAttribute(
+        'height',
+        videoRect.height
+    );
+
+    connectionSvg.setAttribute(
+        'viewBox',
+        `0 0 ${videoRect.width} ${videoRect.height}`
+    );
+
+
+    /*
+     * 要素を表示。
+     */
+    for(
+        const element
+        of state.project.elements
+    ){
+
+        if(
+            !visible(element)
+        ){
+
             continue;
         }
 
 
-        const n =
-            document.createElement('div');
+        const node =
+            document.createElement(
+                'div'
+            );
 
-        n.className =
+        node.className =
             'overlay-element';
 
-        n.dataset.id =
-            e.id;
+        node.dataset.id =
+            element.id;
 
 
-        if(state.selectedIds.has(e.id)){
+        if(
+            state.selectedIds.has(
+                element.id
+            )
+        ){
 
-            n.classList.add(
+            node.classList.add(
                 state.selectedIds.size > 1
                     ? 'multi-selected'
                     : 'selected'
@@ -2122,279 +3013,831 @@ function renderOverlay(){
         }
 
 
-        n.style.cssText =
-            `left:${e.x}%;` +
-            `top:${e.y}%;` +
-            `width:${e.w}%;` +
-            `height:${e.h}%;` +
-            `color:${e.color}`;
+        node.style.left =
+            `${
+                videoRect.left -
+                els.videoWrap.getBoundingClientRect().left +
+                videoRect.width *
+                element.x /
+                100
+            }px`;
 
 
-        if(e.type === 'text'){
+        node.style.top =
+            `${
+                videoRect.top -
+                els.videoWrap.getBoundingClientRect().top +
+                videoRect.height *
+                element.y /
+                100
+            }px`;
 
-            const t =
-                document.createElement('div');
 
-            t.className =
+        node.style.width =
+            `${
+                videoRect.width *
+                element.w /
+                100
+            }px`;
+
+
+        node.style.height =
+            `${
+                videoRect.height *
+                element.h /
+                100
+            }px`;
+
+
+        node.style.color =
+            element.color;
+
+
+        if(
+            element.type === 'text'
+        ){
+
+            const text =
+                document.createElement(
+                    'div'
+                );
+
+            text.className =
                 'overlay-text';
 
-            t.textContent =
-                e.text || e.name;
+            text.textContent =
+                element.text ||
+                element.name;
 
-            t.style.fontSize =
-                e.fontSize + 'px';
+            text.style.fontSize =
+                element.fontSize +
+                'px';
 
-            t.style.fontWeight =
-                e.fontWeight;
+            text.style.fontWeight =
+                element.fontWeight;
 
-            n.appendChild(t);
+            node.appendChild(
+                text
+            );
 
-        }else if(e.type === 'box'){
+        }else if(
+            element.type === 'box'
+        ){
 
-            const x =
-                document.createElement('div');
+            const box =
+                document.createElement(
+                    'div'
+                );
 
-            x.className =
+            box.className =
                 'overlay-box';
 
-            n.appendChild(x);
+            node.appendChild(
+                box
+            );
 
         }else{
 
-            const x =
-                document.createElement('div');
+            const skip =
+                document.createElement(
+                    'div'
+                );
 
-            x.className =
+            skip.className =
                 'overlay-skip';
 
-            x.textContent =
+            skip.textContent =
                 'スキップ';
 
-            n.appendChild(x);
+            node.appendChild(
+                skip
+            );
         }
 
 
-        n.addEventListener(
-            'pointerdown',
-            ev => ev.stopPropagation()
+        /*
+         * 8方向のリサイズハンドル。
+         */
+        [
+            'nw',
+            'n',
+            'ne',
+            'e',
+            'se',
+            's',
+            'sw',
+            'w'
+        ].forEach(
+            direction => {
+
+                const handle =
+                    document.createElement(
+                        'span'
+                    );
+
+                handle.className =
+                    `resize-handle ${direction}`;
+
+                handle.dataset.direction =
+                    direction;
+
+                node.appendChild(
+                    handle
+                );
+            }
         );
 
 
-        n.addEventListener(
-            'click',
-            ev => {
+        /*
+         * 動画上の位置変更・サイズ変更。
+         */
+        node.addEventListener(
+            'pointerdown',
+            event => {
 
-                ev.stopPropagation();
+                if(
+                    event.button !== 0
+                ){
+
+                    return;
+                }
+
+
+                event.stopPropagation();
+
+                event.preventDefault();
+
+                startVideoElementDrag(
+                    event,
+                    element
+                );
+            }
+        );
+
+
+        node.addEventListener(
+            'click',
+            event => {
+
+                event.stopPropagation();
+
+                if(
+                    !state.drag
+                ){
+
+                    selectElement(
+                        element.id,
+                        event.shiftKey
+                    );
+                }
+            }
+        );
+
+
+        node.addEventListener(
+            'dblclick',
+            event => {
+
+                event.stopPropagation();
+
+                openElement(
+                    element.id
+                );
+            }
+        );
+
+
+        node.addEventListener(
+            'contextmenu',
+            event => {
+
+                event.preventDefault();
+
+                event.stopPropagation();
 
                 selectElement(
-                    e.id,
-                    ev.shiftKey
+                    element.id,
+                    event.shiftKey
                 );
 
+                openMenu(
+                    event.clientX,
+                    event.clientY,
+                    element.id,
+                    null
+                );
             }
         );
 
 
-        n.addEventListener(
-            'dblclick',
-            ev => {
-
-                ev.stopPropagation();
-
-                openElement(e.id);
-
-            }
+        els.overlay.appendChild(
+            node
         );
-
-
-        els.overlay.appendChild(n);
-    }
-}
-
-
-function getBar(id){
-
-    return els.tracks.querySelector(
-        `.element-bar[data-id="${CSS.escape(id)}"]`
-    );
-}
-
-
-/*
- * 接続線の始点・終点を
- * connectionSvg自身の座標系に変換する。
- *
- * これが今回の修正の中心。
- */
-function anchor(id,side){
-
-    const b =
-        getBar(id);
-
-    if(!b){
-        return null;
     }
 
 
-    const svgRect =
-        els.svg.getBoundingClientRect();
-
-    const br =
-        b.getBoundingClientRect();
-
-
-    return {
-
-        x:
-            (
-                side === 'right'
-                    ? br.right
-                    : br.left
-            ) - svgRect.left,
-
-        y:
-            br.top +
-            br.height / 2 -
-            svgRect.top
-    };
+    /*
+     * 要素を描画した後に接続線を描画。
+     */
+    renderVideoConnections();
 }
 
 
-function renderConnections(){
+/* ========================================
+   動画上の要素ドラッグ
+======================================== */
 
-    els.svg.innerHTML = '';
+function startVideoElementDrag(
+    event,
+    element
+){
 
-    els.preview.innerHTML = '';
-
-
-    const svgRect =
-        els.svg.getBoundingClientRect();
-
-
-    const cr =
-        els.content.getBoundingClientRect();
+    const video =
+        getVideoRect();
 
 
-    const w =
-        Math.max(
-            1,
-            cr.width - parseFloat(
-                getComputedStyle(
-                    document.documentElement
-                ).getPropertyValue('--label')
-            )
-        );
-
-
-    const h =
-        Math.max(
-            els.content.scrollHeight,
-            els.content.clientHeight
-        );
-
-
-    for(
-        const s of [
-            els.svg,
-            els.preview
-        ]
+    if(
+        !video.width ||
+        !video.height
     ){
 
-        s.setAttribute(
-            'width',
-            w
-        );
-
-        s.setAttribute(
-            'height',
-            Math.max(
-                1,
-                h - 34
-            )
-        );
-
-        s.setAttribute(
-            'viewBox',
-            `0 0 ${w} ${Math.max(1,h-34)}`
-        );
-    }
-
-
-    if(!state.project){
         return;
     }
 
 
-    for(
-        const c of state.project.connections
+    const handle =
+        event.target.closest(
+            '.resize-handle'
+        );
+
+
+    /*
+     * 選択状態を更新。
+     */
+    if(
+        !state.selectedIds.has(
+            element.id
+        )
     ){
 
-        const a =
-            anchor(
-                c.from,
+        selectElement(
+            element.id,
+            event.shiftKey
+        );
+    }
+
+
+    state.drag = {
+
+        kind:'video-element',
+
+        id:
+            element.id,
+
+        mode:
+            handle
+                ? 'resize'
+                : 'move',
+
+        direction:
+            handle?.dataset.direction ||
+            '',
+
+        startClientX:
+            event.clientX,
+
+        startClientY:
+            event.clientY,
+
+        original:{
+
+            x:
+                element.x,
+
+            y:
+                element.y,
+
+            w:
+                element.w,
+
+            h:
+                element.h
+        },
+
+        videoWidth:
+            video.width,
+
+        videoHeight:
+            video.height
+    };
+
+
+    window.addEventListener(
+        'pointermove',
+        moveVideoElementDrag
+    );
+
+
+    window.addEventListener(
+        'pointerup',
+        endVideoElementDrag,
+        {
+            once:true
+        }
+    );
+}
+
+
+function moveVideoElementDrag(
+    event
+){
+
+    const drag =
+        state.drag;
+
+
+    if(
+        !drag ||
+        drag.kind !==
+            'video-element'
+    ){
+
+        return;
+    }
+
+
+    const element =
+        getElement(
+            drag.id
+        );
+
+
+    if(!element){
+        return;
+    }
+
+
+    const dx =
+        (
+            event.clientX -
+            drag.startClientX
+        );
+
+
+    const dy =
+        (
+            event.clientY -
+            drag.startClientY
+        );
+
+
+    const dxPercent =
+        dx /
+        drag.videoWidth *
+        100;
+
+
+    const dyPercent =
+        dy /
+        drag.videoHeight *
+        100;
+
+
+    const original =
+        drag.original;
+
+
+    const minWidth =
+        2;
+
+
+    const minHeight =
+        2;
+
+
+    if(
+        drag.mode === 'move'
+    ){
+
+        element.x =
+            clamp(
+                original.x +
+                dxPercent,
+                0,
+                100 -
+                original.w
+            );
+
+
+        element.y =
+            clamp(
+                original.y +
+                dyPercent,
+                0,
+                100 -
+                original.h
+            );
+
+    }else{
+
+        resizeVideoElement(
+            element,
+            original,
+            drag.direction,
+            dxPercent,
+            dyPercent,
+            minWidth,
+            minHeight
+        );
+    }
+
+
+    markDirty();
+
+    /*
+     * 動画上の要素を再描画。
+     * これにより接続線も追従する。
+     */
+    renderOverlay();
+
+    renderVideoConnections();
+}
+
+
+function resizeVideoElement(
+    element,
+    original,
+    direction,
+    dx,
+    dy,
+    minWidth,
+    minHeight
+){
+
+    let x =
+        original.x;
+
+    let y =
+        original.y;
+
+    let w =
+        original.w;
+
+    let h =
+        original.h;
+
+
+    if(
+        direction.includes('w')
+    ){
+
+        const nextX =
+            clamp(
+                original.x +
+                dx,
+                0,
+                original.x +
+                original.w -
+                minWidth
+            );
+
+        x =
+            nextX;
+
+        w =
+            original.w -
+            (
+                nextX -
+                original.x
+            );
+    }
+
+
+    if(
+        direction.includes('e')
+    ){
+
+        w =
+            clamp(
+                original.w +
+                dx,
+                minWidth,
+                100 -
+                original.x
+            );
+    }
+
+
+    if(
+        direction.includes('n')
+    ){
+
+        const nextY =
+            clamp(
+                original.y +
+                dy,
+                0,
+                original.y +
+                original.h -
+                minHeight
+            );
+
+        y =
+            nextY;
+
+        h =
+            original.h -
+            (
+                nextY -
+                original.y
+            );
+    }
+
+
+    if(
+        direction.includes('s')
+    ){
+
+        h =
+            clamp(
+                original.h +
+                dy,
+                minHeight,
+                100 -
+                original.y
+            );
+    }
+
+
+    element.x =
+        x;
+
+    element.y =
+        y;
+
+    element.w =
+        w;
+
+    element.h =
+        h;
+}
+
+
+function endVideoElementDrag(){
+
+    state.drag =
+        null;
+
+
+    window.removeEventListener(
+        'pointermove',
+        moveVideoElementDrag
+    );
+
+
+    renderAll();
+}
+
+
+/* ========================================
+   動画上の接続線
+======================================== */
+
+function getOverlayElement(
+    id
+){
+
+    return els.overlay.querySelector(
+        `.overlay-element[data-id="${CSS.escape(id)}"]`
+    );
+}
+
+
+function videoConnectionPoint(
+    id,
+    side
+){
+
+    const element =
+        getElement(id);
+
+
+    const node =
+        getOverlayElement(id);
+
+
+    if(
+        !element ||
+        !node ||
+        !visible(element)
+    ){
+
+        return null;
+    }
+
+
+    const video =
+        getVideoRect();
+
+
+    const wrap =
+        els.videoWrap.getBoundingClientRect();
+
+
+    const rect =
+        node.getBoundingClientRect();
+
+
+    let x;
+
+    if(side === 'right'){
+
+        x =
+            rect.right -
+            video.left;
+
+    }else{
+
+        x =
+            rect.left -
+            video.left;
+    }
+
+
+    const y =
+        rect.top +
+        rect.height / 2 -
+        video.top;
+
+
+    return {
+        x,
+        y
+    };
+}
+
+
+function renderVideoConnections(){
+
+    const svg =
+        document.getElementById(
+            'videoConnectionSvg'
+        );
+
+
+    if(!svg){
+        return;
+    }
+
+
+    svg.innerHTML =
+        '';
+
+
+    const video =
+        getVideoRect();
+
+
+    if(
+        !video.width ||
+        !video.height ||
+        !state.project
+    ){
+
+        return;
+    }
+
+
+    svg.setAttribute(
+        'width',
+        video.width
+    );
+
+    svg.setAttribute(
+        'height',
+        video.height
+    );
+
+    svg.setAttribute(
+        'viewBox',
+        `0 0 ${video.width} ${video.height}`
+    );
+
+
+    /*
+     * 現在表示されている要素間だけ
+     * 接続線を表示。
+     */
+    for(
+        const connection
+        of state.project.connections
+    ){
+
+        const from =
+            getElement(
+                connection.from
+            );
+
+        const to =
+            getElement(
+                connection.to
+            );
+
+
+        if(
+            !from ||
+            !to ||
+            !visible(from) ||
+            !visible(to)
+        ){
+
+            continue;
+        }
+
+
+        const start =
+            videoConnectionPoint(
+                connection.from,
                 'right'
             );
 
-        const b =
-            anchor(
-                c.to,
+
+        const end =
+            videoConnectionPoint(
+                connection.to,
                 'left'
             );
 
 
         if(
-            a &&
-            b
+            !start ||
+            !end
         ){
 
-            drawConnection(
-                els.svg,
-                a,
-                b,
-                c
-            );
+            continue;
         }
+
+
+        drawVideoConnection(
+            svg,
+            start,
+            end,
+            connection
+        );
     }
 }
 
 
-function drawConnection(
+function drawVideoConnection(
     svg,
-    a,
-    b,
-    c
+    start,
+    end,
+    connection
 ){
 
-    /*
-     * 左→右だけでなく、要素の順番が
-     * 逆の場合も見やすいようにカーブ量を確保する。
-     */
     const distance =
         Math.abs(
-            b.x - a.x
+            end.x -
+            start.x
         );
 
 
     const bend =
         Math.max(
-            32,
+            30,
             Math.min(
-                120,
+                140,
                 distance * .35
             )
         );
 
 
+    /*
+     * 接続先が左側にある場合でも
+     * 見やすい曲線になるようにする。
+     */
+    const direction =
+        end.x >= start.x
+            ? 1
+            : -1;
+
+
     const pathData =
-        `M ${a.x} ${a.y} ` +
-        `C ${a.x+bend} ${a.y}, ` +
-        `${b.x-bend} ${b.y}, ` +
-        `${b.x} ${b.y}`;
+        end.x >= start.x
+
+            ? `M ${start.x} ${start.y}
+               C ${start.x + bend} ${start.y},
+                 ${end.x - bend} ${end.y},
+                 ${end.x} ${end.y}`
+
+            : `M ${start.x} ${start.y}
+               C ${start.x - bend} ${start.y},
+                 ${end.x + bend} ${end.y},
+                 ${end.x} ${end.y}`;
 
 
     /*
-     * 接続線の外周。
-     * 暗い背景やグリッドの上でも線が埋もれないようにする。
+     * 黒い外周。
      */
     const halo =
         document.createElementNS(
@@ -2402,9 +3845,11 @@ function drawConnection(
             'path'
         );
 
+
     halo.classList.add(
-        'connection-path-halo'
+        'video-connection-halo'
     );
+
 
     halo.setAttribute(
         'd',
@@ -2412,148 +3857,116 @@ function drawConnection(
     );
 
 
-    svg.appendChild(halo);
+    svg.appendChild(
+        halo
+    );
 
 
     /*
-     * 接続線本体。
+     * 本線。
      */
-    const p =
+    const path =
         document.createElementNS(
             'http://www.w3.org/2000/svg',
             'path'
         );
 
 
-    p.classList.add(
-        'connection-path'
+    path.classList.add(
+        'video-connection-path'
     );
 
 
     if(
-        state.selectedConnectionId === c.id
+        state.selectedConnectionId ===
+        connection.id
     ){
 
-        p.classList.add(
+        path.classList.add(
             'selected'
         );
     }
 
 
-    /*
-     * 接続線の色は要素色を利用する。
-     * ただし視認性を優先して明るめにする。
-     */
-    const connectionColor =
-        c.color || '#60a5fa';
-
-
-    p.setAttribute(
+    path.setAttribute(
         'stroke',
-        connectionColor
+        connection.color ||
+        '#60a5fa'
     );
 
 
-    p.setAttribute(
+    path.setAttribute(
         'stroke-width',
-        state.selectedConnectionId === c.id
+        state.selectedConnectionId ===
+            connection.id
             ? 5
             : 3
     );
 
 
-    p.setAttribute(
+    path.setAttribute(
         'd',
         pathData
     );
 
 
-    p.addEventListener(
-        'click',
-        ev => {
-
-            ev.stopPropagation();
-
-            state.selectedConnectionId =
-                c.id;
-
-            state.selectedIds.clear();
-
-            renderConnections();
-
-            openMenu(
-                ev.clientX,
-                ev.clientY,
-                null,
-                c.id
-            );
-
-        }
+    svg.appendChild(
+        path
     );
 
 
-    svg.appendChild(p);
-
-
     /*
-     * 接続先を明示する丸いエンドポイント。
+     * 接続先。
      */
-    const end =
+    const endpoint =
         document.createElementNS(
             'http://www.w3.org/2000/svg',
             'circle'
         );
 
 
-    end.setAttribute(
+    endpoint.classList.add(
+        'video-connection-endpoint'
+    );
+
+
+    endpoint.setAttribute(
         'cx',
-        b.x
+        end.x
     );
 
-    end.setAttribute(
+    endpoint.setAttribute(
         'cy',
-        b.y
+        end.y
     );
 
-    end.setAttribute(
+    endpoint.setAttribute(
         'r',
-        state.selectedConnectionId === c.id
-            ? 6
+        state.selectedConnectionId ===
+            connection.id
+            ? 7
             : 5
     );
 
-    end.setAttribute(
+    endpoint.setAttribute(
         'fill',
-        connectionColor
-    );
-
-    end.setAttribute(
-        'class',
-        'connection-endpoint'
+        connection.color ||
+        '#60a5fa'
     );
 
 
-    svg.appendChild(end);
+    svg.appendChild(
+        endpoint
+    );
 
 
     /*
-     * 接続先に矢印を付ける。
+     * 矢印。
      */
-    const angle =
-        Math.atan2(
-            b.y - (
-                b.y
-            ),
-            b.x - (
-                b.x - Math.max(10,bend)
-            )
-        );
+    const arrowSize =
+        8;
 
 
-    /*
-     * 曲線終端付近の方向を簡易的に
-     * 右向きとして矢印を配置する。
-     */
     const arrow =
         document.createElementNS(
             'http://www.w3.org/2000/svg',
@@ -2562,33 +3975,60 @@ function drawConnection(
 
 
     arrow.classList.add(
-        'connection-arrow'
+        'video-connection-arrow'
     );
 
 
-    const ax = b.x;
-    const ay = b.y;
-    const size = 7;
+    const arrowX =
+        end.x;
+
+
+    const arrowY =
+        end.y;
+
+
+    const arrowPath =
+        direction === 1
+
+            ? `M ${arrowX - arrowSize}
+                 ${arrowY - arrowSize}
+               L ${arrowX}
+                 ${arrowY}
+               L ${arrowX - arrowSize}
+                 ${arrowY + arrowSize}
+               Z`
+
+            : `M ${arrowX + arrowSize}
+                 ${arrowY - arrowSize}
+               L ${arrowX}
+                 ${arrowY}
+               L ${arrowX + arrowSize}
+                 ${arrowY + arrowSize}
+               Z`;
 
 
     arrow.setAttribute(
         'd',
-        `M ${ax-size} ${ay-size}
-         L ${ax} ${ay}
-         L ${ax-size} ${ay+size}
-         Z`
+        arrowPath
     );
 
 
     arrow.setAttribute(
         'fill',
-        connectionColor
+        connection.color ||
+        '#60a5fa'
     );
 
 
-    svg.appendChild(arrow);
+    svg.appendChild(
+        arrow
+    );
 }
 
+
+/* ========================================
+   再生位置
+======================================== */
 
 function updatePlayhead(){
 
@@ -2605,12 +4045,12 @@ function updatePlayhead(){
         'block';
 
 
-    const g =
+    const geometry =
         timelineGeometry();
 
 
     const x =
-        g.width *
+        geometry.width *
         clamp(
             state.currentTime /
             state.duration,
@@ -2620,70 +4060,98 @@ function updatePlayhead(){
 
 
     els.playhead.style.left =
-        `calc(var(--label) + ${x}px)`;
+        `calc(
+            var(--label) +
+            ${x}px
+        )`;
 
 
     els.playheadLabel.textContent =
-        time(state.currentTime);
+        time(
+            state.currentTime
+        );
 
 
     els.readout.textContent =
-        `${time(state.currentTime)} / ${time(state.duration)}`;
+        `${time(
+            state.currentTime
+        )} / ${time(
+            state.duration
+        )}`;
 }
 
 
-function seek(t){
+function seek(value){
 
     state.currentTime =
         clamp(
-            Number(t) || 0,
+            Number(value) || 0,
             0,
             state.duration
         );
 
 
     try{
+
         els.video.currentTime =
             state.currentTime;
+
     }catch(_){}
 
 
     renderOverlay();
 
-    updatePlayhead();
+    renderVideoConnections();
 
-    renderConnections();
+    updatePlayhead();
 }
 
 
-function beginDrag(ev){
+/* ========================================
+   タイムライン上の操作
+======================================== */
 
-    const b =
-        ev.currentTarget;
+function beginTimelineDrag(
+    event
+){
 
-    const e =
-        get(b.dataset.id);
+    const bar =
+        event.currentTarget;
 
-    if(!e){
+
+    const element =
+        getElement(
+            bar.dataset.id
+        );
+
+
+    if(!element){
         return;
     }
 
 
-    ev.stopPropagation();
-    ev.preventDefault();
+    event.preventDefault();
+
+    event.stopPropagation();
 
 
     const handle =
-        ev.target.closest('.handle');
+        event.target.closest(
+            '.handle'
+        );
 
 
     const lane =
-        b.parentElement;
+        bar.parentElement;
 
 
     state.drag = {
 
-        id: e.id,
+        kind:
+            'timeline',
+
+        id:
+            element.id,
 
         mode:
             handle
@@ -2691,106 +4159,132 @@ function beginDrag(ev){
                 : 'move',
 
         edge:
-            handle?.dataset.edge || '',
+            handle?.dataset.edge ||
+            '',
 
-        x:
-            ev.clientX,
+        startClientX:
+            event.clientX,
 
-        original: {
-            start:e.start,
-            end:e.end
+        original:{
+
+            start:
+                element.start,
+
+            end:
+                element.end
         },
 
         laneWidth:
-            lane.getBoundingClientRect().width
+            lane.getBoundingClientRect()
+                .width
     };
-
-
-    b.setPointerCapture?.(
-        ev.pointerId
-    );
 
 
     window.addEventListener(
         'pointermove',
-        moveDrag
+        moveTimelineDrag
     );
 
 
     window.addEventListener(
         'pointerup',
-        endDrag,
-        {once:true}
+        endTimelineDrag,
+        {
+            once:true
+        }
     );
 }
 
 
-function moveDrag(ev){
+function moveTimelineDrag(
+    event
+){
 
-    const d =
+    const drag =
         state.drag;
 
-    if(!d){
+
+    if(
+        !drag ||
+        drag.kind !==
+            'timeline'
+    ){
+
         return;
     }
 
 
-    const e =
-        get(d.id);
+    const element =
+        getElement(
+            drag.id
+        );
 
-    if(!e){
+
+    if(!element){
         return;
     }
 
 
     const dt =
         (
-            ev.clientX -
-            d.x
+            event.clientX -
+            drag.startClientX
         ) /
         Math.max(
             1,
-            d.laneWidth
+            drag.laneWidth
         ) *
         state.duration;
 
 
-    const min = .05;
+    const minimum =
+        .05;
 
 
-    if(d.mode === 'move'){
+    if(
+        drag.mode === 'move'
+    ){
 
-        const len =
-            d.original.end -
-            d.original.start;
+        const length =
+            drag.original.end -
+            drag.original.start;
 
 
-        e.start =
+        element.start =
             clamp(
-                d.original.start + dt,
+                drag.original.start +
+                dt,
                 0,
-                state.duration - len
+                state.duration -
+                length
             );
 
 
-        e.end =
-            e.start + len;
+        element.end =
+            element.start +
+            length;
 
-    }else if(d.edge === 'left'){
+    }else if(
+        drag.edge === 'left'
+    ){
 
-        e.start =
+        element.start =
             clamp(
-                d.original.start + dt,
+                drag.original.start +
+                dt,
                 0,
-                d.original.end - min
+                drag.original.end -
+                minimum
             );
 
     }else{
 
-        e.end =
+        element.end =
             clamp(
-                d.original.end + dt,
-                d.original.start + min,
+                drag.original.end +
+                dt,
+                drag.original.start +
+                minimum,
                 state.duration
             );
     }
@@ -2802,31 +4296,39 @@ function moveDrag(ev){
 
     renderOverlay();
 
-    renderConnections();
+    renderVideoConnections();
 
     updatePlayhead();
 }
 
 
-function endDrag(){
+function endTimelineDrag(){
 
-    state.drag = null;
+    state.drag =
+        null;
+
 
     window.removeEventListener(
         'pointermove',
-        moveDrag
+        moveTimelineDrag
     );
+
 
     renderAll();
 }
 
 
+/* ========================================
+   要素編集
+======================================== */
+
 function openElement(id){
 
-    const e =
-        get(id);
+    const element =
+        getElement(id);
 
-    if(!e){
+
+    if(!element){
         return;
     }
 
@@ -2836,54 +4338,62 @@ function openElement(id){
 
 
     $('elementName').value =
-        e.name;
+        element.name;
 
     $('elementText').value =
-        e.text;
+        element.text;
 
     $('elementStart').value =
-        e.start;
+        element.start;
 
     $('elementEnd').value =
-        e.end;
+        element.end;
 
     $('elementX').value =
-        e.x;
+        element.x;
 
     $('elementY').value =
-        e.y;
+        element.y;
 
     $('elementW').value =
-        e.w;
+        element.w;
 
     $('elementH').value =
-        e.h;
+        element.h;
 
     $('elementFontSize').value =
-        e.fontSize;
+        element.fontSize;
 
     $('elementFontWeight').value =
-        e.fontWeight;
+        element.fontWeight;
 
 
-    $('textField').classList.toggle(
-        'hidden',
-        e.type !== 'text'
-    );
+    $('textField')
+        .classList
+        .toggle(
+            'hidden',
+            element.type !== 'text'
+        );
 
-    $('fontField').classList.toggle(
-        'hidden',
-        e.type !== 'text'
-    );
 
-    $('weightField').classList.toggle(
-        'hidden',
-        e.type !== 'text'
-    );
+    $('fontField')
+        .classList
+        .toggle(
+            'hidden',
+            element.type !== 'text'
+        );
+
+
+    $('weightField')
+        .classList
+        .toggle(
+            'hidden',
+            element.type !== 'text'
+        );
 
 
     buildColors(
-        e.color
+        element.color
     );
 
 
@@ -2892,58 +4402,74 @@ function openElement(id){
 }
 
 
-function buildColors(active){
+function buildColors(
+    active
+){
 
-    const g =
+    const grid =
         $('colorGrid');
 
-    g.innerHTML = '';
+
+    grid.innerHTML =
+        '';
 
 
-    state.colors.forEach(c => {
+    state.colors.forEach(
+        colorValue => {
 
-        const b =
-            document.createElement(
-                'button'
-            );
-
-        b.type =
-            'button';
-
-        b.className =
-            'color-choice' +
-            (
-                c === active
-                    ? ' active'
-                    : ''
-            );
-
-        b.style.background =
-            c;
-
-        b.dataset.color =
-            c;
+            const button =
+                document.createElement(
+                    'button'
+                );
 
 
-        b.onclick = () => {
+            button.type =
+                'button';
 
-            g.querySelectorAll(
-                '.active'
-            ).forEach(
-                x =>
-                    x.classList.remove(
+            button.className =
+                'color-choice' +
+                (
+                    colorValue === active
+                        ? ' active'
+                        : ''
+                );
+
+
+            button.style.background =
+                colorValue;
+
+
+            button.dataset.color =
+                colorValue;
+
+
+            button.onclick =
+                () => {
+
+                    grid
+                        .querySelectorAll(
+                            '.active'
+                        )
+                        .forEach(
+                            node =>
+                                node.classList
+                                    .remove(
+                                        'active'
+                                    )
+                        );
+
+
+                    button.classList.add(
                         'active'
-                    )
+                    );
+                };
+
+
+            grid.appendChild(
+                button
             );
-
-            b.classList.add(
-                'active'
-            );
-        };
-
-
-        g.appendChild(b);
-    });
+        }
+    );
 }
 
 
@@ -2959,10 +4485,13 @@ function closeElement(){
 
 function saveElement(){
 
-    const e =
-        get(state.modalElementId);
+    const element =
+        getElement(
+            state.modalElementId
+        );
 
-    if(!e){
+
+    if(!element){
         return;
     }
 
@@ -2971,6 +4500,7 @@ function saveElement(){
         Number(
             $('elementStart').value
         );
+
 
     const end =
         Number(
@@ -2995,20 +4525,25 @@ function saveElement(){
     }
 
 
-    e.name =
-        $('elementName').value.trim() ||
+    element.name =
+        $('elementName')
+            .value
+            .trim() ||
         '要素';
 
-    e.text =
+
+    element.text =
         $('elementText').value;
 
-    e.start =
+
+    element.start =
         start;
 
-    e.end =
+    element.end =
         end;
 
-    e.x =
+
+    element.x =
         clamp(
             Number(
                 $('elementX').value
@@ -3017,7 +4552,8 @@ function saveElement(){
             99
         );
 
-    e.y =
+
+    element.y =
         clamp(
             Number(
                 $('elementY').value
@@ -3026,7 +4562,8 @@ function saveElement(){
             99
         );
 
-    e.w =
+
+    element.w =
         clamp(
             Number(
                 $('elementW').value
@@ -3035,7 +4572,8 @@ function saveElement(){
             100
         );
 
-    e.h =
+
+    element.h =
         clamp(
             Number(
                 $('elementH').value
@@ -3044,7 +4582,8 @@ function saveElement(){
             100
         );
 
-    e.fontSize =
+
+    element.fontSize =
         clamp(
             Number(
                 $('elementFontSize').value
@@ -3053,13 +4592,16 @@ function saveElement(){
             100
         );
 
-    e.fontWeight =
+
+    element.fontWeight =
         $('elementFontWeight').value;
 
-    e.color =
+
+    element.color =
         $('colorGrid .active')
-            ?.dataset.color ||
-        e.color;
+            ?.dataset
+            .color ||
+        element.color;
 
 
     markDirty();
@@ -3069,6 +4611,10 @@ function saveElement(){
     renderAll();
 }
 
+
+/* ========================================
+   要素追加
+======================================== */
 
 function addElement(type){
 
@@ -3087,8 +4633,10 @@ function addElement(type){
         clamp(
             state.currentTime,
             0,
-            state.duration - .05
+            state.duration -
+            .05
         );
+
 
     const end =
         Math.min(
@@ -3109,7 +4657,7 @@ function addElement(type){
         null;
 
 
-    const e = {
+    const element = {
 
         id:
             uid('el'),
@@ -3133,17 +4681,25 @@ function addElement(type){
         end,
 
         x:
-            xy.x,
+            clamp(
+                xy.x,
+                0,
+                99
+            ),
 
         y:
-            xy.y,
+            clamp(
+                xy.y,
+                0,
+                99
+            ),
 
         w:35,
 
         h:18,
 
         color:
-            color(type),
+            elementColor(type),
 
         fontSize:28,
 
@@ -3151,33 +4707,49 @@ function addElement(type){
     };
 
 
-    state.project.elements.push(e);
+    state.project.elements.push(
+        element
+    );
+
 
     state.selectedIds.clear();
 
-    state.selectedIds.add(e.id);
+    state.selectedIds.add(
+        element.id
+    );
+
 
     markDirty();
 
     renderAll();
 
-    openElement(e.id);
+    openElement(
+        element.id
+    );
 }
 
 
+/* ========================================
+   削除・接続解除
+======================================== */
+
 function deleteSelected(){
 
-    if(state.selectedConnectionId){
+    if(
+        state.selectedConnectionId
+    ){
 
         state.project.connections =
             state.project.connections.filter(
-                c =>
-                    c.id !==
+                connection =>
+                    connection.id !==
                     state.selectedConnectionId
             );
 
+
         state.selectedConnectionId =
             null;
+
 
         markDirty();
 
@@ -3187,7 +4759,10 @@ function deleteSelected(){
     }
 
 
-    if(!state.selectedIds.size){
+    if(
+        !state.selectedIds.size
+    ){
+
         return;
     }
 
@@ -3200,15 +4775,22 @@ function deleteSelected(){
 
     state.project.elements =
         state.project.elements.filter(
-            e => !ids.has(e.id)
+            element =>
+                !ids.has(
+                    element.id
+                )
         );
 
 
     state.project.connections =
         state.project.connections.filter(
-            c =>
-                !ids.has(c.from) &&
-                !ids.has(c.to)
+            connection =>
+                !ids.has(
+                    connection.from
+                ) &&
+                !ids.has(
+                    connection.to
+                )
         );
 
 
@@ -3222,17 +4804,21 @@ function deleteSelected(){
 
 function disconnectSelected(){
 
-    if(state.selectedConnectionId){
+    if(
+        state.selectedConnectionId
+    ){
 
         state.project.connections =
             state.project.connections.filter(
-                c =>
-                    c.id !==
+                connection =>
+                    connection.id !==
                     state.selectedConnectionId
             );
 
+
         state.selectedConnectionId =
             null;
+
 
         markDirty();
 
@@ -3242,18 +4828,29 @@ function disconnectSelected(){
     }
 
 
-    if(state.selectedIds.size === 2){
+    if(
+        state.selectedIds.size === 2
+    ){
 
-        const [a,b] =
+        const [
+            a,
+            b
+        ] =
             [...state.selectedIds];
 
 
         state.project.connections =
             state.project.connections.filter(
-                c =>
+                connection =>
                     !(
-                        (c.from === a && c.to === b) ||
-                        (c.from === b && c.to === a)
+                        (
+                            connection.from === a &&
+                            connection.to === b
+                        ) ||
+                        (
+                            connection.from === b &&
+                            connection.to === a
+                        )
                     )
             );
 
@@ -3265,18 +4862,22 @@ function disconnectSelected(){
 }
 
 
+/* ========================================
+   コンテキストメニュー
+======================================== */
+
 function openMenu(
     x,
     y,
-    id,
-    connection
+    elementId,
+    connectionId
 ){
 
     state.contextElementId =
-        id;
+        elementId;
 
     state.contextConnectionId =
-        connection;
+        connectionId;
 
 
     els.menu.style.display =
@@ -3313,6 +4914,10 @@ function createAt(type){
 }
 
 
+/* ========================================
+   保存・読込
+======================================== */
+
 function saveLocal(){
 
     if(!state.project){
@@ -3320,24 +4925,26 @@ function saveLocal(){
     }
 
 
-    const p =
+    const project =
         structuredClone(
             state.project
         );
 
 
-    p.savedAt =
+    project.savedAt =
         new Date().toISOString();
 
 
     const key =
         'video-editor:' +
-        p.name;
+        project.name;
 
 
     localStorage.setItem(
         key,
-        JSON.stringify(p)
+        JSON.stringify(
+            project
+        )
     );
 
 
@@ -3354,82 +4961,106 @@ function listStorage(){
     const list =
         $('storageList');
 
-    list.innerHTML = '';
+
+    list.innerHTML =
+        '';
 
 
-    Object.keys(localStorage)
+    Object.keys(
+        localStorage
+    )
         .filter(
-            k =>
-                k.startsWith(
+            key =>
+                key.startsWith(
                     'video-editor:'
                 )
         )
         .sort()
-        .forEach(k => {
+        .forEach(
+            key => {
 
-            try{
+                try{
 
-                const p =
-                    JSON.parse(
-                        localStorage.getItem(k)
-                    );
-
-
-                const row =
-                    document.createElement(
-                        'div'
-                    );
-
-                row.className =
-                    'storage-item';
+                    const project =
+                        JSON.parse(
+                            localStorage.getItem(
+                                key
+                            )
+                        );
 
 
-                row.innerHTML =
-                    `<div class="info">
-                        <div class="name"></div>
-                        <div class="meta">
-                            ${p.videoName || ''}
-                            /
-                            ${p.elements?.length || 0}
-                            要素
+                    const row =
+                        document.createElement(
+                            'div'
+                        );
+
+                    row.className =
+                        'storage-item';
+
+
+                    row.innerHTML =
+                        `
+                        <div class="info">
+                            <div class="name"></div>
+                            <div class="meta">
+                                ${
+                                    project.videoName ||
+                                    ''
+                                }
+                                /
+                                ${
+                                    project.elements?.length ||
+                                    0
+                                }
+                                要素
+                            </div>
                         </div>
-                    </div>`;
+                        `;
 
 
-                row.querySelector(
-                    '.name'
-                ).textContent =
-                    p.name;
+                    row.querySelector(
+                        '.name'
+                    ).textContent =
+                        project.name;
 
 
-                const load =
-                    document.createElement(
-                        'button'
+                    const button =
+                        document.createElement(
+                            'button'
+                        );
+
+
+                    button.className =
+                        'btn small';
+
+                    button.textContent =
+                        '読込';
+
+
+                    button.onclick =
+                        () => {
+
+                            loadProject(
+                                project
+                            );
+
+                            els.storageModal.style.display =
+                                'none';
+                        };
+
+
+                    row.appendChild(
+                        button
                     );
 
-                load.className =
-                    'btn small';
 
-                load.textContent =
-                    '読込';
+                    list.appendChild(
+                        row
+                    );
 
-
-                load.onclick =
-                    () => {
-
-                        loadProject(p);
-
-                        els.storageModal.style.display =
-                            'none';
-                    };
-
-
-                row.appendChild(load);
-
-                list.appendChild(row);
-
-            }catch(_){}
-        });
+                }catch(_){}
+            }
+        );
 
 
     els.storageModal.style.display =
@@ -3437,25 +5068,20 @@ function listStorage(){
 }
 
 
-function loadProject(p){
+function loadProject(project){
 
     try{
 
         state.project =
             normalizeProject(
-                structuredClone(p)
+                structuredClone(
+                    project
+                )
             );
+
 
         state.duration =
             state.project.duration;
-
-        state.selectedIds.clear();
-
-        state.selectedConnectionId =
-            null;
-
-        state.currentTime =
-            0;
 
 
         if(
@@ -3474,6 +5100,16 @@ function loadProject(p){
             state.duration;
 
 
+        state.currentTime =
+            0;
+
+
+        state.selectedIds.clear();
+
+        state.selectedConnectionId =
+            null;
+
+
         enableEditor();
 
         renderAll();
@@ -3484,16 +5120,81 @@ function loadProject(p){
             'プロジェクトを読み込みました'
         );
 
-    }catch(e){
+    }catch(error){
 
         toast(
             'プロジェクトを読み込めません：' +
-            e.message,
+            error.message,
             true
         );
     }
 }
 
+
+function exportProject(){
+
+    if(!state.project){
+        return;
+    }
+
+
+    const data =
+        JSON.stringify(
+            state.project,
+            null,
+            2
+        );
+
+
+    const blob =
+        new Blob(
+            [data],
+            {
+                type:
+                    'application/json'
+            }
+        );
+
+
+    const link =
+        document.createElement(
+            'a'
+        );
+
+
+    link.href =
+        URL.createObjectURL(
+            blob
+        );
+
+
+    link.download =
+        (
+            state.project.name ||
+            'project'
+        ) +
+        '.json';
+
+
+    link.click();
+
+
+    setTimeout(
+        () => {
+
+            URL.revokeObjectURL(
+                link.href
+            );
+
+        },
+        1000
+    );
+}
+
+
+/* ========================================
+   動画
+======================================== */
 
 function enableEditor(){
 
@@ -3525,14 +5226,14 @@ function disableEditor(){
     els.empty.style.display =
         'block';
 
+
     els.overlay.innerHTML =
         '';
+
 
     els.tracks.innerHTML =
         '';
 
-    els.svg.innerHTML =
-        '';
 
     els.playhead.style.display =
         'none';
@@ -3543,7 +5244,9 @@ function handleVideo(file){
 
     if(
         !file ||
-        !file.type.startsWith('video/')
+        !file.type.startsWith(
+            'video/'
+        )
     ){
 
         toast(
@@ -3566,16 +5269,31 @@ function handleVideo(file){
     state.videoBlob =
         file;
 
+
     state.videoUrl =
-        URL.createObjectURL(file);
+        URL.createObjectURL(
+            file
+        );
+
 
     state.project =
         emptyProject(
             file.name
         );
 
+
     state.duration =
         0;
+
+
+    state.currentTime =
+        0;
+
+
+    state.selectedIds.clear();
+
+    state.selectedConnectionId =
+        null;
 
 
     disableEditor();
@@ -3596,10 +5314,12 @@ function newProject(){
     state.project =
         null;
 
+
     state.selectedIds.clear();
 
     state.selectedConnectionId =
         null;
+
 
     state.duration =
         0;
@@ -3623,10 +5343,12 @@ function newProject(){
         'src'
     );
 
+
     els.video.load();
 
 
     disableEditor();
+
 
     setStatus(
         '動画を読み込んでください'
@@ -3634,60 +5356,9 @@ function newProject(){
 }
 
 
-function exportProject(){
-
-    if(!state.project){
-        return;
-    }
-
-
-    const data =
-        JSON.stringify(
-            state.project,
-            null,
-            2
-        );
-
-
-    const blob =
-        new Blob(
-            [data],
-            {
-                type:'application/json'
-            }
-        );
-
-
-    const a =
-        document.createElement('a');
-
-
-    a.href =
-        URL.createObjectURL(
-            blob
-        );
-
-
-    a.download =
-        (
-            state.project.name ||
-            'project'
-        ) +
-        '.json';
-
-
-    a.click();
-
-
-    setTimeout(
-        () =>
-            URL.revokeObjectURL(
-                a.href
-            ),
-        1000
-    );
-}
-
+/* ========================================
+   イベント
+======================================== */
 
 els.open.onclick =
     () =>
@@ -3717,13 +5388,14 @@ els.exportBtn.onclick =
     exportProject;
 
 
-$('importProjectInput').onchange =
-    async ev => {
+els.import.onchange =
+    async event => {
 
-        const f =
-            ev.target.files[0];
+        const file =
+            event.target.files[0];
 
-        if(!f){
+
+        if(!file){
             return;
         }
 
@@ -3732,21 +5404,21 @@ $('importProjectInput').onchange =
 
             loadProject(
                 JSON.parse(
-                    await f.text()
+                    await file.text()
                 )
             );
 
-        }catch(e){
+        }catch(error){
 
             toast(
                 'JSONを読み込めません：' +
-                e.message,
+                error.message,
                 true
             );
         }
 
 
-        ev.target.value =
+        event.target.value =
             '';
     };
 
@@ -3760,7 +5432,10 @@ els.video.onloadedmetadata =
             );
 
 
-        if(!state.project){
+        if(
+            !state.project
+        ){
+
             state.project =
                 emptyProject();
         }
@@ -3768,6 +5443,7 @@ els.video.onloadedmetadata =
 
         state.project.duration =
             state.duration;
+
 
         state.currentTime =
             0;
@@ -3784,28 +5460,28 @@ els.video.onloadedmetadata =
 els.video.ontimeupdate =
     () => {
 
-        if(!els.video.paused){
+        state.currentTime =
+            els.video.currentTime;
 
-            state.currentTime =
-                els.video.currentTime;
 
-            updatePlayhead();
+        updatePlayhead();
 
-            renderOverlay();
+        renderOverlay();
 
-            renderConnections();
-        }
+        renderVideoConnections();
     };
 
 
 els.video.onended =
     () => {
 
-        $('playBtn').textContent =
+        els.play.textContent =
             '▶';
+
 
         state.currentTime =
             state.duration;
+
 
         renderAll();
     };
@@ -3819,7 +5495,9 @@ els.play.onclick =
         }
 
 
-        if(els.video.paused){
+        if(
+            els.video.paused
+        ){
 
             try{
 
@@ -3828,7 +5506,7 @@ els.play.onclick =
                 els.play.textContent =
                     'Ⅱ';
 
-            }catch(e){
+            }catch(error){
 
                 toast(
                     '再生できません',
@@ -3858,38 +5536,17 @@ els.stop.onclick =
     };
 
 
-els.zoom.oninput =
-    () => {
-
-        els.zoomValue.textContent =
-            Number(
-                els.zoom.value
-            ).toFixed(1) +
-            '×';
-
-
-        /*
-         * 既存仕様を維持。
-         * timeline-contentの幅自体は変更しない。
-         */
-        renderAxis();
-
-        renderConnections();
-
-        updatePlayhead();
-    };
-
-
+/*
+ * タイムライン上をクリックして
+ * 再生位置を変更。
+ */
 els.content.addEventListener(
     'pointerdown',
-    ev => {
+    event => {
 
         if(
-            ev.target.closest(
+            event.target.closest(
                 '.element-bar'
-            ) ||
-            ev.target.closest(
-                '.connection-path'
             )
         ){
 
@@ -3898,17 +5555,17 @@ els.content.addEventListener(
 
 
         if(
-            ev.target.closest(
+            event.target.closest(
                 '.axis-track'
             ) ||
-            ev.target.closest(
+            event.target.closest(
                 '.track-lane'
             )
         ){
 
             seek(
                 xToTime(
-                    ev.clientX
+                    event.clientX
                 )
             );
         }
@@ -3916,40 +5573,103 @@ els.content.addEventListener(
 );
 
 
-window.addEventListener(
-    'resize',
-    () => {
+/*
+ * 動画上で右クリックして要素を追加。
+ */
+els.videoWrap.addEventListener(
+    'contextmenu',
+    event => {
 
-        renderAxis();
+        event.preventDefault();
 
-        renderConnections();
 
-        updatePlayhead();
+        if(!canEdit()){
+            return;
+        }
+
+
+        const video =
+            getVideoRect();
+
+
+        if(
+            event.clientX <
+                video.left ||
+            event.clientX >
+                video.left +
+                video.width ||
+            event.clientY <
+                video.top ||
+            event.clientY >
+                video.top +
+                video.height
+        ){
+
+            return;
+        }
+
+
+        state.pendingXY = {
+
+            x:
+                clamp(
+                    (
+                        event.clientX -
+                        video.left
+                    ) /
+                    video.width *
+                    100,
+                    0,
+                    99
+                ),
+
+            y:
+                clamp(
+                    (
+                        event.clientY -
+                        video.top
+                    ) /
+                    video.height *
+                    100,
+                    0,
+                    99
+                )
+        };
+
+
+        state.contextElementId =
+            null;
+
+        state.contextConnectionId =
+            null;
+
+
+        openMenu(
+            event.clientX,
+            event.clientY,
+            null,
+            null
+        );
     }
 );
 
 
-els.scroll.addEventListener(
-    'scroll',
-    () => {
-
-        renderConnections();
-
-        updatePlayhead();
-    }
-);
-
-
+/*
+ * 右クリックメニュー
+ */
 $('ctxAddText').onclick =
-    () => createAt('text');
+    () =>
+        createAt('text');
 
 
 $('ctxAddBox').onclick =
-    () => createAt('box');
+    () =>
+        createAt('box');
 
 
 $('ctxAddSkip').onclick =
-    () => createAt('skip');
+    () =>
+        createAt('skip');
 
 
 $('ctxEdit').onclick =
@@ -3985,6 +5705,7 @@ $('ctxConnect').onclick =
             );
         }
 
+
         closeMenu();
     };
 
@@ -4009,10 +5730,10 @@ $('ctxDelete').onclick =
 
 document.addEventListener(
     'click',
-    ev => {
+    event => {
 
         if(
-            !ev.target.closest(
+            !event.target.closest(
                 '.context-menu'
             )
         ){
@@ -4023,11 +5744,16 @@ document.addEventListener(
 );
 
 
+/*
+ * キーボード操作
+ */
 document.addEventListener(
     'keydown',
-    ev => {
+    event => {
 
-        if(ev.key === 'Escape'){
+        if(
+            event.key === 'Escape'
+        ){
 
             closeMenu();
 
@@ -4037,8 +5763,8 @@ document.addEventListener(
 
         if(
             (
-                ev.key === 'Delete' ||
-                ev.key === 'Backspace'
+                event.key === 'Delete' ||
+                event.key === 'Backspace'
             ) &&
             ![
                 'INPUT',
@@ -4054,7 +5780,7 @@ document.addEventListener(
 
 
         if(
-            ev.key === ' ' &&
+            event.key === ' ' &&
             ![
                 'INPUT',
                 'TEXTAREA'
@@ -4063,7 +5789,7 @@ document.addEventListener(
             )
         ){
 
-            ev.preventDefault();
+            event.preventDefault();
 
             els.play.click();
         }
@@ -4071,6 +5797,9 @@ document.addEventListener(
 );
 
 
+/*
+ * 要素編集モーダル
+ */
 $('elementModalClose').onclick =
     closeElement;
 
@@ -4083,216 +5812,56 @@ $('elementModalSave').onclick =
     saveElement;
 
 
+/*
+ * 保存データ
+ */
 $('storageClose').onclick =
-    () =>
+    () => {
+
         els.storageModal.style.display =
             'none';
-
-
-els.content.addEventListener(
-    'dblclick',
-    ev => {
-
-        if(
-            ev.target.closest(
-                '.element-bar'
-            )
-        ){
-
-            return;
-        }
-    }
-);
-
-
-els.videoWrap?.addEventListener(
-    'contextmenu',
-    ev => {
-
-        ev.preventDefault();
-
-
-        if(!canEdit()){
-            return;
-        }
-
-
-        const rect =
-            els.video.getBoundingClientRect();
-
-
-        const x =
-            clamp(
-                (
-                    ev.clientX -
-                    rect.left
-                ) /
-                rect.width *
-                100,
-                0,
-                99
-            );
-
-
-        const y =
-            clamp(
-                (
-                    ev.clientY -
-                    rect.top
-                ) /
-                rect.height *
-                100,
-                0,
-                99
-            );
-
-
-        state.contextElementId =
-            null;
-
-        state.contextConnectionId =
-            null;
-
-
-        openMenu(
-            ev.clientX,
-            ev.clientY,
-            null,
-            null
-        );
-
-
-        state.pendingXY = {
-            x,
-            y
-        };
-    }
-);
-
-
-/*
- * 右クリックした位置から
- * 要素を追加できるようにする。
- */
-const oldCreate =
-    addElement;
-
-
-addElement =
-    function(type){
-
-        if(!canEdit()){
-
-            toast(
-                '先に動画を読み込んでください',
-                true
-            );
-
-            return;
-        }
-
-
-        const start =
-            clamp(
-                state.currentTime,
-                0,
-                state.duration - .05
-            );
-
-
-        const end =
-            Math.min(
-                state.duration,
-                start + 3
-            );
-
-
-        const xy =
-            state.pendingXY ||
-            {
-                x:10,
-                y:10
-            };
-
-
-        state.pendingXY =
-            null;
-
-
-        const e = {
-
-            id:
-                uid('el'),
-
-            type,
-
-            name:
-                type === 'text'
-                    ? 'テキスト'
-                    : type === 'box'
-                        ? '強調枠'
-                        : 'スキップ',
-
-            text:
-                type === 'text'
-                    ? 'テキスト'
-                    : '',
-
-            start,
-
-            end,
-
-            x:
-                xy.x,
-
-            y:
-                xy.y,
-
-            w:35,
-
-            h:18,
-
-            color:
-                color(type),
-
-            fontSize:28,
-
-            fontWeight:'700'
-        };
-
-
-        state.project.elements.push(e);
-
-        state.selectedIds.clear();
-
-        state.selectedIds.add(e.id);
-
-        markDirty();
-
-        renderAll();
-
-        openElement(e.id);
     };
 
 
 /*
- * 接続線は要素の位置変更などでも
- * 常に最新状態を維持する。
+ * ウィンドウサイズ変更時。
+ *
+ * 動画サイズが変わると要素・接続線の
+ * 表示位置も変わるため再描画する。
  */
-function animationLoop(){
+window.addEventListener(
+    'resize',
+    () => {
 
-    if(!state.drag){
+        renderOverlay();
 
-        renderConnections();
+        renderVideoConnections();
+
+        renderAxis();
+
+        updatePlayhead();
     }
-
-    requestAnimationFrame(
-        animationLoop
-    );
-}
+);
 
 
-animationLoop();
+/*
+ * スクロール時はタイムラインだけ更新。
+ * 接続線は動画上なのでスクロールの影響を受けない。
+ */
+els.scroll.addEventListener(
+    'scroll',
+    () => {
+
+        updatePlayhead();
+    }
+);
+
+
+/*
+ * 初期状態。
+ */
+els.empty.style.display =
+    'block';
 
 </script>
 
