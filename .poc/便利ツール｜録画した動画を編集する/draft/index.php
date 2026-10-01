@@ -3,26 +3,34 @@ declare(strict_types=1);
 
 /*
  * 動画上直接編集ツール
- * Apache + PHP / index.php 1ファイル
+ * Apache + PHP
  *
- * サーバー:
- *   ./data/projects/*.json
+ * 必要:
+ *   PHP 7.4+
+ *   Apache
  *
- * ブラウザ:
- *   IndexedDB
- *     - 動画本体
- *     - ローカル保存プロジェクト
+ * MP4書き出し:
+ *   FFmpeg がサーバーにインストールされていること
+ *
+ * 保存:
+ *   サーバー: ./data/projects/*.json
+ *   動画本体: ブラウザ IndexedDB
+ *
+ * data/projects は Apache/PHP から書き込み可能にしてください。
  */
 
-const APP_VERSION = 4;
+const APP_VERSION = 6;
 const MAX_SERVER_PROJECTS = 20;
-
+const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024; // 1GB
 const DATA_DIR = __DIR__ . DIRECTORY_SEPARATOR . 'data';
 const PROJECT_DIR = DATA_DIR . DIRECTORY_SEPARATOR . 'projects';
+const EXPORT_DIR = DATA_DIR . DIRECTORY_SEPARATOR . 'exports';
 
-function jsonResponse(array $data, int $status = 200): never {
+function jsonResponse(array $data, int $status = 200): never
+{
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate');
     echo json_encode(
         $data,
         JSON_UNESCAPED_UNICODE |
@@ -31,63 +39,134 @@ function jsonResponse(array $data, int $status = 200): never {
     exit;
 }
 
-function ensureProjectDir(): bool {
-    if (!is_dir(DATA_DIR) && !@mkdir(DATA_DIR, 0775, true)) {
-        return false;
+function ensureDir(string $dir): bool
+{
+    if (is_dir($dir)) {
+        return is_writable($dir);
     }
 
-    if (!is_dir(PROJECT_DIR) && !@mkdir(PROJECT_DIR, 0775, true)) {
-        return false;
-    }
-
-    return is_dir(PROJECT_DIR) && is_writable(PROJECT_DIR);
+    return @mkdir($dir, 0775, true) && is_writable($dir);
 }
 
-function validProjectId(string $id): bool {
-    return (bool)preg_match('/^[A-Za-z0-9_-]{8,100}$/', $id);
+function ensureProjectDir(): bool
+{
+    return ensureDir(DATA_DIR) && ensureDir(PROJECT_DIR);
 }
 
-function projectPath(string $id): string {
+function ensureExportDir(): bool
+{
+    return ensureDir(DATA_DIR) && ensureDir(EXPORT_DIR);
+}
+
+function validProjectId(string $id): bool
+{
+    return (bool)preg_match('/^[a-zA-Z0-9_-]{8,100}$/', $id);
+}
+
+function safeFileName(string $name, string $fallback = 'file'): string
+{
+    $name = trim($name);
+    $name = preg_replace('/[^\p{L}\p{N}._-]+/u', '_', $name) ?? '';
+    $name = trim($name, '._-');
+
+    return $name !== '' ? mb_substr($name, 0, 120) : $fallback;
+}
+
+function projectPath(string $id): string
+{
     return PROJECT_DIR . DIRECTORY_SEPARATOR . $id . '.json';
 }
 
-function readServerProjects(): array {
+function readServerProjects(): array
+{
     if (!is_dir(PROJECT_DIR)) {
         return [];
     }
 
+    $files = glob(PROJECT_DIR . DIRECTORY_SEPARATOR . '*.json') ?: [];
     $result = [];
 
-    foreach (glob(PROJECT_DIR . DIRECTORY_SEPARATOR . '*.json') ?: [] as $file) {
+    foreach ($files as $file) {
         $raw = @file_get_contents($file);
-        $data = json_decode($raw ?: '', true);
-
-        if (is_array($data) && isset($data['projectId'])) {
-            $result[] = $data;
+        if ($raw === false) {
+            continue;
         }
+
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            continue;
+        }
+
+        $result[] = [
+            'projectId' => (string)($data['projectId'] ?? pathinfo($file, PATHINFO_FILENAME)),
+            'name' => (string)($data['name'] ?? '名称未設定'),
+            'savedAt' => (string)($data['savedAt'] ?? ''),
+            'videoName' => (string)($data['videoName'] ?? ''),
+        ];
     }
 
     usort(
         $result,
         static fn(array $a, array $b): int =>
-            strcmp(
-                (string)($b['savedAt'] ?? ''),
-                (string)($a['savedAt'] ?? '')
-            )
+            strcmp($b['savedAt'], $a['savedAt'])
     );
 
     return $result;
 }
 
-function projectSummary(array $project): array {
-    return [
-        'projectId' => (string)($project['projectId'] ?? ''),
-        'name' => (string)($project['name'] ?? '名称未設定'),
-        'videoName' => (string)($project['videoName'] ?? ''),
-        'savedAt' => (string)($project['savedAt'] ?? ''),
-        'version' => (int)($project['version'] ?? 1),
-        'storage' => 'server'
-    ];
+function readJsonBody(): array
+{
+    $raw = file_get_contents('php://input');
+    $data = json_decode($raw ?: '', true);
+
+    if (!is_array($data)) {
+        jsonResponse([
+            'ok' => false,
+            'message' => 'JSONデータが不正です。'
+        ], 400);
+    }
+
+    return $data;
+}
+
+function validateProjectPayload(array $payload): array
+{
+    $name = trim((string)($payload['name'] ?? ''));
+
+    if ($name === '') {
+        jsonResponse([
+            'ok' => false,
+            'message' => 'プロジェクト名を入力してください。'
+        ], 422);
+    }
+
+    if (mb_strlen($name) > 120) {
+        jsonResponse([
+            'ok' => false,
+            'message' => 'プロジェクト名は120文字以内にしてください。'
+        ], 422);
+    }
+
+    $payload['name'] = $name;
+
+    if (!isset($payload['elements']) || !is_array($payload['elements'])) {
+        $payload['elements'] = [];
+    }
+
+    if (!isset($payload['connections']) || !is_array($payload['connections'])) {
+        $payload['connections'] = [];
+    }
+
+    if (!isset($payload['duration'])) {
+        $payload['duration'] = 0;
+    }
+
+    $payload['duration'] = max(
+        0,
+        min(86400, (float)$payload['duration'])
+    );
+
+    return $payload;
 }
 
 /* =========================================================
@@ -101,94 +180,40 @@ if (isset($_GET['api'])) {
         jsonResponse([
             'ok' => true,
             'version' => APP_VERSION,
+            'php' => PHP_VERSION,
             'serverWritable' => ensureProjectDir(),
             'serverLimit' => MAX_SERVER_PROJECTS,
             'serverCount' => count(readServerProjects()),
-            'php' => PHP_VERSION
+            'ffmpeg' => (bool)shell_exec('command -v ffmpeg 2>/dev/null')
         ]);
     }
 
     if ($api === 'list') {
         jsonResponse([
             'ok' => true,
-            'projects' => array_map(
-                'projectSummary',
-                readServerProjects()
-            ),
+            'projects' => readServerProjects(),
             'limit' => MAX_SERVER_PROJECTS
-        ]);
-    }
-
-    if ($api === 'load') {
-        $id = (string)($_GET['id'] ?? '');
-
-        if (!validProjectId($id)) {
-            jsonResponse([
-                'ok' => false,
-                'message' => 'プロジェクトIDが不正です。'
-            ], 400);
-        }
-
-        $file = projectPath($id);
-
-        if (!is_file($file)) {
-            jsonResponse([
-                'ok' => false,
-                'message' => 'プロジェクトが見つかりません。'
-            ], 404);
-        }
-
-        $data = json_decode(
-            @file_get_contents($file) ?: '',
-            true
-        );
-
-        if (!is_array($data)) {
-            jsonResponse([
-                'ok' => false,
-                'message' => '保存データが壊れています。'
-            ], 500);
-        }
-
-        jsonResponse([
-            'ok' => true,
-            'project' => $data
         ]);
     }
 
     if ($api === 'save') {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            jsonResponse([
-                'ok' => false,
-                'message' => 'POST only'
-            ], 405);
+            jsonResponse(['ok' => false, 'message' => 'POST only'], 405);
         }
 
         if (!ensureProjectDir()) {
             jsonResponse([
                 'ok' => false,
-                'message' => 'data/projects に書き込めません。Apache/PHPの書込権限を確認してください。'
+                'message' => 'data/projects に書き込めません。Apache/PHPの権限を確認してください。'
             ], 500);
         }
 
-        $raw = file_get_contents('php://input') ?: '';
-        $payload = json_decode($raw, true);
+        $payload = validateProjectPayload(readJsonBody());
 
-        if (!is_array($payload)) {
-            jsonResponse([
-                'ok' => false,
-                'message' => 'JSONが不正です。'
-            ], 400);
-        }
-
-        $id = (string)($payload['projectId'] ?? '');
+        $id = trim((string)($payload['projectId'] ?? ''));
 
         if ($id === '') {
-            try {
-                $id = 'project-' . bin2hex(random_bytes(10));
-            } catch (Throwable) {
-                $id = 'project-' . str_replace('.', '', uniqid('', true));
-            }
+            $id = 'project-' . bin2hex(random_bytes(12));
         }
 
         if (!validProjectId($id)) {
@@ -199,35 +224,21 @@ if (isset($_GET['api'])) {
         }
 
         $existing = is_file(projectPath($id));
-        $projects = readServerProjects();
 
-        if (!$existing && count($projects) >= MAX_SERVER_PROJECTS) {
-            jsonResponse([
-                'ok' => false,
-                'limit' => true,
-                'message' => 'サーバー保存上限に達しました。ローカル保存を使用してください。'
-            ], 409);
-        }
+        if (!$existing) {
+            $projects = readServerProjects();
 
-        $name = trim((string)($payload['name'] ?? ''));
-
-        if ($name === '') {
-            jsonResponse([
-                'ok' => false,
-                'message' => 'プロジェクト名を入力してください。'
-            ], 422);
-        }
-
-        if (mb_strlen($name) > 120) {
-            jsonResponse([
-                'ok' => false,
-                'message' => 'プロジェクト名は120文字以内にしてください。'
-            ], 422);
+            if (count($projects) >= MAX_SERVER_PROJECTS) {
+                jsonResponse([
+                    'ok' => false,
+                    'limit' => true,
+                    'message' => 'サーバー保存上限に達しています。'
+                ], 409);
+            }
         }
 
         $payload['version'] = APP_VERSION;
         $payload['projectId'] = $id;
-        $payload['name'] = $name;
         $payload['savedAt'] = date('c');
 
         $json = json_encode(
@@ -251,7 +262,7 @@ if (isset($_GET['api'])) {
         ) === false) {
             jsonResponse([
                 'ok' => false,
-                'message' => '編集データを保存できませんでした。'
+                'message' => 'プロジェクトを保存できませんでした。'
             ], 500);
         }
 
@@ -263,22 +274,8 @@ if (isset($_GET['api'])) {
         ]);
     }
 
-    if ($api === 'delete') {
-        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            jsonResponse([
-                'ok' => false,
-                'message' => 'POST only'
-            ], 405);
-        }
-
-        $payload = json_decode(
-            file_get_contents('php://input') ?: '',
-            true
-        );
-
-        $id = is_array($payload)
-            ? (string)($payload['projectId'] ?? '')
-            : '';
+    if ($api === 'load') {
+        $id = (string)($_GET['id'] ?? '');
 
         if (!validProjectId($id)) {
             jsonResponse([
@@ -287,9 +284,49 @@ if (isset($_GET['api'])) {
             ], 400);
         }
 
-        $file = projectPath($id);
+        $path = projectPath($id);
 
-        if (is_file($file) && !@unlink($file)) {
+        if (!is_file($path)) {
+            jsonResponse([
+                'ok' => false,
+                'message' => 'プロジェクトが見つかりません。'
+            ], 404);
+        }
+
+        $raw = @file_get_contents($path);
+        $data = json_decode($raw ?: '', true);
+
+        if (!is_array($data)) {
+            jsonResponse([
+                'ok' => false,
+                'message' => '保存データが壊れています。'
+            ], 500);
+        }
+
+        jsonResponse([
+            'ok' => true,
+            'project' => $data
+        ]);
+    }
+
+    if ($api === 'delete') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            jsonResponse(['ok' => false, 'message' => 'POST only'], 405);
+        }
+
+        $payload = readJsonBody();
+        $id = (string)($payload['projectId'] ?? '');
+
+        if (!validProjectId($id)) {
+            jsonResponse([
+                'ok' => false,
+                'message' => 'プロジェクトIDが不正です。'
+            ], 400);
+        }
+
+        $path = projectPath($id);
+
+        if (is_file($path) && !@unlink($path)) {
             jsonResponse([
                 'ok' => false,
                 'message' => '削除できませんでした。'
@@ -299,10 +336,428 @@ if (isset($_GET['api'])) {
         jsonResponse(['ok' => true]);
     }
 
+    /*
+     * MP4書き出し
+     *
+     * multipart/form-data:
+     *   video   = 元動画
+     *   project = JSON
+     */
+    if ($api === 'export') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            jsonResponse(['ok' => false, 'message' => 'POST only'], 405);
+        }
+
+        if (!ensureExportDir()) {
+            jsonResponse([
+                'ok' => false,
+                'message' => '書き出しディレクトリを作成できません。'
+            ], 500);
+        }
+
+        $ffmpeg = trim((string)shell_exec(
+            'command -v ffmpeg 2>/dev/null'
+        ));
+
+        if ($ffmpeg === '') {
+            jsonResponse([
+                'ok' => false,
+                'message' => 'サーバーにFFmpegがありません。MP4書き出しにはFFmpegが必要です。'
+            ], 500);
+        }
+
+        if (!isset($_FILES['video'])) {
+            jsonResponse([
+                'ok' => false,
+                'message' => '動画ファイルが送信されていません。'
+            ], 400);
+        }
+
+        $video = $_FILES['video'];
+
+        if (
+            !isset($video['error']) ||
+            (int)$video['error'] !== UPLOAD_ERR_OK
+        ) {
+            jsonResponse([
+                'ok' => false,
+                'message' => '動画アップロードに失敗しました。'
+            ], 400);
+        }
+
+        if ((int)$video['size'] > MAX_UPLOAD_BYTES) {
+            jsonResponse([
+                'ok' => false,
+                'message' => '動画ファイルが大きすぎます。'
+            ], 413);
+        }
+
+        $projectRaw = (string)($_POST['project'] ?? '');
+        $project = json_decode($projectRaw, true);
+
+        if (!is_array($project)) {
+            jsonResponse([
+                'ok' => false,
+                'message' => '書き出し用プロジェクトJSONが不正です。'
+            ], 400);
+        }
+
+        $duration = max(
+            0,
+            min(86400, (float)($project['duration'] ?? 0))
+        );
+
+        if ($duration <= 0) {
+            jsonResponse([
+                'ok' => false,
+                'message' => '動画の長さを取得できません。'
+            ], 422);
+        }
+
+        $base = 'export_' . bin2hex(random_bytes(10));
+        $inputPath = EXPORT_DIR . DIRECTORY_SEPARATOR . $base . '_input';
+        $outputPath = EXPORT_DIR . DIRECTORY_SEPARATOR . $base . '.mp4';
+
+        if (!@move_uploaded_file(
+            (string)$video['tmp_name'],
+            $inputPath
+        )) {
+            jsonResponse([
+                'ok' => false,
+                'message' => '動画ファイルを一時保存できませんでした。'
+            ], 500);
+        }
+
+        /*
+         * FFmpeg filter を作る。
+         * 座標は編集画面上の % を動画解像度に対して計算。
+         *
+         * コメント:
+         * drawtext
+         *
+         * 枠:
+         * drawbox
+         *
+         * 線:
+         * drawline
+         */
+        $filters = [];
+        $filterIndex = 0;
+
+        $elements = isset($project['elements']) &&
+            is_array($project['elements'])
+            ? $project['elements']
+            : [];
+
+        foreach ($elements as $element) {
+            if (!is_array($element)) {
+                continue;
+            }
+
+            $type = (string)($element['type'] ?? '');
+            $start = max(0, (float)($element['start'] ?? 0));
+            $end = min($duration, (float)($element['end'] ?? $duration));
+
+            if ($end <= $start) {
+                continue;
+            }
+
+            $x = max(0, min(100, (float)($element['x'] ?? 0)));
+            $y = max(0, min(100, (float)($element['y'] ?? 0)));
+            $w = max(0.1, min(100, (float)($element['w'] ?? 20)));
+            $h = max(0.1, min(100, (float)($element['h'] ?? 10)));
+
+            $enable = sprintf(
+                "between(t\\,%s\\,%s)",
+                number_format($start, 3, '.', ''),
+                number_format($end, 3, '.', '')
+            );
+
+            if ($type === 'box') {
+                $color = (string)($element['style']['borderColor'] ?? '#ff3b30');
+                $thickness = max(
+                    1,
+                    min(
+                        30,
+                        (int)($element['style']['borderWidth'] ?? 4)
+                    )
+                );
+
+                $filters[] = sprintf(
+                    "drawbox=x=w*%s/100:y=h*%s/100:w=w*%s/100:h=h*%s/100:color=%s@1:t=%d:enable='%s'",
+                    $x,
+                    $y,
+                    $w,
+                    $h,
+                    ffmpegColor($color),
+                    $thickness,
+                    $enable
+                );
+            }
+
+            if ($type === 'text') {
+                $text = (string)($element['text'] ?? '');
+                if ($text === '') {
+                    continue;
+                }
+
+                /*
+                 * drawtextの文字列は特殊文字をエスケープ。
+                 */
+                $text = str_replace(
+                    ['\\', ':', "'", '%', "\n", "\r"],
+                    ['\\\\', '\\:', "\\'", '\\%', '\n', ''],
+                    $text
+                );
+
+                $fontSize = max(
+                    8,
+                    min(
+                        200,
+                        (int)($element['style']['fontSize'] ?? 32)
+                    )
+                );
+
+                $color = ffmpegColor(
+                    (string)($element['style']['color'] ?? '#ffffff')
+                );
+
+                $box = !empty($element['style']['background'])
+                    ? ':box=1:boxcolor=' .
+                      ffmpegColor(
+                          (string)$element['style']['background']
+                      ) .
+                      ':boxborderw=8'
+                    : '';
+
+                $fontFile = findFontFile();
+
+                if ($fontFile !== '') {
+                    $fontPart = ':fontfile=' .
+                        ffmpegFilterEscape($fontFile);
+                } else {
+                    $fontPart = '';
+                }
+
+                $filters[] = sprintf(
+                    "drawtext=text='%s':x=w*%s/100:y=h*%s/100:fontsize=%d:fontcolor=%s%s%s:enable='%s'",
+                    $text,
+                    $x,
+                    $y,
+                    $fontSize,
+                    $color,
+                    $box,
+                    $fontPart,
+                    $enable
+                );
+            }
+        }
+
+        /*
+         * 接続線。
+         */
+        $connections = isset($project['connections']) &&
+            is_array($project['connections'])
+            ? $project['connections']
+            : [];
+
+        $byId = [];
+
+        foreach ($elements as $element) {
+            if (is_array($element) && isset($element['id'])) {
+                $byId[(string)$element['id']] = $element;
+            }
+        }
+
+        foreach ($connections as $connection) {
+            if (!is_array($connection)) {
+                continue;
+            }
+
+            $fromId = (string)($connection['fromId'] ?? '');
+            $toId = (string)($connection['toId'] ?? '');
+
+            if (
+                !isset($byId[$fromId]) ||
+                !isset($byId[$toId])
+            ) {
+                continue;
+            }
+
+            $from = $byId[$fromId];
+            $to = $byId[$toId];
+
+            $fx = (float)$from['x'] +
+                (float)$from['w'] / 2;
+
+            $fy = (float)$from['y'] +
+                (float)$from['h'] / 2;
+
+            $tx = (float)$to['x'] +
+                (float)$to['w'] / 2;
+
+            $ty = (float)$to['y'] +
+                (float)$to['h'] / 2;
+
+            $start = max(
+                (float)($connection['start'] ?? 0),
+                (float)($from['start'] ?? 0),
+                (float)($to['start'] ?? 0)
+            );
+
+            $end = min(
+                $duration,
+                (float)($connection['end'] ?? $duration),
+                (float)($from['end'] ?? $duration),
+                (float)($to['end'] ?? $duration)
+            );
+
+            if ($end <= $start) {
+                continue;
+            }
+
+            $color = ffmpegColor(
+                (string)($connection['style']['color'] ?? '#ffffff')
+            );
+
+            $width = max(
+                1,
+                min(
+                    20,
+                    (int)($connection['style']['width'] ?? 4)
+                )
+            );
+
+            $enable = sprintf(
+                "between(t\\,%s\\,%s)",
+                number_format($start, 3, '.', ''),
+                number_format($end, 3, '.', '')
+            );
+
+            $filters[] = sprintf(
+                "drawline=x1=w*%s/100:y1=h*%s/100:x2=w*%s/100:y2=h*%s/100:color=%s:thickness=%d:enable='%s'",
+                $fx,
+                $fy,
+                $tx,
+                $ty,
+                $color,
+                $width,
+                $enable
+            );
+        }
+
+        $vf = implode(',', $filters);
+
+        /*
+         * filterがない場合も正常なMP4として出力。
+         */
+        $filterArg = $vf !== ''
+            ? ' -vf ' . escapeshellarg($vf)
+            : '';
+
+        $cmd =
+            escapeshellcmd($ffmpeg) .
+            ' -y' .
+            ' -i ' . escapeshellarg($inputPath) .
+            $filterArg .
+            ' -c:v libx264' .
+            ' -preset veryfast' .
+            ' -crf 18' .
+            ' -pix_fmt yuv420p' .
+            ' -c:a aac' .
+            ' -movflags +faststart' .
+            ' ' . escapeshellarg($outputPath) .
+            ' 2>&1';
+
+        $output = [];
+        $returnCode = 0;
+
+        exec($cmd, $output, $returnCode);
+
+        @unlink($inputPath);
+
+        if (
+            $returnCode !== 0 ||
+            !is_file($outputPath) ||
+            filesize($outputPath) < 1024
+        ) {
+            @unlink($outputPath);
+
+            jsonResponse([
+                'ok' => false,
+                'message' =>
+                    "MP4書き出しに失敗しました。\n" .
+                    implode("\n", array_slice($output, -12))
+            ], 500);
+        }
+
+        $downloadName =
+            safeFileName(
+                (string)($project['name'] ?? 'edited_video'),
+                'edited_video'
+            ) .
+            '.mp4';
+
+        /*
+         * download URL。
+         * 一時ファイルなのでダウンロード後も残るが、
+         * data/exports の運用で定期削除可能。
+         */
+        $relative = 'data/exports/' . basename($outputPath);
+
+        jsonResponse([
+            'ok' => true,
+            'url' => $relative,
+            'filename' => $downloadName
+        ]);
+    }
+
     jsonResponse([
         'ok' => false,
         'message' => 'Unknown API'
     ], 404);
+}
+
+function ffmpegColor(string $color): string
+{
+    $color = trim($color);
+
+    if (preg_match('/^#[0-9a-fA-F]{6}$/', $color)) {
+        return substr($color, 1);
+    }
+
+    if (preg_match('/^[a-zA-Z]+$/', $color)) {
+        return $color;
+    }
+
+    return 'ffffff';
+}
+
+function ffmpegFilterEscape(string $value): string
+{
+    return str_replace(
+        ['\\', ':', "'"],
+        ['\\\\', '\\:', "\\'"],
+        $value
+    );
+}
+
+function findFontFile(): string
+{
+    $candidates = [
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf',
+        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+    ];
+
+    foreach ($candidates as $file) {
+        if (is_file($file)) {
+            return $file;
+        }
+    }
+
+    return '';
 }
 ?>
 <!doctype html>
@@ -310,20 +765,20 @@ if (isset($_GET['api'])) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>動画上直接編集ツール</title>
+<title>動画上直接編集</title>
 
 <style>
 :root{
-    --bg:#101114;
-    --panel:#1b1e23;
-    --panel2:#24282e;
-    --border:#3c424a;
-    --text:#f4f5f7;
-    --muted:#9ba3ad;
-    --blue:#176bb9;
-    --green:#287c48;
-    --red:#a33131;
-    --yellow:#d6a72d;
+    --bg:#0d0f12;
+    --panel:#171a1f;
+    --panel2:#20242a;
+    --border:#353b44;
+    --text:#f3f5f7;
+    --muted:#9da5af;
+    --blue:#1976d2;
+    --green:#21884b;
+    --red:#b83232;
+    --yellow:#d59c20;
 }
 
 *{box-sizing:border-box}
@@ -345,21 +800,24 @@ html,body{
 
 body{overflow:hidden}
 
-button,input,select,textarea{
+button,
+input,
+textarea,
+select{
     font:inherit;
 }
 
 button{
-    border:1px solid #515861;
-    background:#30353b;
-    color:#fff;
+    border:1px solid #4a515b;
     border-radius:6px;
-    padding:8px 11px;
+    background:#292e35;
+    color:#fff;
+    padding:8px 12px;
     cursor:pointer;
 }
 
 button:hover:not(:disabled){
-    background:#41474e;
+    background:#383f48;
 }
 
 button:disabled{
@@ -370,15 +828,16 @@ button:disabled{
 button.primary{background:var(--blue)}
 button.success{background:var(--green)}
 button.danger{background:var(--red)}
-button.small{padding:5px 8px;font-size:12px}
 
-input,select,textarea{
+input,
+textarea,
+select{
     width:100%;
     color:#fff;
-    background:#25292f;
-    border:1px solid #50565e;
+    background:#22262c;
+    border:1px solid #4a515b;
     border-radius:5px;
-    padding:7px;
+    padding:8px;
 }
 
 input[type=color]{
@@ -386,228 +845,69 @@ input[type=color]{
     padding:3px;
 }
 
-textarea{
-    min-height:90px;
-    resize:vertical;
-}
-
-.hidden{
-    display:none!important;
-}
-
-header{
-    height:50px;
+#app{
+    width:100%;
+    height:100%;
     display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:10px;
-    padding:0 14px;
-    background:#1b1e22;
-    border-bottom:1px solid #33383f;
-}
-
-header h1{
-    margin:0;
-    font-size:16px;
-}
-
-#status{
-    color:#b7bec7;
-    font-size:12px;
-}
-
-#message{
-    position:fixed;
-    top:60px;
-    left:50%;
-    transform:translateX(-50%);
-    z-index:9000;
-    display:none;
-    max-width:92vw;
-    padding:10px 16px;
-    border-radius:7px;
-    background:#943434;
-    box-shadow:0 10px 35px #000b;
-    white-space:pre-wrap;
-}
-
-#message.ok{
-    background:#267043;
-}
-
-/* HOME */
-
-#home{
-    height:calc(100vh - 50px);
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    background:#111317;
-    padding:20px;
-}
-
-.home-card{
-    width:min(760px,94vw);
-    max-height:90vh;
-    overflow:auto;
-    padding:25px;
-    background:#1b1e23;
-    border:1px solid var(--border);
-    border-radius:10px;
-    box-shadow:0 15px 50px #0007;
-}
-
-.home-card h2{
-    margin:0 0 8px;
-}
-
-.home-card p{
-    color:var(--muted);
-    font-size:13px;
-    line-height:1.6;
-}
-
-.home-actions{
-    display:flex;
-    flex-wrap:wrap;
-    gap:8px;
-    margin-top:15px;
-}
-
-.project-list{
-    margin-top:20px;
-}
-
-.project{
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:10px;
-    padding:11px;
-    margin:7px 0;
-    border:1px solid #41464e;
-    border-radius:7px;
-}
-
-.project-info{
-    min-width:0;
-}
-
-.project-name{
-    font-weight:600;
-    overflow:hidden;
-    text-overflow:ellipsis;
-    white-space:nowrap;
-}
-
-.project-meta{
-    margin-top:3px;
-    color:#929aa4;
-    font-size:11px;
-}
-
-.project-actions{
-    display:flex;
-    gap:5px;
-    flex-shrink:0;
-}
-
-/* RECORDER */
-
-#recorder{
-    position:absolute;
-    inset:50px 0 0;
-    z-index:100;
-    display:none;
     flex-direction:column;
-    background:#000;
 }
 
-#previewWrap{
-    flex:1;
-    min-height:0;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-}
-
-#preview{
-    max-width:100%;
-    max-height:100%;
-}
-
-#recordToolbar{
-    min-height:60px;
-    display:flex;
-    align-items:center;
-    flex-wrap:wrap;
-    gap:8px;
-    padding:8px 12px;
-    background:#1a1d21;
-    border-top:1px solid #33383f;
-}
-
-#timer{
-    min-width:80px;
-    font-variant-numeric:tabular-nums;
-}
-
-/* EDITOR */
-
-#editor{
-    position:fixed;
-    inset:0;
-    z-index:200;
-    display:none;
-    flex-direction:column;
-    background:#111;
-}
-
-.editor-top{
-    height:50px;
+#topbar{
+    height:54px;
     flex-shrink:0;
     display:flex;
     align-items:center;
     gap:7px;
-    padding:6px 10px;
-    background:#1b1e22;
-    border-bottom:1px solid #363b42;
+    padding:7px 10px;
+    border-bottom:1px solid var(--border);
+    background:#17191d;
 }
 
-#editorProjectName{
-    width:230px;
-    font-weight:600;
+#topbar h1{
+    margin:0 12px 0 0;
+    font-size:16px;
+    white-space:nowrap;
 }
 
-#editorStatus{
-    color:#9da5ae;
+#projectName{
+    width:210px;
+    flex-shrink:1;
+}
+
+.spacer{flex:1}
+
+#status{
+    color:#aeb5bf;
     font-size:12px;
+    white-space:nowrap;
 }
 
-.editor-main{
+#editor{
+    min-height:0;
     flex:1;
-    min-height:0;
-    display:grid;
-    grid-template-columns:minmax(0,1fr) 330px;
+    display:flex;
+    flex-direction:column;
 }
 
-.video-area{
-    min-width:0;
+#stageArea{
     min-height:0;
+    flex:1;
     display:flex;
-    justify-content:center;
     align-items:center;
-    overflow:hidden;
+    justify-content:center;
     background:#000;
+    overflow:hidden;
+    position:relative;
 }
 
 #videoStage{
     position:relative;
     background:#000;
-    overflow:visible;
+    line-height:0;
+    box-shadow:0 0 0 1px #222;
 }
 
-#recordedVideo{
+#video{
     display:block;
     width:100%;
     height:100%;
@@ -617,7 +917,6 @@ header h1{
 #overlay{
     position:absolute;
     inset:0;
-    pointer-events:none;
 }
 
 #objects{
@@ -625,7 +924,7 @@ header h1{
     inset:0;
 }
 
-#connectors{
+#connections{
     position:absolute;
     inset:0;
     width:100%;
@@ -634,318 +933,326 @@ header h1{
     pointer-events:none;
 }
 
-.edit-object{
+.object{
     position:absolute;
     pointer-events:auto;
-    cursor:move;
     user-select:none;
     touch-action:none;
-    overflow:visible;
+    cursor:move;
 }
 
-.edit-object.selected{
-    outline:2px solid #fff;
+.object.selected{
+    outline:2px solid #50a7ff;
     outline-offset:2px;
 }
 
-.edit-object.comment{
-    display:flex;
-    align-items:center;
-    justify-content:flex-start;
+.object.text{
     min-width:40px;
-    min-height:25px;
-    padding:6px 9px;
+    min-height:24px;
+    padding:5px 8px;
     white-space:pre-wrap;
-    word-break:break-word;
     overflow:hidden;
-    box-shadow:0 2px 12px #0006;
+    word-break:break-word;
+    line-height:1.2;
 }
 
-.edit-object.box{
+.object.box{
     background:transparent;
 }
 
-.resize-handle{
+.handle{
+    display:none;
     position:absolute;
+    width:12px;
+    height:12px;
     right:-7px;
     bottom:-7px;
-    width:13px;
-    height:13px;
-    border-radius:50%;
     background:#fff;
-    border:1px solid #222;
+    border:1px solid #111;
+    border-radius:50%;
     cursor:nwse-resize;
-    display:none;
 }
 
-.edit-object.selected .resize-handle{
+.object.selected .handle{
     display:block;
 }
 
-.connection-point{
+.point{
+    display:none;
     position:absolute;
     width:12px;
     height:12px;
     margin:-6px;
-    border:2px solid #fff;
-    background:#257bd3;
+    background:#2088df;
+    border:2px solid white;
     border-radius:50%;
-    display:none;
-    z-index:20;
+    z-index:5;
     cursor:crosshair;
 }
 
-.edit-object.selected .connection-point{
+.object.selected .point{
     display:block;
 }
 
-.cp-n{left:50%;top:0}
-.cp-ne{left:100%;top:0}
-.cp-e{left:100%;top:50%}
-.cp-se{left:100%;top:100%}
-.cp-s{left:50%;top:100%}
-.cp-sw{left:0;top:100%}
-.cp-w{left:0;top:50%}
-.cp-nw{left:0;top:0}
+.point.n{left:50%;top:0}
+.point.ne{left:100%;top:0}
+.point.e{left:100%;top:50%}
+.point.se{left:100%;top:100%}
+.point.s{left:50%;top:100%}
+.point.sw{left:0;top:100%}
+.point.w{left:0;top:50%}
+.point.nw{left:0;top:0}
 
-.connector{
-    fill:none;
+.connection{
     stroke:#fff;
-    stroke-width:2.5;
-    pointer-events:stroke;
-    cursor:pointer;
-}
-
-.connector.selected{
-    stroke:#ffd34d;
-    stroke-width:5;
-}
-
-.connector-hit{
     fill:none;
-    stroke:transparent;
-    stroke-width:15;
     pointer-events:stroke;
     cursor:pointer;
 }
 
-/* ASIDE */
-
-aside{
-    min-width:0;
-    overflow:auto;
-    padding:11px;
-    background:#1b1e22;
-    border-left:1px solid #393e45;
+.connection.selected{
+    stroke:#ffd54f;
 }
 
-.panel{
-    margin-bottom:13px;
-    padding-bottom:13px;
-    border-bottom:1px solid #383d44;
+.connection-hit{
+    stroke:transparent;
+    fill:none;
+    stroke-width:16;
+    pointer-events:stroke;
+    cursor:pointer;
 }
 
-.panel h3{
-    margin:0 0 8px;
-    font-size:14px;
-}
-
-.help{
-    color:#999fa8;
-    font-size:12px;
-    line-height:1.55;
-}
-
-.button-row{
+#emptyState{
+    position:absolute;
+    inset:0;
     display:flex;
-    flex-wrap:wrap;
-    gap:6px;
-    margin-top:8px;
+    align-items:center;
+    justify-content:center;
+    color:#8f969e;
+    pointer-events:none;
+    text-align:center;
 }
-
-.field{
-    display:block;
-    margin:7px 0;
-    color:#c5cad0;
-    font-size:12px;
-}
-
-.grid2{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:0 7px;
-}
-
-#selectionInfo{
-    padding:8px;
-    background:#15181c;
-    border:1px solid #353a40;
-    border-radius:5px;
-    color:#b8bec7;
-    font-size:12px;
-}
-
-/* TIMELINE */
 
 #timeline{
-    height:88px;
     flex-shrink:0;
-    background:#191c20;
-    border-top:1px solid #363b42;
-    padding:7px 10px;
+    height:104px;
+    padding:8px 12px;
+    background:#171a1e;
+    border-top:1px solid var(--border);
+}
+
+#timelineHeader{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    height:24px;
+    color:#c7cdd5;
+    font-size:12px;
+}
+
+#currentTime{
+    font-variant-numeric:tabular-nums;
+}
+
+#durationText{
+    color:#8f969f;
+    font-variant-numeric:tabular-nums;
 }
 
 #seek{
     width:100%;
+    margin:3px 0;
+    padding:0;
 }
 
-.timeline-row{
-    display:grid;
-    grid-template-columns:60px 1fr;
-    gap:6px;
-    margin-top:7px;
-    align-items:center;
-    font-size:10px;
-    color:#8f969f;
-}
-
-.track{
+#track{
+    height:28px;
     position:relative;
-    height:13px;
-    background:#292d33;
-    border-radius:3px;
+    background:#252a30;
+    border-radius:4px;
+    overflow:hidden;
 }
 
-.track-item{
+.trackItem{
     position:absolute;
-    top:2px;
-    height:9px;
+    top:5px;
+    height:18px;
     min-width:3px;
-    border-radius:2px;
+    border-radius:3px;
+    cursor:pointer;
 }
 
-.track-item.comment{background:#42a5f5}
-.track-item.box{background:#ef5350}
-.track-item.connection{background:#b77bff}
+.trackItem.text{background:#42a5f5}
+.trackItem.box{background:#ef5350}
+.trackItem.line{background:#b477ff}
 
-#editorFooter{
-    min-height:48px;
+#bottom{
+    flex-shrink:0;
+    min-height:50px;
     display:flex;
-    justify-content:center;
     align-items:center;
-    flex-wrap:wrap;
+    justify-content:center;
     gap:7px;
-    padding:6px 10px;
-    background:#1b1e22;
-    border-top:1px solid #383d44;
+    padding:6px;
+    background:#17191d;
+    border-top:1px solid var(--border);
 }
 
-#timeReadout{
-    min-width:100px;
-    text-align:center;
-    font-variant-numeric:tabular-nums;
-}
-
-/* CONTEXT */
-
-#contextMenu{
+#message{
     position:fixed;
-    z-index:7000;
+    z-index:9000;
+    left:50%;
+    top:64px;
+    transform:translateX(-50%);
     display:none;
-    width:205px;
-    padding:5px;
-    border:1px solid #555b63;
+    max-width:90vw;
+    padding:11px 16px;
     border-radius:7px;
-    background:#292d33;
-    box-shadow:0 12px 40px #000c;
+    background:#9c3232;
+    box-shadow:0 12px 40px #000b;
+    white-space:pre-wrap;
 }
 
-#contextMenu button{
-    display:block;
-    width:100%;
-    text-align:left;
-    background:transparent;
-    border:0;
+#message.ok{
+    background:#227745;
 }
 
-#contextMenu button:hover{
-    background:#3c424a;
-}
-
-/* MODAL */
-
-.modal-backdrop{
+.modal{
     position:fixed;
     inset:0;
     z-index:8000;
     display:none;
-    justify-content:center;
     align-items:center;
+    justify-content:center;
     padding:15px;
-    background:#0009;
+    background:#000b;
 }
 
-.modal{
+.modalBox{
     width:min(560px,96vw);
     max-height:92vh;
     overflow:auto;
-    padding:17px;
+    padding:18px;
     background:#20242a;
-    border:1px solid #555b64;
+    border:1px solid #505760;
     border-radius:9px;
-    box-shadow:0 20px 70px #000c;
+    box-shadow:0 20px 70px #000d;
 }
 
 .modal h2{
-    margin:0 0 12px;
-    font-size:16px;
+    margin:0 0 15px;
+    font-size:17px;
 }
 
-.modal-grid{
+.grid{
     display:grid;
     grid-template-columns:1fr 1fr;
-    gap:0 9px;
+    gap:8px;
+}
+
+.field{
+    display:block;
+    color:#c6ccd4;
+    font-size:12px;
+    margin-bottom:9px;
+}
+
+.field input,
+.field textarea,
+.field select{
+    margin-top:4px;
 }
 
 .full{
     grid-column:1/-1;
 }
 
-.modal-footer{
+.actions{
     display:flex;
     justify-content:flex-end;
     gap:7px;
-    margin-top:13px;
+    margin-top:14px;
 }
 
-.badge{
-    display:inline-block;
-    padding:2px 6px;
-    border-radius:4px;
-    background:#30363d;
-    color:#c7cdd4;
-    font-size:10px;
+#contextMenu{
+    position:fixed;
+    z-index:8500;
+    display:none;
+    width:200px;
+    padding:5px;
+    background:#292e34;
+    border:1px solid #555d66;
+    border-radius:7px;
+    box-shadow:0 12px 40px #000c;
 }
 
-@media(max-width:850px){
-    .editor-main{
-        display:flex;
-        flex-direction:column;
+#contextMenu button{
+    display:block;
+    width:100%;
+    border:0;
+    background:transparent;
+    text-align:left;
+}
+
+#contextMenu button:hover{
+    background:#3b424b;
+}
+
+#manageList{
+    max-height:45vh;
+    overflow:auto;
+}
+
+.projectItem{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:9px;
+    margin:6px 0;
+    border:1px solid #414851;
+    border-radius:6px;
+}
+
+.projectItem main{
+    min-width:0;
+    flex:1;
+}
+
+.projectItem strong{
+    display:block;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+
+.projectItem small{
+    color:#9098a2;
+}
+
+.hidden{
+    display:none!important;
+}
+
+@media(max-width:700px){
+    #projectName{
+        width:130px;
     }
 
-    .video-area{
-        min-height:300px;
-        flex:1;
+    #topbar h1{
+        display:none;
     }
 
-    aside{
-        max-height:42vh;
-        border-left:0;
-        border-top:1px solid #393e45;
+    #topbar{
+        overflow:auto;
     }
 
-    #editorProjectName{
-        width:150px;
+    #timeline{
+        height:94px;
+    }
+
+    #bottom{
+        overflow:auto;
+        justify-content:flex-start;
     }
 }
 </style>
@@ -953,630 +1260,322 @@ aside{
 
 <body>
 
-<header>
-    <h1>動画上直接編集ツール</h1>
-    <div id="status">待機中</div>
+<div id="app">
+
+<header id="topbar">
+    <h1>動画上直接編集</h1>
+
+    <input
+        id="projectName"
+        maxlength="120"
+        placeholder="プロジェクト名"
+        disabled
+    >
+
+    <button id="openVideo" class="primary">
+        動画を読み込む
+    </button>
+
+    <button id="startEdit" disabled>
+        編集開始
+    </button>
+
+    <button id="saveProject" class="success" disabled>
+        保存
+    </button>
+
+    <button id="exportMp4" disabled>
+        MP4書き出し
+    </button>
+
+    <button id="manageProjects">
+        保存データ
+    </button>
+
+    <span class="spacer"></span>
+    <span id="status">動画未読込</span>
 </header>
+
+<main id="editor">
+
+<section id="stageArea">
+
+    <div id="emptyState">
+        <div>
+            <div style="font-size:18px;margin-bottom:8px">
+                動画を読み込んでください
+            </div>
+            <div>
+                読み込み完了後に「編集開始」が有効になります
+            </div>
+        </div>
+    </div>
+
+    <div id="videoStage" class="hidden">
+
+        <video
+            id="video"
+            playsinline
+            preload="metadata"
+        ></video>
+
+        <div id="overlay">
+
+            <svg id="connections"
+                 viewBox="0 0 100 100"
+                 preserveAspectRatio="none"></svg>
+
+            <div id="objects"></div>
+
+        </div>
+    </div>
+
+</section>
+
+<section id="timeline">
+
+    <div id="timelineHeader">
+        <span id="currentTime">00:00:00</span>
+        <span>/</span>
+        <span id="durationText">00:00:00</span>
+        <span class="spacer"></span>
+        <span id="editModeText">編集待機中</span>
+    </div>
+
+    <input
+        id="seek"
+        type="range"
+        min="0"
+        max="0"
+        step="0.001"
+        value="0"
+        disabled
+    >
+
+    <div id="track"></div>
+
+</section>
+
+<footer id="bottom">
+
+    <button id="addText" disabled>
+        ＋テキスト
+    </button>
+
+    <button id="addBox" disabled>
+        ＋強調枠
+    </button>
+
+    <button id="lineMode" disabled>
+        ＋接続線
+    </button>
+
+    <button id="deleteElement" class="danger" disabled>
+        削除
+    </button>
+
+    <button id="play" disabled>
+        ▶ 再生
+    </button>
+
+    <button id="pause" disabled>
+        ■ 停止
+    </button>
+
+    <button id="toStart" disabled>
+        現在位置を開始
+    </button>
+
+    <button id="toEnd" disabled>
+        現在位置を終了
+    </button>
+
+    <span id="selectionLabel">選択なし</span>
+
+</footer>
+
+</main>
+</div>
+
+<input
+    id="videoFile"
+    type="file"
+    accept="video/*"
+    class="hidden"
+>
+
+<input
+    id="projectFile"
+    type="file"
+    accept=".json,application/json"
+    class="hidden"
+>
 
 <div id="message"></div>
 
-<!-- HOME -->
-<section id="home">
-    <div class="home-card">
-        <h2>動画を編集</h2>
+<!-- 書式モーダル -->
+<div id="styleModal" class="modal">
 
-        <p>
-            動画を読み込んでから編集を開始します。
-            プロジェクトには明示的な名前を付けて管理できます。
-            動画本体はブラウザのIndexedDBへ永続保存し、
-            編集データはサーバーまたはローカルへ保存できます。
-        </p>
-
-        <div class="home-actions">
-            <button id="newVideoBtn" class="primary">
-                動画ファイルを読み込む
-            </button>
-
-            <button id="recordScreenBtn">
-                画面を録画
-            </button>
-
-            <button id="manageBtn">
-                保存データ管理
-            </button>
-        </div>
-
-        <input
-            id="videoFile"
-            type="file"
-            accept="video/*"
-            class="hidden"
-        >
-
-        <div id="projectList" class="project-list"></div>
-    </div>
-</section>
-
-<!-- RECORDER -->
-<section id="recorder">
-    <div id="previewWrap">
-        <video
-            id="preview"
-            autoplay
-            muted
-            playsinline
-        ></video>
-    </div>
-
-    <div id="recordToolbar">
-        <label>
-            <input id="systemAudio" type="checkbox">
-            画面音声
-        </label>
-
-        <label>
-            <input id="microphone" type="checkbox">
-            マイク
-        </label>
-
-        <span id="timer">00:00:00</span>
-
-        <button id="startRecord" class="primary">
-            録画開始
-        </button>
-
-        <button id="pauseRecord" disabled>
-            一時停止
-        </button>
-
-        <button id="stopRecord" class="danger" disabled>
-            停止
-        </button>
-
-        <button id="recordCancel">
-            戻る
-        </button>
-    </div>
-</section>
-
-<!-- EDITOR -->
-<section id="editor">
-
-    <div class="editor-top">
-        <button id="backHome">
-            閉じる
-        </button>
-
-        <input
-            id="editorProjectName"
-            maxlength="120"
-            placeholder="プロジェクト名"
-        >
-
-        <button id="saveServer" class="success">
-            保存
-        </button>
-
-        <button id="saveLocal">
-            ローカル保存
-        </button>
-
-        <button id="exportJson">
-            書き出し
-        </button>
-
-        <button id="importJson">
-            読み込み
-        </button>
-
-        <input
-            id="jsonFile"
-            type="file"
-            accept=".json,application/json"
-            class="hidden"
-        >
-
-        <span id="editorStatus"></span>
-    </div>
-
-    <div class="editor-main">
-
-        <div class="video-area" id="videoArea">
-
-            <div id="videoStage">
-
-                <video
-                    id="recordedVideo"
-                    controls
-                    playsinline
-                ></video>
-
-                <div id="overlay">
-                    <svg id="connectors"></svg>
-                    <div id="objects"></div>
-                </div>
-
-            </div>
-
-        </div>
-
-        <aside>
-
-            <div class="panel">
-                <h3>編集</h3>
-
-                <div class="help">
-                    動画上へ直接要素を配置します。
-                    要素はドラッグ移動・リサイズできます。
-                    書式変更は各要素を右クリックしてください。
-                    線も右クリックで接点と書式を変更できます。
-                </div>
-
-                <div class="button-row">
-                    <button id="addComment" class="primary">
-                        コメント
-                    </button>
-
-                    <button id="addBox" class="primary">
-                        強調枠
-                    </button>
-
-                    <button id="connectMode">
-                        線で接続
-                    </button>
-
-                    <button id="deleteSelected" class="danger">
-                        削除
-                    </button>
-                </div>
-            </div>
-
-            <div class="panel">
-                <h3>選択中</h3>
-
-                <div id="selectionInfo">
-                    何も選択されていません
-                </div>
-
-                <div id="objectEditor" class="hidden">
-
-                    <label id="textField" class="field">
-                        内容
-                        <textarea id="objectText"></textarea>
-                    </label>
-
-                    <div class="grid2">
-                        <label class="field">
-                            開始
-                            <input
-                                id="objectStart"
-                                type="number"
-                                min="0"
-                                step=".1"
-                            >
-                        </label>
-
-                        <label class="field">
-                            終了
-                            <input
-                                id="objectEnd"
-                                type="number"
-                                min="0"
-                                step=".1"
-                            >
-                        </label>
-
-                        <label class="field">
-                            左 %
-                            <input
-                                id="objectX"
-                                type="number"
-                                min="0"
-                                max="100"
-                                step=".1"
-                            >
-                        </label>
-
-                        <label class="field">
-                            上 %
-                            <input
-                                id="objectY"
-                                type="number"
-                                min="0"
-                                max="100"
-                                step=".1"
-                            >
-                        </label>
-
-                        <label class="field">
-                            幅 %
-                            <input
-                                id="objectW"
-                                type="number"
-                                min=".5"
-                                max="100"
-                                step=".1"
-                            >
-                        </label>
-
-                        <label class="field">
-                            高さ %
-                            <input
-                                id="objectH"
-                                type="number"
-                                min=".5"
-                                max="100"
-                                step=".1"
-                            >
-                        </label>
-                    </div>
-
-                    <button id="applyObject" class="primary">
-                        反映
-                    </button>
-                </div>
-            </div>
-
-            <div class="panel">
-                <h3>保存</h3>
-
-                <div class="help">
-                    サーバー保存には上限があります。
-                    上限に達した場合はローカル保存へ切り替えられます。
-                    動画本体はブラウザのIndexedDBへ保存されます。
-                </div>
-
-                <div class="button-row">
-                    <button id="showManage">
-                        保存データ管理
-                    </button>
-                </div>
-            </div>
-
-        </aside>
-    </div>
-
-    <div id="timeline">
-        <input
-            id="seek"
-            type="range"
-            min="0"
-            max="0"
-            value="0"
-            step=".01"
-        >
-
-        <div class="timeline-row">
-            <span>要素</span>
-            <div id="elementTrack" class="track"></div>
-        </div>
-
-        <div class="timeline-row">
-            <span>接続線</span>
-            <div id="connectionTrack" class="track"></div>
-        </div>
-    </div>
-
-    <div id="editorFooter">
-
-        <button id="playVideo" class="primary">
-            再生
-        </button>
-
-        <button id="pauseVideo">
-            停止
-        </button>
-
-        <span id="timeReadout">
-            00:00 / 00:00
-        </span>
-
-        <button id="startPoint">
-            開始を現在位置
-        </button>
-
-        <button id="endPoint">
-            終了を現在位置
-        </button>
-
-    </div>
-
-</section>
-
-<!-- CONTEXT MENU -->
-<div id="contextMenu">
-    <button data-action="style">
-        書式を変更
-    </button>
-
-    <button data-action="duplicate">
-        複製
-    </button>
-
-    <button data-action="delete">
-        削除
-    </button>
-</div>
-
-<!-- OBJECT STYLE MODAL -->
-<div id="objectModal" class="modal-backdrop">
-    <div class="modal">
+    <div class="modalBox">
 
         <h2>要素の書式</h2>
 
-        <div class="modal-grid">
-
-            <label class="field full">
+        <div id="styleTextArea" class="field">
+            <label>
                 内容
-                <textarea id="mText"></textarea>
+                <textarea id="styleText" rows="4"></textarea>
             </label>
+        </div>
+
+        <div class="grid">
 
             <label class="field">
                 文字色
-                <input id="mColor" type="color">
+                <input id="styleColor" type="color" value="#ffffff">
             </label>
 
             <label class="field">
                 背景色
-                <input id="mBg" type="color">
+                <input id="styleBackground" type="color" value="#000000">
             </label>
 
             <label class="field">
                 文字サイズ
-                <input
-                    id="mFontSize"
-                    type="number"
-                    min="8"
-                    max="200"
-                >
-            </label>
-
-            <label class="field">
-                不透明度 %
-                <input
-                    id="mOpacity"
-                    type="number"
-                    min="0"
-                    max="100"
-                >
+                <input id="styleFontSize" type="number" min="8" max="200">
             </label>
 
             <label class="field">
                 枠色
-                <input id="mBorderColor" type="color">
+                <input id="styleBorderColor" type="color" value="#ff3b30">
             </label>
 
             <label class="field">
                 枠幅
-                <input
-                    id="mBorderWidth"
-                    type="number"
-                    min="0"
-                    max="30"
-                >
+                <input id="styleBorderWidth" type="number" min="1" max="30">
             </label>
 
             <label class="field">
-                角丸
-                <input
-                    id="mRadius"
-                    type="number"
-                    min="0"
-                    max="100"
-                >
-            </label>
-
-            <label class="field">
-                太字
-                <select id="mWeight">
-                    <option value="400">通常</option>
-                    <option value="600">中太字</option>
-                    <option value="700">太字</option>
-                    <option value="900">極太</option>
-                </select>
+                線幅
+                <input id="styleLineWidth" type="number" min="1" max="20">
             </label>
 
         </div>
 
-        <div class="modal-footer">
-            <button data-close-modal>
-                キャンセル
-            </button>
-
-            <button id="applyObjectStyle" class="primary">
-                反映
-            </button>
+        <div class="actions">
+            <button id="styleCancel">キャンセル</button>
+            <button id="styleApply" class="primary">反映</button>
         </div>
 
     </div>
 </div>
 
-<!-- CONNECTION MODAL -->
-<div id="connectionModal" class="modal-backdrop">
-    <div class="modal">
+<!-- プロジェクト管理 -->
+<div id="manageModal" class="modal">
 
-        <h2>線の設定</h2>
+    <div class="modalBox">
 
-        <div class="modal-grid">
+        <h2>保存データ</h2>
 
-            <label class="field">
-                接続元
-                <select id="cFromPoint">
-                    <option value="n">上</option>
-                    <option value="ne">右上</option>
-                    <option value="e">右</option>
-                    <option value="se">右下</option>
-                    <option value="s">下</option>
-                    <option value="sw">左下</option>
-                    <option value="w">左</option>
-                    <option value="nw">左上</option>
-                </select>
-            </label>
+        <p style="color:#9da5af;font-size:12px">
+            サーバー保存は最大 <?= (int)MAX_SERVER_PROJECTS ?> 件です。
+            上限に達した場合はローカル保存へ切り替えます。
+            動画本体はブラウザのIndexedDBに保存します。
+        </p>
 
-            <label class="field">
-                接続先
-                <select id="cToPoint">
-                    <option value="n">上</option>
-                    <option value="ne">右上</option>
-                    <option value="e">右</option>
-                    <option value="se">右下</option>
-                    <option value="s">下</option>
-                    <option value="sw">左下</option>
-                    <option value="w">左</option>
-                    <option value="nw">左上</option>
-                </select>
-            </label>
-
-            <label class="field">
-                色
-                <input id="cColor" type="color">
-            </label>
-
-            <label class="field">
-                太さ
-                <input
-                    id="cWidth"
-                    type="number"
-                    min="1"
-                    max="30"
-                    step=".5"
-                >
-            </label>
-
-            <label class="field">
-                線種
-                <select id="cDash">
-                    <option value="">実線</option>
-                    <option value="8 5">破線</option>
-                    <option value="2 5">点線</option>
-                    <option value="12 5 2 5">一点鎖線</option>
-                </select>
-            </label>
-
-            <label class="field">
-                始点
-                <select id="cStartArrow">
-                    <option value="none">なし</option>
-                    <option value="arrow">矢印</option>
-                    <option value="circle">円</option>
-                </select>
-            </label>
-
-            <label class="field">
-                終点
-                <select id="cEndArrow">
-                    <option value="arrow">矢印</option>
-                    <option value="none">なし</option>
-                    <option value="circle">円</option>
-                </select>
-            </label>
-
-            <label class="field">
-                曲線
-                <select id="cCurve">
-                    <option value="straight">直線</option>
-                    <option value="smooth">曲線</option>
-                </select>
-            </label>
-
-        </div>
-
-        <div class="modal-footer">
-            <button data-close-modal>
-                キャンセル
+        <div style="display:flex;gap:7px;margin-bottom:12px">
+            <button id="importProject">
+                JSON読込
             </button>
-
-            <button id="applyConnectionStyle" class="primary">
-                反映
+            <button id="refreshProjects">
+                更新
             </button>
-        </div>
-
-    </div>
-</div>
-
-<!-- PROJECT MANAGEMENT -->
-<div id="manageModal" class="modal-backdrop">
-    <div class="modal">
-
-        <h2>保存データ管理</h2>
-
-        <div id="manageInfo" class="help"></div>
-
-        <div id="manageList"></div>
-
-        <div class="modal-footer">
-            <button data-close-modal>
+            <button id="closeManage">
                 閉じる
             </button>
         </div>
 
+        <h3>サーバー</h3>
+        <div id="serverProjects">
+            読み込み中...
+        </div>
+
+        <h3>ローカル</h3>
+        <div id="localProjects">
+            読み込み中...
+        </div>
+
     </div>
 </div>
 
-<!-- NAME MODAL -->
-<div id="nameModal" class="modal-backdrop">
-    <div class="modal">
+<!-- プロジェクト名 -->
+<div id="nameModal" class="modal">
 
-        <h2>プロジェクト名</h2>
+    <div class="modalBox" style="width:min(430px,94vw)">
+
+        <h2>編集を開始</h2>
+
+        <p style="color:#a4abb4;font-size:12px">
+            プロジェクト名を指定してください。
+        </p>
 
         <label class="field">
-            名前
+            プロジェクト名
             <input
-                id="projectNameInput"
+                id="nameInput"
                 maxlength="120"
-                placeholder="例：営業説明動画_第1版"
+                placeholder="例：説明動画_第1版"
             >
         </label>
 
-        <div class="modal-footer">
-            <button id="nameCancel">
-                キャンセル
-            </button>
-
-            <button id="nameOk" class="primary">
-                編集を開始
+        <div class="actions">
+            <button id="nameCancel">キャンセル</button>
+            <button id="nameApply" class="primary">
+                編集開始
             </button>
         </div>
 
     </div>
 </div>
 
+<!-- 右クリック -->
+<div id="contextMenu">
+    <button data-action="style">書式を変更</button>
+    <button data-action="duplicate">複製</button>
+    <button data-action="delete">削除</button>
+</div>
+
 <script>
 /*
- * 重要:
- * PHPのAPP_VERSIONはPHPの定数なのでJavaScriptから直接参照できません。
- * PHPからJSONとして明示的に渡します。
+ * PHPのAPP_VERSIONをJSへ明示的に渡す。
+ * PHP定数を直接JSから参照しない。
  */
 const APP_VERSION = <?= json_encode(APP_VERSION) ?>;
 const MAX_SERVER_PROJECTS = <?= json_encode(MAX_SERVER_PROJECTS) ?>;
 
-const API_BASE = location.pathname;
+const API = location.pathname;
 
 const state = {
     project: null,
     videoBlob: null,
     videoUrl: '',
-    selected: null,
+    selectedId: null,
     selectedType: null,
     contextTarget: null,
+    editing: false,
+    dirty: false,
     connectMode: false,
     connectSource: null,
+    drag: null,
+    resize: null,
     db: null,
-    recorder: null,
-    recordStream: null,
-    recordTimer: null,
-    recordStartedAt: 0,
-    recordChunks: [],
-    pendingVideoFile: null,
-    pendingProjectName: '',
-    saving: false,
-    dirty: false
+    localOnly: false,
+    saving: false
 };
 
 const $ = id => document.getElementById(id);
 
-function uid(prefix = 'id') {
-    if (window.crypto?.randomUUID) {
+function uid(prefix = 'id'){
+    if(window.crypto?.randomUUID){
         return prefix + '-' + crypto.randomUUID();
     }
 
@@ -1585,216 +1584,217 @@ function uid(prefix = 'id') {
         Math.random().toString(36).slice(2);
 }
 
-function clone(value) {
+function clone(value){
     return JSON.parse(JSON.stringify(value));
 }
 
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#039;');
-}
-
-function clamp(value, min, max) {
-    return Math.min(max, Math.max(min, value));
-}
-
-function number(value, fallback = 0) {
+function num(value, fallback = 0){
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
 }
 
-function nowISO() {
+function clamp(value, min, max){
+    return Math.min(max, Math.max(min, value));
+}
+
+function escapeHtml(value){
+    return String(value ?? '')
+        .replaceAll('&','&amp;')
+        .replaceAll('<','&lt;')
+        .replaceAll('>','&gt;')
+        .replaceAll('"','&quot;')
+        .replaceAll("'","&#039;");
+}
+
+function nowISO(){
     return new Date().toISOString();
 }
 
-function formatTime(seconds) {
-    seconds = Math.max(0, number(seconds));
+function timeText(seconds){
+    seconds = Math.max(0, num(seconds));
+
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
     const s = Math.floor(seconds % 60);
 
     return [
-        h ? String(h).padStart(2, '0') : '00',
-        String(m).padStart(2, '0'),
-        String(s).padStart(2, '0')
+        String(h).padStart(2,'0'),
+        String(m).padStart(2,'0'),
+        String(s).padStart(2,'0')
     ].join(':');
 }
 
-function showMessage(text, ok = false) {
+function message(text, ok = false){
     const el = $('message');
+
     el.textContent = text;
     el.className = ok ? 'ok' : '';
     el.style.display = 'block';
 
-    clearTimeout(showMessage.timer);
+    clearTimeout(message.timer);
 
-    showMessage.timer = setTimeout(() => {
+    message.timer = setTimeout(() => {
         el.style.display = 'none';
-    }, 3500);
+    }, 4000);
 }
 
-function setStatus(text) {
+function status(text){
     $('status').textContent = text;
 }
 
-function setEditorStatus(text) {
-    $('editorStatus').textContent = text;
-}
-
-function markDirty() {
+function markDirty(){
     state.dirty = true;
-    setEditorStatus('未保存');
+    $('editModeText').textContent = '未保存';
 }
 
-function markClean(text = '保存済み') {
+function markClean(text = '保存済み'){
     state.dirty = false;
-    setEditorStatus(text);
+    $('editModeText').textContent = text;
 }
 
-function createEmptyProject(name, videoName = '') {
+function createProject(name = '', videoName = ''){
     return {
         version: APP_VERSION,
         projectId: uid('project'),
-        name: String(name || '名称未設定').trim(),
+        name: name.trim(),
         videoName,
-        videoKey: '',
-        createdAt: nowISO(),
-        savedAt: '',
         duration: 0,
         elements: [],
         connections: [],
+        createdAt: nowISO(),
+        savedAt: '',
         metadata: {
-            editor: 'video-overlay-editor'
+            editor: 'video-overlay-editor',
+            version: APP_VERSION
         }
     };
 }
 
-/* =========================================================
- * IndexedDB
- * ======================================================= */
+function normalizeProject(project){
+    const p = clone(project || {});
 
-function openDB() {
-    return new Promise((resolve, reject) => {
-        const request = indexedDB.open(
-            'videoOverlayEditor',
-            2
+    p.version = APP_VERSION;
+    p.projectId =
+        typeof p.projectId === 'string' &&
+        p.projectId
+            ? p.projectId
+            : uid('project');
+
+    p.name =
+        String(p.name || '名称未設定').trim();
+
+    p.videoName =
+        String(p.videoName || '');
+
+    p.duration =
+        Math.max(
+            0,
+            num(p.duration, 0)
         );
 
-        request.onupgradeneeded = event => {
-            const db = event.target.result;
+    p.elements =
+        Array.isArray(p.elements)
+            ? p.elements
+            : [];
 
-            if (!db.objectStoreNames.contains('videos')) {
-                db.createObjectStore('videos', {
-                    keyPath: 'key'
-                });
-            }
+    p.connections =
+        Array.isArray(p.connections)
+            ? p.connections
+            : [];
 
-            if (!db.objectStoreNames.contains('projects')) {
-                db.createObjectStore('projects', {
-                    keyPath: 'projectId'
-                });
-            }
-        };
+    p.elements = p.elements.map(e => normalizeElement(e));
+    p.connections = p.connections.map(c => normalizeConnection(c));
 
-        request.onsuccess = () => {
-            state.db = request.result;
-            resolve(state.db);
-        };
-
-        request.onerror = () => {
-            reject(request.error);
-        };
-    });
+    return p;
 }
 
-function idbPut(store, value) {
-    return new Promise((resolve, reject) => {
-        const tx = state.db.transaction(
-            store,
-            'readwrite'
-        );
+function normalizeElement(element){
+    const e = clone(element || {});
 
-        tx.objectStore(store).put(value);
+    e.id =
+        typeof e.id === 'string'
+            ? e.id
+            : uid('element');
 
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-    });
+    e.type =
+        ['text','box'].includes(e.type)
+            ? e.type
+            : 'text';
+
+    e.text =
+        String(e.text ?? '');
+
+    e.x = clamp(num(e.x,10),0,99);
+    e.y = clamp(num(e.y,10),0,99);
+
+    e.w = clamp(num(e.w,20),1,100-e.x);
+    e.h = clamp(num(e.h,10),1,100-e.y);
+
+    e.start = Math.max(0,num(e.start,0));
+    e.end = Math.max(e.start,num(e.end,0));
+
+    e.style = {
+        color: e.style?.color || '#ffffff',
+        background: e.style?.background || '#000000',
+        fontSize: clamp(num(e.style?.fontSize,32),8,200),
+        borderColor: e.style?.borderColor || '#ff3b30',
+        borderWidth: clamp(num(e.style?.borderWidth,4),1,30),
+        lineWidth: clamp(num(e.style?.lineWidth,4),1,20),
+        opacity: clamp(num(e.style?.opacity,1),0,1)
+    };
+
+    return e;
 }
 
-function idbGet(store, key) {
-    return new Promise((resolve, reject) => {
-        const tx = state.db.transaction(
-            store,
-            'readonly'
-        );
+function normalizeConnection(connection){
+    const c = clone(connection || {});
 
-        const req = tx.objectStore(store).get(key);
+    c.id =
+        typeof c.id === 'string'
+            ? c.id
+            : uid('line');
 
-        req.onsuccess = () => resolve(req.result || null);
-        req.onerror = () => reject(req.error);
-    });
-}
+    c.fromId = String(c.fromId || '');
+    c.toId = String(c.toId || '');
 
-function idbGetAll(store) {
-    return new Promise((resolve, reject) => {
-        const tx = state.db.transaction(
-            store,
-            'readonly'
-        );
+    c.fromPoint = c.fromPoint || 'e';
+    c.toPoint = c.toPoint || 'w';
 
-        const req = tx.objectStore(store).getAll();
+    c.start = Math.max(0,num(c.start,0));
+    c.end = Math.max(c.start,num(c.end,0));
 
-        req.onsuccess = () => resolve(req.result || []);
-        req.onerror = () => reject(req.error);
-    });
-}
+    c.style = {
+        color: c.style?.color || '#ffffff',
+        lineWidth: clamp(num(c.style?.lineWidth,4),1,20)
+    };
 
-function idbDelete(store, key) {
-    return new Promise((resolve, reject) => {
-        const tx = state.db.transaction(
-            store,
-            'readwrite'
-        );
-
-        tx.objectStore(store).delete(key);
-
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-    });
+    return c;
 }
 
 /* =========================================================
  * API
  * ======================================================= */
 
-async function api(path, options = {}) {
+async function api(url, options = {}){
     const response = await fetch(
-        API_BASE + path,
+        API + url,
         {
-            cache: 'no-store',
-            ...options,
-            headers: {
-                ...(options.headers || {}),
-                'Cache-Control': 'no-cache'
-            }
+            cache:'no-store',
+            ...options
         }
     );
 
     let data;
 
-    try {
+    try{
         data = await response.json();
-    } catch {
+    }catch{
         throw new Error(
-            'サーバーからJSONではない応答が返りました。'
+            'サーバーから正しいJSON応答を取得できませんでした。'
         );
     }
 
-    if (!response.ok || data.ok === false) {
+    if(!response.ok || data.ok === false){
         const error = new Error(
             data.message || 'サーバー処理に失敗しました。'
         );
@@ -1808,316 +1808,196 @@ async function api(path, options = {}) {
     return data;
 }
 
-async function loadServerList() {
-    try {
-        return await api('?api=list&_=' + Date.now());
-    } catch (error) {
-        console.error(error);
-        return {
-            projects: [],
-            limit: MAX_SERVER_PROJECTS
+/* =========================================================
+ * IndexedDB
+ * ======================================================= */
+
+function openDB(){
+    return new Promise((resolve,reject) => {
+
+        const request = indexedDB.open(
+            'video-overlay-editor',
+            2
+        );
+
+        request.onupgradeneeded = () => {
+            const db = request.result;
+
+            if(!db.objectStoreNames.contains('projects')){
+                db.createObjectStore(
+                    'projects',
+                    {keyPath:'projectId'}
+                );
+            }
+
+            if(!db.objectStoreNames.contains('videos')){
+                db.createObjectStore(
+                    'videos',
+                    {keyPath:'projectId'}
+                );
+            }
         };
-    }
+
+        request.onsuccess = () => {
+            state.db = request.result;
+            resolve(state.db);
+        };
+
+        request.onerror = () => {
+            reject(
+                request.error ||
+                new Error('IndexedDBを開けません。')
+            );
+        };
+    });
+}
+
+function idbPut(storeName, value){
+    return new Promise((resolve,reject) => {
+
+        const tx =
+            state.db.transaction(
+                storeName,
+                'readwrite'
+            );
+
+        tx.objectStore(storeName).put(value);
+
+        tx.oncomplete = () => resolve();
+        tx.onerror = () =>
+            reject(
+                tx.error ||
+                new Error('ローカル保存に失敗しました。')
+            );
+    });
+}
+
+function idbGet(storeName, key){
+    return new Promise((resolve,reject) => {
+
+        const tx =
+            state.db.transaction(
+                storeName,
+                'readonly'
+            );
+
+        const request =
+            tx.objectStore(storeName).get(key);
+
+        request.onsuccess = () =>
+            resolve(request.result || null);
+
+        request.onerror = () =>
+            reject(
+                request.error ||
+                new Error('ローカルデータを読み込めません。')
+            );
+    });
+}
+
+function idbGetAll(storeName){
+    return new Promise((resolve,reject) => {
+
+        const tx =
+            state.db.transaction(
+                storeName,
+                'readonly'
+            );
+
+        const request =
+            tx.objectStore(storeName).getAll();
+
+        request.onsuccess = () =>
+            resolve(request.result || []);
+
+        request.onerror = () =>
+            reject(
+                request.error ||
+                new Error('ローカルデータを取得できません。')
+            );
+    });
+}
+
+function idbDelete(storeName,key){
+    return new Promise((resolve,reject) => {
+
+        const tx =
+            state.db.transaction(
+                storeName,
+                'readwrite'
+            );
+
+        tx.objectStore(storeName).delete(key);
+
+        tx.oncomplete = () => resolve();
+        tx.onerror = () =>
+            reject(
+                tx.error ||
+                new Error('ローカルデータを削除できません。')
+            );
+    });
 }
 
 /* =========================================================
- * HOME
+ * 動画読み込み
  * ======================================================= */
 
-async function refreshProjectList() {
-    const list = $('projectList');
-    list.innerHTML = '<div class="help">読み込み中...</div>';
+function revokeVideoUrl(){
+    if(state.videoUrl){
+        URL.revokeObjectURL(state.videoUrl);
+        state.videoUrl = '';
+    }
+}
 
-    const server = await loadServerList();
-    const local = await idbGetAll('projects');
-
-    const items = [
-        ...server.projects,
-        ...local.map(project => ({
-            projectId: project.projectId,
-            name: project.name,
-            videoName: project.videoName,
-            savedAt: project.savedAt,
-            version: project.version,
-            storage: 'local'
-        }))
-    ];
-
-    if (!items.length) {
-        list.innerHTML = `
-            <div class="help">
-                保存されたプロジェクトはありません。
-            </div>
-        `;
+async function loadVideoFile(file){
+    if(!file){
         return;
     }
 
-    const unique = new Map();
-
-    items.forEach(item => {
-        const key =
-            item.storage + ':' + item.projectId;
-
-        unique.set(key, item);
-    });
-
-    list.innerHTML = [...unique.values()]
-        .map(item => `
-            <div class="project">
-                <div class="project-info">
-                    <div class="project-name">
-                        ${escapeHtml(item.name)}
-                    </div>
-
-                    <div class="project-meta">
-                        ${escapeHtml(item.videoName || '動画名なし')}
-                        /
-                        ${item.storage === 'local'
-                            ? 'ローカル'
-                            : 'サーバー'}
-                        /
-                        ${escapeHtml(item.savedAt || '')}
-                    </div>
-                </div>
-
-                <div class="project-actions">
-                    <button
-                        class="small"
-                        data-load-project="${escapeHtml(item.projectId)}"
-                        data-storage="${item.storage}"
-                    >
-                        開く
-                    </button>
-
-                    <button
-                        class="small danger"
-                        data-delete-project="${escapeHtml(item.projectId)}"
-                        data-storage="${item.storage}"
-                    >
-                        削除
-                    </button>
-                </div>
-            </div>
-        `)
-        .join('');
-}
-
-async function chooseVideo() {
-    $('videoFile').click();
-}
-
-function showNameModal(file) {
-    state.pendingVideoFile = file;
-
-    $('projectNameInput').value =
-        file.name.replace(/\.[^.]+$/, '');
-
-    $('nameModal').style.display = 'flex';
-
-    setTimeout(() => {
-        $('projectNameInput').focus();
-        $('projectNameInput').select();
-    }, 50);
-}
-
-async function beginVideoProject(name, file) {
-    if (!file) {
-        throw new Error('動画ファイルが選択されていません。');
+    if(!file.type.startsWith('video/')){
+        message('動画ファイルを選択してください。');
+        return;
     }
 
-    if (!file.type.startsWith('video/')) {
-        throw new Error('動画ファイルを選択してください。');
-    }
+    revokeVideoUrl();
 
-    const videoKey = uid('video');
+    state.videoBlob = file;
+    state.videoUrl = URL.createObjectURL(file);
 
-    await idbPut('videos', {
-        key: videoKey,
-        name: file.name,
-        type: file.type || 'video/mp4',
-        size: file.size,
-        savedAt: nowISO(),
-        blob: file
-    });
-
-    const project = createEmptyProject(
-        name,
-        file.name
-    );
-
-    project.videoKey = videoKey;
-
-    await openEditor(project, file);
-}
-
-/* =========================================================
- * PROJECT LOAD
- * ======================================================= */
-
-async function loadLocalProject(id) {
-    const project = await idbGet(
-        'projects',
-        id
-    );
-
-    if (!project) {
-        throw new Error(
-            'ローカル保存されたプロジェクトが見つかりません。'
-        );
-    }
-
-    return project;
-}
-
-async function loadProject(id, storage) {
-    let project;
-
-    if (storage === 'local') {
-        project = await loadLocalProject(id);
-    } else {
-        const result = await api(
-            '?api=load&id=' +
-            encodeURIComponent(id) +
-            '&_=' + Date.now()
-        );
-
-        project = result.project;
-    }
-
-    if (!project || typeof project !== 'object') {
-        throw new Error('プロジェクトデータが不正です。');
-    }
-
-    if (!project.projectId) {
-        throw new Error('プロジェクトIDがありません。');
-    }
-
-    let videoRecord = null;
-
-    if (project.videoKey) {
-        videoRecord = await idbGet(
-            'videos',
-            project.videoKey
-        );
-    }
-
-    if (!videoRecord?.blob) {
-        const file = await requestMissingVideo(project);
-
-        if (!file) {
-            throw new Error(
-                '動画が選択されなかったため、編集を開始できません。'
-            );
-        }
-
-        const videoKey = uid('video');
-
-        await idbPut('videos', {
-            key: videoKey,
-            name: file.name,
-            type: file.type || 'video/mp4',
-            size: file.size,
-            savedAt: nowISO(),
-            blob: file
-        });
-
-        project.videoKey = videoKey;
-        videoRecord = {
-            blob: file
-        };
-    }
-
-    await openEditor(
-        project,
-        videoRecord.blob
-    );
-}
-
-function requestMissingVideo(project) {
-    return new Promise(resolve => {
-        const input = document.createElement('input');
-
-        input.type = 'file';
-        input.accept = 'video/*';
-
-        input.onchange = () => {
-            resolve(input.files?.[0] || null);
-        };
-
-        input.click();
-    });
-}
-
-/* =========================================================
- * EDITOR OPEN / VIDEO
- * ======================================================= */
-
-async function openEditor(project, blob) {
-    /*
-     * 編集開始条件:
-     * プロジェクトと動画の両方が準備できてからeditorを表示する。
-     */
-    if (!project || !blob) {
-        throw new Error(
-            '動画の読み込みが完了していないため編集できません。'
-        );
-    }
-
-    state.project = normalizeProject(project);
-    state.videoBlob = blob;
-
-    if (state.videoUrl) {
-        URL.revokeObjectURL(state.videoUrl);
-    }
-
-    state.videoUrl = URL.createObjectURL(blob);
-
-    $('home').style.display = 'none';
-    $('recorder').style.display = 'none';
-    $('editor').style.display = 'flex';
-
-    setStatus('編集モード');
-    setEditorStatus('動画読み込み中...');
-
-    const video = $('recordedVideo');
+    const video = $('video');
 
     video.src = state.videoUrl;
     video.load();
 
-    await waitForVideoMetadata(video);
+    status('動画の読み込み中...');
 
-    state.project.duration = video.duration || 0;
+    await new Promise((resolve,reject) => {
 
-    $('seek').max = String(
-        video.duration || 0
-    );
+        const loaded = () => {
+            video.removeEventListener(
+                'loadedmetadata',
+                loaded
+            );
 
-    updateStageSize();
-    renderAll();
-    selectNone();
+            video.removeEventListener(
+                'error',
+                failed
+            );
 
-    setEditorStatus(
-        state.dirty ? '未保存' : '保存済み'
-    );
-}
-
-function waitForVideoMetadata(video) {
-    return new Promise((resolve, reject) => {
-        if (
-            video.readyState >= 1 &&
-            Number.isFinite(video.duration)
-        ) {
-            resolve();
-            return;
-        }
-
-        const done = () => {
-            cleanup();
             resolve();
         };
 
-        const fail = () => {
-            cleanup();
+        const failed = () => {
+            video.removeEventListener(
+                'loadedmetadata',
+                loaded
+            );
+
+            video.removeEventListener(
+                'error',
+                failed
+            );
+
             reject(
                 new Error(
                     '動画を読み込めませんでした。'
@@ -2125,1121 +2005,556 @@ function waitForVideoMetadata(video) {
             );
         };
 
-        const cleanup = () => {
-            video.removeEventListener(
-                'loadedmetadata',
-                done
-            );
-
-            video.removeEventListener(
-                'error',
-                fail
-            );
-        };
-
         video.addEventListener(
             'loadedmetadata',
-            done,
-            { once:true }
+            loaded,
+            {once:true}
         );
 
         video.addEventListener(
             'error',
-            fail,
-            { once:true }
+            failed,
+            {once:true}
         );
     });
-}
 
-function normalizeProject(project) {
-    const p = clone(project);
+    const duration = Number(video.duration);
 
-    p.version = APP_VERSION;
-
-    p.elements = Array.isArray(p.elements)
-        ? p.elements
-        : [];
-
-    p.connections = Array.isArray(p.connections)
-        ? p.connections
-        : [];
-
-    p.name = String(
-        p.name || '名称未設定'
-    ).trim();
-
-    p.elements.forEach(element => {
-        normalizeElement(element);
-    });
-
-    p.connections.forEach(connection => {
-        normalizeConnection(connection);
-    });
-
-    return p;
-}
-
-function normalizeElement(element) {
-    element.id ||= uid('element');
-
-    element.type =
-        element.type === 'box'
-            ? 'box'
-            : 'comment';
-
-    element.text =
-        String(element.text ?? '');
-
-    element.x = number(element.x, 10);
-    element.y = number(element.y, 10);
-    element.w = number(element.w, 25);
-    element.h = number(element.h, 12);
-
-    element.start = Math.max(
-        0,
-        number(element.start, 0)
-    );
-
-    element.end = number(
-        element.end,
-        state.project?.duration || 999999
-    );
-
-    element.style = {
-        color: '#ffffff',
-        background: element.type === 'box'
-            ? '#ff000000'
-            : '#000000cc',
-        fontSize: 24,
-        opacity: 100,
-        borderColor: '#ff3b30',
-        borderWidth: element.type === 'box'
-            ? 3
-            : 0,
-        radius: 4,
-        fontWeight: 600,
-        ...(element.style || {})
-    };
-
-    return element;
-}
-
-function normalizeConnection(connection) {
-    connection.id ||= uid('connection');
-
-    connection.fromPoint ||= 'e';
-    connection.toPoint ||= 'w';
-
-    connection.color ||= '#ffffff';
-    connection.width =
-        number(connection.width, 2.5);
-
-    connection.dash ??= '';
-    connection.startArrow ||= 'none';
-    connection.endArrow ||= 'arrow';
-    connection.curve ||= 'straight';
-
-    connection.start =
-        Math.max(0, number(connection.start, 0));
-
-    connection.end =
-        number(
-            connection.end,
-            state.project?.duration || 999999
+    if(!Number.isFinite(duration) || duration <= 0){
+        throw new Error(
+            '動画の長さを取得できませんでした。'
         );
+    }
 
-    return connection;
+    state.project = createProject(
+        '',
+        file.name
+    );
+
+    state.project.duration = duration;
+
+    $('projectName').disabled = false;
+    $('projectName').value = '';
+
+    $('startEdit').disabled = false;
+
+    $('videoStage').classList.remove('hidden');
+    $('emptyState').classList.add('hidden');
+
+    $('seek').min = '0';
+    $('seek').max = String(duration);
+    $('seek').step = '0.001';
+    $('seek').value = '0';
+
+    updateTimeUI();
+    renderTimeline();
+
+    status(
+        `読込完了 / ${file.name} / ${timeText(duration)}`
+    );
+
+    message(
+        '動画の読み込みが完了しました。「編集開始」を押してください。',
+        true
+    );
 }
 
 /* =========================================================
- * STAGE
+ * 編集開始
  * ======================================================= */
 
-function updateStageSize() {
-    const video = $('recordedVideo');
-    const stage = $('videoStage');
-
-    if (!video.videoWidth || !video.videoHeight) {
+function openNameModal(){
+    if(!state.videoBlob || !state.project){
+        message('先に動画を読み込んでください。');
         return;
     }
 
-    const area = $('videoArea');
+    $('nameInput').value =
+        state.project.name ||
+        state.videoBlob.name.replace(/\.[^.]+$/,'') ||
+        '動画編集';
 
-    const maxW = area.clientWidth - 20;
-    const maxH = area.clientHeight - 20;
+    $('nameModal').style.display = 'flex';
 
-    const ratio =
-        video.videoWidth / video.videoHeight;
+    setTimeout(
+        () => $('nameInput').focus(),
+        30
+    );
+}
 
-    let width = maxW;
-    let height = width / ratio;
+function closeNameModal(){
+    $('nameModal').style.display = 'none';
+}
 
-    if (height > maxH) {
-        height = maxH;
-        width = height * ratio;
+function startEditing(){
+    if(!state.videoBlob || !state.project){
+        message('動画を読み込んでください。');
+        return;
     }
 
-    stage.style.width =
-        Math.max(100, width) + 'px';
+    const name =
+        $('nameInput').value.trim();
 
-    stage.style.height =
-        Math.max(100, height) + 'px';
+    if(!name){
+        message('プロジェクト名を入力してください。');
+        $('nameInput').focus();
+        return;
+    }
+
+    if(name.length > 120){
+        message('プロジェクト名は120文字以内です。');
+        return;
+    }
+
+    state.project.name = name;
+    state.editing = true;
+
+    $('projectName').value = name;
+    $('projectName').disabled = false;
+
+    enableEditingControls(true);
+
+    $('nameModal').style.display = 'none';
+
+    $('editModeText').textContent = '編集可能';
+    status(
+        `編集中 / ${name} / ${timeText(state.project.duration)}`
+    );
+
+    renderAll();
 }
 
-function currentTime() {
-    return $('recordedVideo').currentTime || 0;
+/* =========================================================
+ * 編集UI
+ * ======================================================= */
+
+function enableEditingControls(enabled){
+    const ids = [
+        'addText',
+        'addBox',
+        'lineMode',
+        'deleteElement',
+        'play',
+        'pause',
+        'toStart',
+        'toEnd',
+        'saveProject',
+        'exportMp4',
+        'seek'
+    ];
+
+    ids.forEach(id => {
+        $(id).disabled = !enabled;
+    });
 }
 
-function elementVisible(element, time) {
+function isElementVisible(element){
+    const t = $('video').currentTime;
+
     return (
-        time >= element.start &&
-        time <= element.end
+        t >= element.start &&
+        t <= element.end
     );
 }
 
-function connectionVisible(connection, time) {
-    return (
-        time >= connection.start &&
-        time <= connection.end
-    );
+function findElement(id){
+    return state.project?.elements.find(
+        e => e.id === id
+    ) || null;
 }
 
-function renderAll() {
-    renderObjects();
-    renderConnections();
-    renderTimeline();
-    updateTimeReadout();
+function findConnection(id){
+    return state.project?.connections.find(
+        c => c.id === id
+    ) || null;
 }
 
-function renderObjects() {
+function selectObject(id, type){
+    state.selectedId = id;
+    state.selectedType = type;
+
+    const label =
+        type === 'element'
+            ? '要素を選択中'
+            : '線を選択中';
+
+    $('selectionLabel').textContent = label;
+
+    renderAll();
+}
+
+function clearSelection(){
+    state.selectedId = null;
+    state.selectedType = null;
+    state.connectSource = null;
+    $('selectionLabel').textContent = '選択なし';
+
+    renderAll();
+}
+
+/* =========================================================
+ * 要素描画
+ * ======================================================= */
+
+function pointPosition(element, point){
+    const map = {
+        n:[50,0],
+        ne:[100,0],
+        e:[100,50],
+        se:[100,100],
+        s:[50,100],
+        sw:[0,100],
+        w:[0,50],
+        nw:[0,0]
+    };
+
+    const p = map[point] || map.e;
+
+    return {
+        x:element.x + element.w * p[0] / 100,
+        y:element.y + element.h * p[1] / 100
+    };
+}
+
+function applyElementStyle(el, element){
+    el.style.left = element.x + '%';
+    el.style.top = element.y + '%';
+    el.style.width = element.w + '%';
+    el.style.height = element.h + '%';
+
+    el.style.opacity =
+        String(element.style.opacity);
+
+    if(element.type === 'text'){
+        el.style.color =
+            element.style.color;
+
+        el.style.background =
+            element.style.background;
+
+        el.style.fontSize =
+            element.style.fontSize + 'px';
+
+        el.textContent =
+            element.text;
+    }
+
+    if(element.type === 'box'){
+        el.style.border =
+            element.style.borderWidth +
+            'px solid ' +
+            element.style.borderColor;
+
+        el.style.background =
+            'transparent';
+
+        el.textContent = '';
+    }
+}
+
+function renderObjects(){
     const container = $('objects');
-    const time = currentTime();
 
     container.innerHTML = '';
 
-    if (!state.project) {
+    if(!state.project){
         return;
     }
 
-    state.project.elements.forEach(element => {
-        if (!elementVisible(element, time)) {
-            return;
-        }
+    for(const element of state.project.elements){
 
-        const el = document.createElement('div');
+        const el =
+            document.createElement('div');
 
         el.className =
-            'edit-object ' +
+            'object ' +
             element.type +
-            (state.selectedType === 'element' &&
-             state.selected === element.id
-                ? ' selected'
-                : '');
-
-        el.dataset.id = element.id;
-
-        el.style.left =
-            element.x + '%';
-
-        el.style.top =
-            element.y + '%';
-
-        el.style.width =
-            element.w + '%';
-
-        el.style.height =
-            element.h + '%';
-
-        const style = element.style || {};
-
-        el.style.color =
-            style.color || '#fff';
-
-        el.style.background =
-            style.background || 'transparent';
-
-        el.style.opacity =
-            clamp(number(style.opacity, 100), 0, 100) / 100;
-
-        el.style.border =
-            `${number(style.borderWidth, 0)}px solid ${style.borderColor || '#fff'}`;
-
-        el.style.borderRadius =
-            number(style.radius, 0) + 'px';
-
-        el.style.fontSize =
-            number(style.fontSize, 24) + 'px';
-
-        el.style.fontWeight =
-            number(style.fontWeight, 600);
-
-        if (element.type === 'comment') {
-            el.textContent = element.text;
-        }
-
-        if (element.type === 'box') {
-            el.setAttribute(
-                'aria-label',
-                element.text || '強調枠'
-            );
-        }
-
-        const resize = document.createElement('div');
-
-        resize.className = 'resize-handle';
-        resize.dataset.resize = '1';
-
-        el.appendChild(resize);
-
-        [
-            'n',
-            'ne',
-            'e',
-            'se',
-            's',
-            'sw',
-            'w',
-            'nw'
-        ].forEach(point => {
-            const cp =
-                document.createElement('div');
-
-            cp.className =
-                'connection-point cp-' + point;
-
-            cp.dataset.point = point;
-
-            el.appendChild(cp);
-        });
-
-        container.appendChild(el);
-    });
-}
-
-function pointPosition(element, point) {
-    const x = number(element.x);
-    const y = number(element.y);
-    const w = number(element.w);
-    const h = number(element.h);
-
-    const map = {
-        n:[x + w / 2, y],
-        ne:[x + w, y],
-        e:[x + w, y + h / 2],
-        se:[x + w, y + h],
-        s:[x + w / 2, y + h],
-        sw:[x, y + h],
-        w:[x, y + h / 2],
-        nw:[x, y]
-    };
-
-    return map[point] || map.e;
-}
-
-function renderConnections() {
-    const svg = $('connectors');
-
-    while (svg.firstChild) {
-        svg.removeChild(svg.firstChild);
-    }
-
-    if (!state.project) {
-        return;
-    }
-
-    const ns =
-        'http://www.w3.org/2000/svg';
-
-    const defs =
-        document.createElementNS(ns, 'defs');
-
-    const markerArrow =
-        document.createElementNS(ns, 'marker');
-
-    markerArrow.setAttribute('id', 'arrow');
-    markerArrow.setAttribute('markerWidth', '8');
-    markerArrow.setAttribute('markerHeight', '8');
-    markerArrow.setAttribute('refX', '7');
-    markerArrow.setAttribute('refY', '4');
-    markerArrow.setAttribute('orient', 'auto');
-    markerArrow.setAttribute('markerUnits', 'strokeWidth');
-
-    const arrowPath =
-        document.createElementNS(ns, 'path');
-
-    arrowPath.setAttribute(
-        'd',
-        'M0,0 L8,4 L0,8 Z'
-    );
-
-    arrowPath.setAttribute(
-        'fill',
-        'context-stroke'
-    );
-
-    markerArrow.appendChild(arrowPath);
-    defs.appendChild(markerArrow);
-
-    const markerCircle =
-        document.createElementNS(ns, 'marker');
-
-    markerCircle.setAttribute(
-        'id',
-        'circle'
-    );
-
-    markerCircle.setAttribute(
-        'markerWidth',
-        '7'
-    );
-
-    markerCircle.setAttribute(
-        'markerHeight',
-        '7'
-    );
-
-    markerCircle.setAttribute(
-        'refX',
-        '3.5'
-    );
-
-    markerCircle.setAttribute(
-        'refY',
-        '3.5'
-    );
-
-    const circle =
-        document.createElementNS(ns, 'circle');
-
-    circle.setAttribute('cx', '3.5');
-    circle.setAttribute('cy', '3.5');
-    circle.setAttribute('r', '3');
-    circle.setAttribute(
-        'fill',
-        'context-stroke'
-    );
-
-    markerCircle.appendChild(circle);
-    defs.appendChild(markerCircle);
-
-    svg.appendChild(defs);
-
-    const time = currentTime();
-
-    state.project.connections.forEach(connection => {
-        if (!connectionVisible(connection, time)) {
-            return;
-        }
-
-        const from =
-            state.project.elements.find(
-                e => e.id === connection.from
-            );
-
-        const to =
-            state.project.elements.find(
-                e => e.id === connection.to
-            );
-
-        if (!from || !to) {
-            return;
-        }
-
-        const p1 =
-            pointPosition(
-                from,
-                connection.fromPoint
-            );
-
-        const p2 =
-            pointPosition(
-                to,
-                connection.toPoint
-            );
-
-        const path =
-            document.createElementNS(ns, 'path');
-
-        const d =
-            buildConnectionPath(
-                p1,
-                p2,
-                connection.curve
-            );
-
-        path.setAttribute('d', d);
-        path.setAttribute(
-            'class',
-            'connector' +
             (
-                state.selectedType === 'connection' &&
-                state.selected === connection.id
+                state.selectedType === 'element' &&
+                state.selectedId === element.id
                     ? ' selected'
                     : ''
-            )
-        );
-
-        path.setAttribute(
-            'stroke',
-            connection.color
-        );
-
-        path.setAttribute(
-            'stroke-width',
-            connection.width
-        );
-
-        if (connection.dash) {
-            path.setAttribute(
-                'stroke-dasharray',
-                connection.dash
             );
+
+        el.dataset.id = element.id;
+        el.dataset.type = 'element';
+
+        applyElementStyle(el,element);
+
+        if(element.type === 'text'){
+            el.title = 'ダブルクリックで直接編集';
         }
 
-        if (connection.startArrow === 'arrow') {
-            path.setAttribute(
-                'marker-start',
-                'url(#arrow)'
-            );
-        } else if (connection.startArrow === 'circle') {
-            path.setAttribute(
-                'marker-start',
-                'url(#circle)'
-            );
-        }
+        [
+            'n','ne','e','se',
+            's','sw','w','nw'
+        ].forEach(point => {
 
-        if (connection.endArrow === 'arrow') {
-            path.setAttribute(
-                'marker-end',
-                'url(#arrow)'
-            );
-        } else if (connection.endArrow === 'circle') {
-            path.setAttribute(
-                'marker-end',
-                'url(#circle)'
-            );
-        }
+            const p =
+                document.createElement('span');
 
-        path.dataset.id =
-            connection.id;
+            p.className =
+                'point ' + point;
 
-        path.dataset.type =
-            'connection';
+            p.dataset.point = point;
 
-        svg.appendChild(path);
-
-        const hit =
-            document.createElementNS(ns, 'path');
-
-        hit.setAttribute(
-            'd',
-            d
-        );
-
-        hit.setAttribute(
-            'class',
-            'connector-hit'
-        );
-
-        hit.dataset.id =
-            connection.id;
-
-        hit.dataset.type =
-            'connection';
-
-        svg.appendChild(hit);
-    });
-}
-
-function buildConnectionPath(p1, p2, curve) {
-    const x1 = p1[0];
-    const y1 = p1[1];
-    const x2 = p2[0];
-    const y2 = p2[1];
-
-    if (curve !== 'smooth') {
-        return `
-            M ${x1} ${y1}
-            L ${x2} ${y2}
-        `;
-    }
-
-    const dx = Math.abs(x2 - x1);
-    const bend = Math.max(20, dx * .45);
-
-    return `
-        M ${x1} ${y1}
-        C ${x1 + bend} ${y1},
-          ${x2 - bend} ${y2},
-          ${x2} ${y2}
-    `;
-}
-
-function renderTimeline() {
-    const elementTrack =
-        $('elementTrack');
-
-    const connectionTrack =
-        $('connectionTrack');
-
-    elementTrack.innerHTML = '';
-    connectionTrack.innerHTML = '';
-
-    const duration =
-        Math.max(
-            0.01,
-            state.project?.duration || 0
-        );
-
-    (state.project?.elements || [])
-        .forEach(element => {
-            const item =
-                document.createElement('div');
-
-            item.className =
-                'track-item ' + element.type;
-
-            item.style.left =
-                clamp(
-                    element.start / duration * 100,
-                    0,
-                    100
-                ) + '%';
-
-            item.style.width =
-                clamp(
-                    (element.end - element.start) /
-                    duration * 100,
-                    0,
-                    100
-                ) + '%';
-
-            elementTrack.appendChild(item);
+            el.appendChild(p);
         });
 
-    (state.project?.connections || [])
-        .forEach(connection => {
-            const item =
-                document.createElement('div');
+        const handle =
+            document.createElement('span');
 
-            item.className =
-                'track-item connection';
+        handle.className = 'handle';
+        el.appendChild(handle);
 
-            item.style.left =
-                clamp(
-                    connection.start / duration * 100,
-                    0,
-                    100
-                ) + '%';
-
-            item.style.width =
-                clamp(
-                    (connection.end - connection.start) /
-                    duration * 100,
-                    0,
-                    100
-                ) + '%';
-
-            connectionTrack.appendChild(item);
-        });
-}
-
-function updateTimeReadout() {
-    const video = $('recordedVideo');
-
-    $('timeReadout').textContent =
-        formatTime(video.currentTime) +
-        ' / ' +
-        formatTime(video.duration || 0);
-
-    $('seek').value =
-        video.currentTime || 0;
-}
-
-/* =========================================================
- * SELECT
- * ======================================================= */
-
-function selectElement(id) {
-    state.selectedType = 'element';
-    state.selected = id;
-    state.connectSource = null;
-
-    const element =
-        state.project.elements.find(
-            item => item.id === id
+        el.addEventListener(
+            'pointerdown',
+            objectPointerDown
         );
 
-    updateSelectionInfo(element);
-    renderAll();
-}
-
-function selectConnection(id) {
-    state.selectedType = 'connection';
-    state.selected = id;
-    state.connectSource = null;
-
-    const connection =
-        state.project.connections.find(
-            item => item.id === id
+        el.addEventListener(
+            'dblclick',
+            objectDoubleClick
         );
 
-    updateSelectionInfo(connection);
-    renderAll();
-}
-
-function selectNone() {
-    state.selected = null;
-    state.selectedType = null;
-    state.connectSource = null;
-
-    $('selectionInfo').textContent =
-        '何も選択されていません';
-
-    $('objectEditor').classList.add(
-        'hidden'
-    );
-
-    renderAll();
-}
-
-function updateSelectionInfo(item) {
-    const editor =
-        $('objectEditor');
-
-    if (!item) {
-        selectNone();
-        return;
-    }
-
-    if (state.selectedType === 'element') {
-        $('selectionInfo').innerHTML = `
-            <span class="badge">
-                ${item.type === 'comment'
-                    ? 'コメント'
-                    : '強調枠'}
-            </span>
-            <br>
-            ${escapeHtml(
-                item.text || '(内容なし)'
-            )}
-        `;
-
-        $('objectText').value =
-            item.text || '';
-
-        $('objectStart').value =
-            item.start;
-
-        $('objectEnd').value =
-            item.end;
-
-        $('objectX').value =
-            item.x;
-
-        $('objectY').value =
-            item.y;
-
-        $('objectW').value =
-            item.w;
-
-        $('objectH').value =
-            item.h;
-
-        $('textField').style.display =
-            item.type === 'comment'
-                ? 'block'
-                : 'none';
-
-        editor.classList.remove(
-            'hidden'
+        el.addEventListener(
+            'contextmenu',
+            event => {
+                event.preventDefault();
+                selectObject(
+                    element.id,
+                    'element'
+                );
+                openContextMenu(
+                    event.clientX,
+                    event.clientY,
+                    element.id,
+                    'element'
+                );
+            }
         );
 
-        return;
-    }
-
-    const from =
-        state.project.elements.find(
-            e => e.id === item.from
-        );
-
-    const to =
-        state.project.elements.find(
-            e => e.id === item.to
-        );
-
-    $('selectionInfo').innerHTML = `
-        <span class="badge">接続線</span>
-        <br>
-        ${escapeHtml(from?.text || from?.type || '?')}
-        →
-        ${escapeHtml(to?.text || to?.type || '?')}
-    `;
-
-    editor.classList.add('hidden');
-}
-
-/* =========================================================
- * ELEMENT CREATION
- * ======================================================= */
-
-function addElement(type) {
-    if (!state.project) {
-        return;
-    }
-
-    const time =
-        currentTime();
-
-    const duration =
-        state.project.duration || 10;
-
-    const element = {
-        id: uid('element'),
-        type,
-        text:
-            type === 'comment'
-                ? 'ここにコメント'
-                : '',
-        x: 10,
-        y: 10,
-        w: type === 'comment'
-            ? 30
-            : 30,
-        h: type === 'comment'
-            ? 12
-            : 25,
-        start: time,
-        end: Math.min(
-            duration,
-            time + 5
-        ),
-        style: {
-            color: '#ffffff',
-            background:
-                type === 'comment'
-                    ? '#000000cc'
-                    : 'transparent',
-            fontSize: 24,
-            opacity: 100,
-            borderColor: '#ff3b30',
-            borderWidth:
-                type === 'box' ? 3 : 0,
-            radius: 4,
-            fontWeight: 600
+        /*
+         * 現在時刻の表示範囲外なら半透明化。
+         * 編集自体は可能。
+         */
+        if(!isElementVisible(element)){
+            el.style.opacity =
+                String(
+                    Math.min(
+                        0.25,
+                        element.style.opacity
+                    )
+                );
         }
+
+        container.appendChild(el);
+    }
+}
+
+function objectDoubleClick(event){
+    const id =
+        event.currentTarget.dataset.id;
+
+    const element = findElement(id);
+
+    if(!element || element.type !== 'text'){
+        return;
+    }
+
+    event.stopPropagation();
+
+    selectObject(id,'element');
+    openStyleModal();
+}
+
+function objectPointerDown(event){
+    if(!state.editing){
+        return;
+    }
+
+    if(event.button !== 0){
+        return;
+    }
+
+    const el = event.currentTarget;
+    const id = el.dataset.id;
+    const element = findElement(id);
+
+    if(!element){
+        return;
+    }
+
+    /*
+     * 接点クリック:
+     * 線の始点・終点候補を指定。
+     */
+    if(event.target.classList.contains('point')){
+        const point =
+            event.target.dataset.point;
+
+        handleConnectionPoint(
+            id,
+            point
+        );
+
+        event.stopPropagation();
+        return;
+    }
+
+    selectObject(id,'element');
+
+    const rect =
+        $('videoStage').getBoundingClientRect();
+
+    const x =
+        (event.clientX - rect.left) /
+        rect.width *
+        100;
+
+    const y =
+        (event.clientY - rect.top) /
+        rect.height *
+        100;
+
+    if(event.target.classList.contains('handle')){
+
+        state.resize = {
+            id,
+            startX:event.clientX,
+            startY:event.clientY,
+            x:element.x,
+            y:element.y,
+            w:element.w,
+            h:element.h,
+            stageW:rect.width,
+            stageH:rect.height
+        };
+
+        el.setPointerCapture(event.pointerId);
+        event.stopPropagation();
+        return;
+    }
+
+    state.drag = {
+        id,
+        offsetX:x - element.x,
+        offsetY:y - element.y,
+        stageW:rect.width,
+        stageH:rect.height
     };
 
-    normalizeElement(element);
-
-    state.project.elements.push(
-        element
-    );
-
-    markDirty();
-    selectElement(element.id);
+    el.setPointerCapture(event.pointerId);
 }
 
-function applyObjectFields() {
-    if (
-        state.selectedType !== 'element' ||
-        !state.selected
-    ) {
-        return;
-    }
-
-    const element =
-        state.project.elements.find(
-            e => e.id === state.selected
-        );
-
-    if (!element) {
-        return;
-    }
-
-    const duration =
-        state.project.duration || 999999;
-
-    element.text =
-        $('objectText').value;
-
-    element.start =
-        clamp(
-            number(
-                $('objectStart').value,
-                0
-            ),
-            0,
-            duration
-        );
-
-    element.end =
-        clamp(
-            number(
-                $('objectEnd').value,
-                duration
-            ),
-            element.start,
-            duration
-        );
-
-    element.x =
-        clamp(
-            number($('objectX').value, 0),
-            0,
-            100
-        );
-
-    element.y =
-        clamp(
-            number($('objectY').value, 0),
-            0,
-            100
-        );
-
-    element.w =
-        clamp(
-            number($('objectW').value, 1),
-            .5,
-            100
-        );
-
-    element.h =
-        clamp(
-            number($('objectH').value, 1),
-            .5,
-            100
-        );
-
-    element.x =
-        Math.min(
-            element.x,
-            100 - element.w
-        );
-
-    element.y =
-        Math.min(
-            element.y,
-            100 - element.h
-        );
-
-    markDirty();
-    updateSelectionInfo(element);
-    renderAll();
-}
-
-/* =========================================================
- * DRAG / RESIZE
- * ======================================================= */
-
-let drag = null;
-
-$('objects').addEventListener(
-    'pointerdown',
-    event => {
-        const object =
-            event.target.closest('.edit-object');
-
-        if (!object) {
-            return;
-        }
-
-        const id = object.dataset.id;
+function handlePointerMove(event){
+    if(state.drag){
 
         const element =
-            state.project.elements.find(
-                e => e.id === id
-            );
+            findElement(state.drag.id);
 
-        if (!element) {
-            return;
-        }
-
-        if (
-            event.target.classList.contains(
-                'connection-point'
-            )
-        ) {
-            event.preventDefault();
-            event.stopPropagation();
-
-            if (!state.connectMode) {
-                state.connectMode = true;
-            }
-
-            handleConnectionPoint(
-                element,
-                event.target.dataset.point
-            );
-
-            return;
-        }
-
-        if (
-            event.target.classList.contains(
-                'resize-handle'
-            )
-        ) {
-            selectElement(id);
-
-            const rect =
-                $('videoStage').getBoundingClientRect();
-
-            drag = {
-                mode: 'resize',
-                id,
-                startX: event.clientX,
-                startY: event.clientY,
-                originalW: element.w,
-                originalH: element.h,
-                stageW: rect.width,
-                stageH: rect.height
-            };
-
-            object.setPointerCapture(
-                event.pointerId
-            );
-
-            event.preventDefault();
-            return;
-        }
-
-        selectElement(id);
-
-        if (state.connectMode) {
+        if(!element){
             return;
         }
 
         const rect =
             $('videoStage').getBoundingClientRect();
 
-        drag = {
-            mode: 'move',
-            id,
-            startX: event.clientX,
-            startY: event.clientY,
-            originalX: element.x,
-            originalY: element.y,
-            stageW: rect.width,
-            stageH: rect.height
-        };
+        const x =
+            (event.clientX - rect.left) /
+            rect.width *
+            100 -
+            state.drag.offsetX;
 
-        object.setPointerCapture(
-            event.pointerId
-        );
+        const y =
+            (event.clientY - rect.top) /
+            rect.height *
+            100 -
+            state.drag.offsetY;
 
-        event.preventDefault();
-    }
-);
-
-$('objects').addEventListener(
-    'pointermove',
-    event => {
-        if (!drag) {
-            return;
-        }
-
-        const element =
-            state.project.elements.find(
-                e => e.id === drag.id
+        element.x =
+            clamp(
+                x,
+                0,
+                100 - element.w
             );
 
-        if (!element) {
-            drag = null;
+        element.y =
+            clamp(
+                y,
+                0,
+                100 - element.h
+            );
+
+        markDirty();
+        renderAll();
+        return;
+    }
+
+    if(state.resize){
+
+        const element =
+            findElement(state.resize.id);
+
+        if(!element){
             return;
         }
 
         const dx =
-            event.clientX - drag.startX;
+            (event.clientX -
+                state.resize.startX) /
+            state.resize.stageW *
+            100;
 
         const dy =
-            event.clientY - drag.startY;
+            (event.clientY -
+                state.resize.startY) /
+            state.resize.stageH *
+            100;
 
-        if (drag.mode === 'move') {
-            element.x =
-                clamp(
-                    drag.originalX +
-                    dx / drag.stageW * 100,
-                    0,
-                    100 - element.w
-                );
+        element.w =
+            clamp(
+                state.resize.w + dx,
+                1,
+                100 - state.resize.x
+            );
 
-            element.y =
-                clamp(
-                    drag.originalY +
-                    dy / drag.stageH * 100,
-                    0,
-                    100 - element.h
-                );
-        } else {
-            element.w =
-                clamp(
-                    drag.originalW +
-                    dx / drag.stageW * 100,
-                    .5,
-                    100 - element.x
-                );
-
-            element.h =
-                clamp(
-                    drag.originalH +
-                    dy / drag.stageH * 100,
-                    .5,
-                    100 - element.y
-                );
-        }
+        element.h =
+            clamp(
+                state.resize.h + dy,
+                1,
+                100 - state.resize.y
+            );
 
         markDirty();
         renderAll();
     }
-);
+}
 
-$('objects').addEventListener(
-    'pointerup',
-    () => {
-        drag = null;
+function handlePointerUp(){
+    if(state.drag || state.resize){
+        state.drag = null;
+        state.resize = null;
     }
-);
-
-$('objects').addEventListener(
-    'contextmenu',
-    event => {
-        const object =
-            event.target.closest('.edit-object');
-
-        if (!object) {
-            return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-
-        selectElement(object.dataset.id);
-
-        state.contextTarget = {
-            type: 'element',
-            id: object.dataset.id
-        };
-
-        showContextMenu(
-            event.clientX,
-            event.clientY
-        );
-    }
-);
+}
 
 /* =========================================================
- * CONNECTIONS
+ * 線
  * ======================================================= */
 
-function handleConnectionPoint(element, point) {
-    if (!state.connectSource) {
+function handleConnectionPoint(id, point){
+    if(!state.connectMode){
+        return;
+    }
+
+    if(!state.connectSource){
+
         state.connectSource = {
-            id: element.id,
+            id,
             point
         };
 
-        showMessage(
+        message(
             '接続先の要素の接点をクリックしてください。',
             true
         );
@@ -3247,1936 +2562,2225 @@ function handleConnectionPoint(element, point) {
         return;
     }
 
-    if (
-        state.connectSource.id === element.id
-    ) {
-        state.connectSource = null;
+    if(
+        state.connectSource.id === id
+    ){
+        message(
+            '同じ要素には接続できません。'
+        );
         return;
     }
 
-    const connection = {
-        id: uid('connection'),
-        from: state.connectSource.id,
-        fromPoint: state.connectSource.point,
-        to: element.id,
-        toPoint: point,
-        color: '#ffffff',
-        width: 2.5,
-        dash: '',
-        startArrow: 'none',
-        endArrow: 'arrow',
-        curve: 'straight',
-        start: currentTime(),
-        end: Math.min(
-            state.project.duration || 999999,
-            currentTime() + 5
-        )
-    };
-
-    normalizeConnection(connection);
+    const connection =
+        normalizeConnection({
+            id:uid('line'),
+            fromId:state.connectSource.id,
+            toId:id,
+            fromPoint:state.connectSource.point,
+            toPoint:point,
+            start:0,
+            end:state.project.duration,
+            style:{
+                color:'#ffffff',
+                lineWidth:4
+            }
+        });
 
     state.project.connections.push(
         connection
     );
 
-    state.connectSource = null;
     state.connectMode = false;
+    state.connectSource = null;
+
+    $('lineMode').textContent =
+        '＋接続線';
 
     markDirty();
-    selectConnection(connection.id);
+    renderAll();
+
+    message(
+        '接続線を追加しました。',
+        true
+    );
 }
 
-$('connectors').addEventListener(
-    'click',
-    event => {
-        const target =
-            event.target.closest(
-                '.connector-hit,.connector'
-            );
+function renderConnections(){
+    const svg = $('connections');
 
-        if (!target) {
-            return;
+    svg.innerHTML = '';
+
+    if(!state.project){
+        return;
+    }
+
+    for(const connection of state.project.connections){
+
+        const from =
+            findElement(connection.fromId);
+
+        const to =
+            findElement(connection.toId);
+
+        if(!from || !to){
+            continue;
         }
 
-        event.stopPropagation();
-
-        selectConnection(
-            target.dataset.id
-        );
-    }
-);
-
-$('connectors').addEventListener(
-    'contextmenu',
-    event => {
-        const target =
-            event.target.closest(
-                '.connector-hit,.connector'
+        const a =
+            pointPosition(
+                from,
+                connection.fromPoint
             );
 
-        if (!target) {
-            return;
-        }
+        const b =
+            pointPosition(
+                to,
+                connection.toPoint
+            );
 
-        event.preventDefault();
-        event.stopPropagation();
+        const group =
+            document.createElementNS(
+                'http://www.w3.org/2000/svg',
+                'g'
+            );
 
-        selectConnection(
-            target.dataset.id
+        const hit =
+            document.createElementNS(
+                'http://www.w3.org/2000/svg',
+                'line'
+            );
+
+        hit.setAttribute(
+            'x1',
+            a.x
         );
 
-        state.contextTarget = {
-            type: 'connection',
-            id: target.dataset.id
-        };
-
-        showContextMenu(
-            event.clientX,
-            event.clientY
+        hit.setAttribute(
+            'y1',
+            a.y
         );
+
+        hit.setAttribute(
+            'x2',
+            b.x
+        );
+
+        hit.setAttribute(
+            'y2',
+            b.y
+        );
+
+        hit.setAttribute(
+            'class',
+            'connection-hit'
+        );
+
+        hit.addEventListener(
+            'click',
+            () => {
+                selectObject(
+                    connection.id,
+                    'connection'
+                );
+            }
+        );
+
+        hit.addEventListener(
+            'contextmenu',
+            event => {
+                event.preventDefault();
+
+                selectObject(
+                    connection.id,
+                    'connection'
+                );
+
+                openContextMenu(
+                    event.clientX,
+                    event.clientY,
+                    connection.id,
+                    'connection'
+                );
+            }
+        );
+
+        const line =
+            document.createElementNS(
+                'http://www.w3.org/2000/svg',
+                'line'
+            );
+
+        line.setAttribute('x1',a.x);
+        line.setAttribute('y1',a.y);
+        line.setAttribute('x2',b.x);
+        line.setAttribute('y2',b.y);
+
+        line.setAttribute(
+            'stroke',
+            connection.style.color
+        );
+
+        line.setAttribute(
+            'stroke-width',
+            connection.style.lineWidth
+        );
+
+        line.setAttribute(
+            'class',
+            'connection' +
+            (
+                state.selectedType === 'connection' &&
+                state.selectedId === connection.id
+                    ? ' selected'
+                    : ''
+            )
+        );
+
+        line.addEventListener(
+            'click',
+            () => {
+                selectObject(
+                    connection.id,
+                    'connection'
+                );
+            }
+        );
+
+        group.appendChild(hit);
+        group.appendChild(line);
+        svg.appendChild(group);
     }
-);
+}
 
 /* =========================================================
- * CONTEXT MENU
+ * タイムライン
  * ======================================================= */
 
-function showContextMenu(x, y) {
+function updateTimeUI(){
+    const video = $('video');
+
+    const current =
+        Number.isFinite(video.currentTime)
+            ? video.currentTime
+            : 0;
+
+    const duration =
+        Number.isFinite(video.duration) &&
+        video.duration > 0
+            ? video.duration
+            : state.project?.duration || 0;
+
+    $('currentTime').textContent =
+        timeText(current);
+
+    $('durationText').textContent =
+        timeText(duration);
+
+    /*
+     * ここが重要。
+     * maxは必ず動画duration。
+     * 固定値・画面幅・要素数では決めない。
+     */
+    if(duration > 0){
+        $('seek').min = '0';
+        $('seek').max = String(duration);
+        $('seek').step = '0.001';
+        $('seek').value =
+            String(
+                clamp(
+                    current,
+                    0,
+                    duration
+                )
+            );
+    }
+}
+
+function renderTimeline(){
+    const track = $('track');
+
+    track.innerHTML = '';
+
+    const duration =
+        state.project?.duration || 0;
+
+    if(duration <= 0){
+        return;
+    }
+
+    for(const element of state.project.elements){
+
+        const item =
+            document.createElement('span');
+
+        item.className =
+            'trackItem ' +
+            element.type;
+
+        item.style.left =
+            (
+                element.start /
+                duration *
+                100
+            ) + '%';
+
+        item.style.width =
+            (
+                Math.max(
+                    0,
+                    element.end -
+                    element.start
+                ) /
+                duration *
+                100
+            ) + '%';
+
+        item.title =
+            element.type === 'text'
+                ? element.text || 'テキスト'
+                : '強調枠';
+
+        item.addEventListener(
+            'click',
+            () => {
+                selectObject(
+                    element.id,
+                    'element'
+                );
+
+                $('video').currentTime =
+                    element.start;
+            }
+        );
+
+        track.appendChild(item);
+    }
+
+    for(const connection of state.project.connections){
+
+        const item =
+            document.createElement('span');
+
+        item.className =
+            'trackItem line';
+
+        item.style.left =
+            (
+                connection.start /
+                duration *
+                100
+            ) + '%';
+
+        item.style.width =
+            (
+                Math.max(
+                    0,
+                    connection.end -
+                    connection.start
+                ) /
+                duration *
+                100
+            ) + '%';
+
+        item.title = '接続線';
+
+        item.addEventListener(
+            'click',
+            () => {
+                selectObject(
+                    connection.id,
+                    'connection'
+                );
+
+                $('video').currentTime =
+                    connection.start;
+            }
+        );
+
+        track.appendChild(item);
+    }
+}
+
+/* =========================================================
+ * 全体描画
+ * ======================================================= */
+
+function renderAll(){
+    renderObjects();
+    renderConnections();
+    renderTimeline();
+    updateTimeUI();
+}
+
+/* =========================================================
+ * 追加
+ * ======================================================= */
+
+function addText(){
+    if(!state.editing){
+        return;
+    }
+
+    const current =
+        $('video').currentTime;
+
+    const element =
+        normalizeElement({
+            id:uid('element'),
+            type:'text',
+            text:'ここをダブルクリックして編集',
+            x:10,
+            y:10,
+            w:35,
+            h:12,
+            start:current,
+            end:state.project.duration,
+            style:{
+                color:'#ffffff',
+                background:'#000000',
+                fontSize:28,
+                borderColor:'#ff3b30',
+                borderWidth:4,
+                lineWidth:4,
+                opacity:1
+            }
+        });
+
+    state.project.elements.push(element);
+
+    markDirty();
+    selectObject(element.id,'element');
+}
+
+function addBox(){
+    if(!state.editing){
+        return;
+    }
+
+    const current =
+        $('video').currentTime;
+
+    const element =
+        normalizeElement({
+            id:uid('element'),
+            type:'box',
+            text:'',
+            x:10,
+            y:10,
+            w:40,
+            h:25,
+            start:current,
+            end:state.project.duration,
+            style:{
+                color:'#ffffff',
+                background:'#000000',
+                fontSize:28,
+                borderColor:'#ff3b30',
+                borderWidth:5,
+                lineWidth:5,
+                opacity:1
+            }
+        });
+
+    state.project.elements.push(element);
+
+    markDirty();
+    selectObject(element.id,'element');
+}
+
+function toggleLineMode(){
+    if(!state.editing){
+        return;
+    }
+
+    state.connectMode =
+        !state.connectMode;
+
+    state.connectSource = null;
+
+    $('lineMode').textContent =
+        state.connectMode
+            ? '接続先を選択中…'
+            : '＋接続線';
+
+    message(
+        state.connectMode
+            ? '動画上の要素を選択し、表示された接点をクリックしてください。'
+            : '接続線モードを終了しました。',
+        true
+    );
+}
+
+/* =========================================================
+ * 削除
+ * ======================================================= */
+
+function deleteSelected(){
+    if(!state.selectedId){
+        return;
+    }
+
+    if(state.selectedType === 'element'){
+
+        state.project.elements =
+            state.project.elements.filter(
+                e => e.id !== state.selectedId
+            );
+
+        /*
+         * 要素削除時、その要素を参照する線も削除。
+         */
+        state.project.connections =
+            state.project.connections.filter(
+                c =>
+                    c.fromId !== state.selectedId &&
+                    c.toId !== state.selectedId
+            );
+    }
+
+    if(state.selectedType === 'connection'){
+
+        state.project.connections =
+            state.project.connections.filter(
+                c => c.id !== state.selectedId
+            );
+    }
+
+    clearSelection();
+    markDirty();
+}
+
+/* =========================================================
+ * 右クリック
+ * ======================================================= */
+
+function openContextMenu(x,y,id,type){
+    state.contextTarget = {
+        id,
+        type
+    };
+
     const menu = $('contextMenu');
 
     menu.style.display = 'block';
 
-    const w = 205;
-    const h = 110;
+    const width = 200;
+    const height = 120;
 
     menu.style.left =
         Math.min(
             x,
-            window.innerWidth - w - 5
+            window.innerWidth - width - 8
         ) + 'px';
 
     menu.style.top =
         Math.min(
             y,
-            window.innerHeight - h - 5
+            window.innerHeight - height - 8
         ) + 'px';
 }
 
-function hideContextMenu() {
-    $('contextMenu').style.display =
-        'none';
+function closeContextMenu(){
+    $('contextMenu').style.display = 'none';
 }
-
-document.addEventListener(
-    'click',
-    event => {
-        if (
-            !event.target.closest(
-                '#contextMenu'
-            )
-        ) {
-            hideContextMenu();
-        }
-    }
-);
 
 $('contextMenu').addEventListener(
     'click',
     event => {
-        const button =
-            event.target.closest('button');
 
-        if (!button) {
+        const action =
+            event.target.dataset.action;
+
+        if(!action || !state.contextTarget){
             return;
         }
 
-        const action =
-            button.dataset.action;
+        const target =
+            state.contextTarget;
 
-        hideContextMenu();
+        closeContextMenu();
 
-        if (
-            action === 'style'
-        ) {
+        if(action === 'style'){
+            selectObject(
+                target.id,
+                target.type
+            );
             openStyleModal();
         }
 
-        if (
-            action === 'duplicate'
-        ) {
-            duplicateSelected();
+        if(action === 'duplicate'){
+            if(target.type !== 'element'){
+                return;
+            }
+
+            const original =
+                findElement(target.id);
+
+            if(!original){
+                return;
+            }
+
+            const copy =
+                clone(original);
+
+            copy.id = uid('element');
+
+            copy.x =
+                clamp(
+                    copy.x + 3,
+                    0,
+                    100 - copy.w
+                );
+
+            copy.y =
+                clamp(
+                    copy.y + 3,
+                    0,
+                    100 - copy.h
+                );
+
+            state.project.elements.push(copy);
+
+            markDirty();
+            selectObject(copy.id,'element');
         }
 
-        if (
-            action === 'delete'
-        ) {
+        if(action === 'delete'){
+            selectObject(
+                target.id,
+                target.type
+            );
+
             deleteSelected();
         }
     }
 );
 
-function duplicateSelected() {
-    if (
-        !state.selected ||
-        !state.selectedType
-    ) {
-        return;
-    }
-
-    if (state.selectedType === 'element') {
-        const source =
-            state.project.elements.find(
-                e => e.id === state.selected
-            );
-
-        if (!source) {
-            return;
-        }
-
-        const copy =
-            clone(source);
-
-        copy.id = uid('element');
-        copy.x =
-            clamp(
-                copy.x + 3,
-                0,
-                100 - copy.w
-            );
-
-        copy.y =
-            clamp(
-                copy.y + 3,
-                0,
-                100 - copy.h
-            );
-
-        state.project.elements.push(copy);
-
-        markDirty();
-        selectElement(copy.id);
-    }
-
-    if (
-        state.selectedType === 'connection'
-    ) {
-        const source =
-            state.project.connections.find(
-                c => c.id === state.selected
-            );
-
-        if (!source) {
-            return;
-        }
-
-        const copy =
-            clone(source);
-
-        copy.id =
-            uid('connection');
-
-        state.project.connections.push(copy);
-
-        markDirty();
-        selectConnection(copy.id);
-    }
-}
-
 /* =========================================================
- * STYLE MODALS
+ * 書式モーダル
  * ======================================================= */
 
-function openStyleModal() {
-    if (
-        !state.selected ||
-        !state.selectedType
-    ) {
+function openStyleModal(){
+    if(!state.selectedId){
         return;
     }
 
-    if (state.selectedType === 'element') {
-        const element =
-            state.project.elements.find(
-                e => e.id === state.selected
-            );
+    const isElement =
+        state.selectedType === 'element';
 
-        if (!element) {
-            return;
-        }
+    const target =
+        isElement
+            ? findElement(state.selectedId)
+            : findConnection(state.selectedId);
 
-        const style = element.style;
-
-        $('mText').value =
-            element.text || '';
-
-        $('mColor').value =
-            normalizeColor(style.color, '#ffffff');
-
-        $('mBg').value =
-            normalizeColor(
-                style.background,
-                '#000000'
-            );
-
-        $('mFontSize').value =
-            number(style.fontSize, 24);
-
-        $('mOpacity').value =
-            number(style.opacity, 100);
-
-        $('mBorderColor').value =
-            normalizeColor(
-                style.borderColor,
-                '#ff3b30'
-            );
-
-        $('mBorderWidth').value =
-            number(style.borderWidth, 0);
-
-        $('mRadius').value =
-            number(style.radius, 4);
-
-        $('mWeight').value =
-            String(
-                number(style.fontWeight, 600)
-            );
-
-        $('objectModal').style.display =
-            'flex';
-
+    if(!target){
         return;
     }
 
-    if (state.selectedType === 'connection') {
-        const connection =
-            state.project.connections.find(
-                c => c.id === state.selected
-            );
+    $('styleTextArea').classList.toggle(
+        'hidden',
+        !isElement ||
+        target.type !== 'text'
+    );
 
-        if (!connection) {
-            return;
-        }
+    if(isElement){
 
-        $('cFromPoint').value =
-            connection.fromPoint;
+        $('styleText').value =
+            target.text || '';
 
-        $('cToPoint').value =
-            connection.toPoint;
-
-        $('cColor').value =
+        $('styleColor').value =
             normalizeColor(
-                connection.color,
+                target.style.color,
                 '#ffffff'
             );
 
-        $('cWidth').value =
-            connection.width;
+        $('styleBackground').value =
+            normalizeColor(
+                target.style.background,
+                '#000000'
+            );
 
-        $('cDash').value =
-            connection.dash || '';
+        $('styleFontSize').value =
+            target.style.fontSize;
 
-        $('cStartArrow').value =
-            connection.startArrow;
+        $('styleBorderColor').value =
+            normalizeColor(
+                target.style.borderColor,
+                '#ff3b30'
+            );
 
-        $('cEndArrow').value =
-            connection.endArrow;
+        $('styleBorderWidth').value =
+            target.style.borderWidth;
 
-        $('cCurve').value =
-            connection.curve;
-
-        $('connectionModal').style.display =
-            'flex';
+        $('styleLineWidth').value =
+            target.style.lineWidth;
     }
+
+    if(!isElement){
+
+        $('styleColor').value =
+            normalizeColor(
+                target.style.color,
+                '#ffffff'
+            );
+
+        $('styleLineWidth').value =
+            target.style.lineWidth;
+
+        $('styleBorderColor').value =
+            '#ff3b30';
+
+        $('styleBorderWidth').value =
+            '1';
+    }
+
+    $('styleModal').style.display =
+        'flex';
 }
 
-function normalizeColor(value, fallback) {
-    const str =
-        String(value || '');
+function normalizeColor(value,fallback){
+    const s = String(value || '');
 
-    const match =
-        str.match(
-            /^#([0-9a-f]{6})/i
-        );
-
-    return match
-        ? '#' + match[1]
+    return /^#[0-9a-fA-F]{6}$/.test(s)
+        ? s
         : fallback;
 }
 
-$('applyObjectStyle').addEventListener(
-    'click',
-    () => {
-        const element =
-            state.project.elements.find(
-                e => e.id === state.selected
-            );
+function closeStyleModal(){
+    $('styleModal').style.display =
+        'none';
+}
 
-        if (!element) {
+function applyStyle(){
+    if(!state.selectedId){
+        return;
+    }
+
+    if(state.selectedType === 'element'){
+
+        const element =
+            findElement(state.selectedId);
+
+        if(!element){
             return;
         }
 
-        element.text =
-            $('mText').value;
+        if(element.type === 'text'){
+            element.text =
+                $('styleText').value;
+        }
 
         element.style.color =
-            $('mColor').value;
+            $('styleColor').value;
 
         element.style.background =
-            $('mBg').value;
+            $('styleBackground').value;
 
         element.style.fontSize =
             clamp(
-                number(
-                    $('mFontSize').value,
-                    24
+                num(
+                    $('styleFontSize').value,
+                    32
                 ),
                 8,
                 200
             );
 
-        element.style.opacity =
-            clamp(
-                number(
-                    $('mOpacity').value,
-                    100
-                ),
-                0,
-                100
-            );
-
         element.style.borderColor =
-            $('mBorderColor').value;
+            $('styleBorderColor').value;
 
         element.style.borderWidth =
             clamp(
-                number(
-                    $('mBorderWidth').value,
-                    0
-                ),
-                0,
-                30
-            );
-
-        element.style.radius =
-            clamp(
-                number(
-                    $('mRadius').value,
+                num(
+                    $('styleBorderWidth').value,
                     4
-                ),
-                0,
-                100
-            );
-
-        element.style.fontWeight =
-            number(
-                $('mWeight').value,
-                600
-            );
-
-        $('objectModal').style.display =
-            'none';
-
-        markDirty();
-        updateSelectionInfo(element);
-        renderAll();
-    }
-);
-
-$('applyConnectionStyle').addEventListener(
-    'click',
-    () => {
-        const connection =
-            state.project.connections.find(
-                c => c.id === state.selected
-            );
-
-        if (!connection) {
-            return;
-        }
-
-        connection.fromPoint =
-            $('cFromPoint').value;
-
-        connection.toPoint =
-            $('cToPoint').value;
-
-        connection.color =
-            $('cColor').value;
-
-        connection.width =
-            clamp(
-                number(
-                    $('cWidth').value,
-                    2.5
                 ),
                 1,
                 30
             );
 
-        connection.dash =
-            $('cDash').value;
-
-        connection.startArrow =
-            $('cStartArrow').value;
-
-        connection.endArrow =
-            $('cEndArrow').value;
-
-        connection.curve =
-            $('cCurve').value;
-
-        $('connectionModal').style.display =
-            'none';
-
-        markDirty();
-        updateSelectionInfo(connection);
-        renderAll();
-    }
-);
-
-/* =========================================================
- * DELETE
- * ======================================================= */
-
-function deleteSelected() {
-    if (
-        !state.selected ||
-        !state.selectedType
-    ) {
-        return;
+        element.style.lineWidth =
+            clamp(
+                num(
+                    $('styleLineWidth').value,
+                    4
+                ),
+                1,
+                20
+            );
     }
 
-    if (
-        !confirm(
-            '選択中の項目を削除しますか？'
-        )
-    ) {
-        return;
-    }
+    if(state.selectedType === 'connection'){
 
-    if (
-        state.selectedType === 'element'
-    ) {
-        const id =
-            state.selected;
-
-        state.project.elements =
-            state.project.elements.filter(
-                e => e.id !== id
+        const connection =
+            findConnection(
+                state.selectedId
             );
 
-        state.project.connections =
-            state.project.connections.filter(
-                c =>
-                    c.from !== id &&
-                    c.to !== id
-            );
-    } else {
-        state.project.connections =
-            state.project.connections.filter(
-                c => c.id !== state.selected
+        if(!connection){
+            return;
+        }
+
+        connection.style.color =
+            $('styleColor').value;
+
+        connection.style.lineWidth =
+            clamp(
+                num(
+                    $('styleLineWidth').value,
+                    4
+                ),
+                1,
+                20
             );
     }
 
     markDirty();
-    selectNone();
+    closeStyleModal();
+    renderAll();
 }
 
 /* =========================================================
- * SAVE
+ * 表示時間
  * ======================================================= */
 
-function projectForSave() {
-    const project =
-        clone(state.project);
+function setSelectedStart(){
+    if(
+        state.selectedType !== 'element' ||
+        !state.selectedId
+    ){
+        return;
+    }
 
-    project.version =
-        APP_VERSION;
+    const element =
+        findElement(state.selectedId);
 
-    project.name =
-        $('editorProjectName').value.trim();
+    if(!element){
+        return;
+    }
 
-    if (!project.name) {
+    element.start =
+        clamp(
+            $('video').currentTime,
+            0,
+            element.end
+        );
+
+    markDirty();
+    renderAll();
+}
+
+function setSelectedEnd(){
+    if(
+        state.selectedType !== 'element' ||
+        !state.selectedId
+    ){
+        return;
+    }
+
+    const element =
+        findElement(state.selectedId);
+
+    if(!element){
+        return;
+    }
+
+    element.end =
+        clamp(
+            $('video').currentTime,
+            element.start,
+            state.project.duration
+        );
+
+    markDirty();
+    renderAll();
+}
+
+/* =========================================================
+ * 保存
+ * ======================================================= */
+
+function projectForSave(){
+    if(!state.project){
+        throw new Error(
+            'プロジェクトがありません。'
+        );
+    }
+
+    const name =
+        $('projectName').value.trim();
+
+    if(!name){
         throw new Error(
             'プロジェクト名を入力してください。'
         );
     }
 
-    project.savedAt =
-        nowISO();
-
-    return project;
-}
-
-async function saveLocal(show = true) {
-    const project =
-        projectForSave();
-
-    await idbPut(
-        'projects',
-        project
-    );
-
-    state.project =
-        normalizeProject(project);
-
-    markClean('ローカル保存済み');
-
-    if (show) {
-        showMessage(
-            'ローカルに保存しました。',
-            true
+    if(name.length > 120){
+        throw new Error(
+            'プロジェクト名は120文字以内です。'
         );
     }
 
+    const project =
+        clone(state.project);
+
+    project.name = name;
+
+    /*
+     * 動画durationを保存直前にも確認。
+     */
+    if(
+        Number.isFinite($('video').duration) &&
+        $('video').duration > 0
+    ){
+        project.duration =
+            $('video').duration;
+    }
+
+    project.version = APP_VERSION;
+    project.savedAt = nowISO();
+
     return project;
 }
 
-async function saveServer() {
-    if (state.saving) {
+async function saveProject(){
+    if(!state.editing || state.saving){
         return;
     }
 
     state.saving = true;
 
-    try {
+    try{
+
         const project =
             projectForSave();
 
-        setEditorStatus(
-            'サーバーへ保存中...'
-        );
+        /*
+         * まずサーバー保存を試す。
+         */
+        try{
 
-        const result =
-            await api(
-                '?api=save&_=' + Date.now(),
-                {
-                    method:'POST',
-                    headers:{
-                        'Content-Type':
-                            'application/json'
-                    },
-                    body:JSON.stringify(project)
-                }
-            );
-
-        project.projectId =
-            result.projectId;
-
-        project.savedAt =
-            result.savedAt;
-
-        project.version =
-            APP_VERSION;
-
-        state.project =
-            normalizeProject(project);
-
-        await idbPut(
-            'projects',
-            project
-        );
-
-        markClean(
-            'サーバー保存済み'
-        );
-
-        showMessage(
-            'サーバーへ保存しました。',
-            true
-        );
-    } catch (error) {
-        if (
-            error.data?.limit ||
-            error.status === 409
-        ) {
-            showMessage(
-                'サーバー保存上限に達しました。ローカル保存へ切り替えます。'
-            );
-
-            try {
-                await saveLocal(false);
-
-                showMessage(
-                    'サーバー上限のためローカルへ保存しました。',
-                    true
+            const result =
+                await api(
+                    '?api=save&_=' +
+                    Date.now(),
+                    {
+                        method:'POST',
+                        headers:{
+                            'Content-Type':
+                                'application/json'
+                        },
+                        body:
+                            JSON.stringify(project)
+                    }
                 );
-            } catch (localError) {
-                showMessage(
-                    localError.message
+
+            project.projectId =
+                result.projectId;
+
+            project.savedAt =
+                result.savedAt;
+
+            state.project =
+                normalizeProject(project);
+
+            /*
+             * ローカルにもプロジェクトと動画を保持。
+             * サーバーが後日使えなくても復旧できる。
+             */
+            await idbPut(
+                'projects',
+                state.project
+            );
+
+            if(state.videoBlob){
+                await idbPut(
+                    'videos',
+                    {
+                        projectId:
+                            state.project.projectId,
+                        name:
+                            state.project.videoName,
+                        blob:
+                            state.videoBlob,
+                        savedAt:
+                            nowISO()
+                    }
                 );
             }
-        } else {
-            showMessage(
-                error.message
+
+            state.localOnly = false;
+            markClean('サーバー保存済み');
+
+            message(
+                'サーバーへ保存しました。',
+                true
+            );
+
+        }catch(error){
+
+            /*
+             * サーバー上限またはサーバー障害時、
+             * ローカルへ保存。
+             */
+            await saveLocal(project);
+
+            state.localOnly = true;
+
+            markClean('ローカル保存済み');
+
+            message(
+                error.data?.limit
+                    ? 'サーバー保存上限のためローカルへ保存しました。'
+                    : 'サーバー保存に失敗したためローカルへ保存しました。',
+                true
             );
         }
-    } finally {
+
+    }catch(error){
+
+        message(
+            error.message ||
+            '保存に失敗しました。'
+        );
+
+    }finally{
         state.saving = false;
     }
 }
 
-/* =========================================================
- * JSON EXPORT / IMPORT
- * ======================================================= */
+async function saveLocal(project){
+    await idbPut(
+        'projects',
+        project
+    );
 
-function exportProject() {
-    try {
-        const project =
-            projectForSave();
+    if(state.videoBlob){
 
-        const payload = {
-            exportedAt: nowISO(),
-            version: APP_VERSION,
-            project
-        };
-
-        const blob =
-            new Blob(
-                [JSON.stringify(
-                    payload,
-                    null,
-                    2
-                )],
-                {
-                    type:
-                        'application/json'
-                }
-            );
-
-        const url =
-            URL.createObjectURL(blob);
-
-        const a =
-            document.createElement('a');
-
-        a.href = url;
-
-        a.download =
-            (
-                project.name ||
-                'project'
-            ).replace(
-                /[\\/:*?"<>|]/g,
-                '_'
-            ) +
-            '.json';
-
-        a.click();
-
-        setTimeout(
-            () => URL.revokeObjectURL(url),
-            1000
+        await idbPut(
+            'videos',
+            {
+                projectId:
+                    project.projectId,
+                name:
+                    project.videoName,
+                blob:
+                    state.videoBlob,
+                savedAt:
+                    nowISO()
+            }
         );
-    } catch (error) {
-        showMessage(error.message);
     }
 }
 
-async function importProjectFile(file) {
+/* =========================================================
+ * サーバー/ローカル読込
+ * ======================================================= */
+
+async function loadServerProject(id){
+    const result =
+        await api(
+            '?api=load&id=' +
+            encodeURIComponent(id) +
+            '&_=' +
+            Date.now()
+        );
+
+    const project =
+        normalizeProject(
+            result.project
+        );
+
+    const video =
+        await idbGet(
+            'videos',
+            project.projectId
+        );
+
+    if(!video?.blob){
+
+        message(
+            'プロジェクトは読み込めましたが、対応する動画本体がブラウザ内にありません。動画を再度読み込んでください。'
+        );
+
+        state.project = project;
+
+        state.videoBlob = null;
+
+        return;
+    }
+
+    state.project = project;
+    state.videoBlob = video.blob;
+
+    await attachStoredVideo();
+
+    beginLoadedProject();
+}
+
+async function loadLocalProject(id){
+    const project =
+        await idbGet(
+            'projects',
+            id
+        );
+
+    if(!project){
+        throw new Error(
+            'ローカルプロジェクトが見つかりません。'
+        );
+    }
+
+    const video =
+        await idbGet(
+            'videos',
+            id
+        );
+
+    if(!video?.blob){
+        throw new Error(
+            'ローカルプロジェクトの動画本体がありません。'
+        );
+    }
+
+    state.project =
+        normalizeProject(project);
+
+    state.videoBlob =
+        video.blob;
+
+    await attachStoredVideo();
+
+    beginLoadedProject();
+}
+
+async function attachStoredVideo(){
+    revokeVideoUrl();
+
+    state.videoUrl =
+        URL.createObjectURL(
+            state.videoBlob
+        );
+
+    const video =
+        $('video');
+
+    video.src =
+        state.videoUrl;
+
+    video.load();
+
+    await new Promise((resolve,reject) => {
+
+        const ok = () => {
+            video.removeEventListener(
+                'loadedmetadata',
+                ok
+            );
+
+            video.removeEventListener(
+                'error',
+                ng
+            );
+
+            resolve();
+        };
+
+        const ng = () => {
+            reject(
+                new Error(
+                    '保存されていた動画を読み込めません。'
+                )
+            );
+        };
+
+        video.addEventListener(
+            'loadedmetadata',
+            ok,
+            {once:true}
+        );
+
+        video.addEventListener(
+            'error',
+            ng,
+            {once:true}
+        );
+    });
+
+    const duration =
+        Number(video.duration);
+
+    if(
+        Number.isFinite(duration) &&
+        duration > 0
+    ){
+        state.project.duration =
+            duration;
+    }
+}
+
+function beginLoadedProject(){
+    state.editing = true;
+
+    $('projectName').disabled = false;
+    $('projectName').value =
+        state.project.name;
+
+    $('videoStage').classList.remove('hidden');
+    $('emptyState').classList.add('hidden');
+
+    $('seek').max =
+        String(state.project.duration);
+
+    enableEditingControls(true);
+
+    markClean('保存済み');
+
+    status(
+        `編集準備完了 / ${state.project.name}`
+    );
+
+    renderAll();
+
+    message(
+        'プロジェクトを読み込みました。',
+        true
+    );
+}
+
+/* =========================================================
+ * JSON書き出し
+ * ======================================================= */
+
+function exportProjectJson(){
+    if(!state.project){
+        return;
+    }
+
+    const project =
+        projectForSave();
+
+    const payload = {
+        type:'video-overlay-project',
+        version:APP_VERSION,
+        exportedAt:nowISO(),
+        project
+    };
+
+    const blob =
+        new Blob(
+            [
+                JSON.stringify(
+                    payload,
+                    null,
+                    2
+                )
+            ],
+            {
+                type:'application/json'
+            }
+        );
+
+    downloadBlob(
+        blob,
+        safeDownloadName(
+            project.name ||
+            'project'
+        ) + '.json'
+    );
+}
+
+async function importProjectJson(file){
     const text =
         await file.text();
 
     let data;
 
-    try {
+    try{
         data =
             JSON.parse(text);
-    } catch {
+    }catch{
         throw new Error(
             'JSONファイルを読み込めません。'
         );
     }
 
     const project =
-        data.project || data;
-
-    if (
-        !project ||
-        typeof project !== 'object'
-    ) {
-        throw new Error(
-            'プロジェクトデータがありません。'
+        normalizeProject(
+            data.project || data
         );
+
+    if(!project.name){
+        project.name =
+            '読み込んだプロジェクト';
     }
 
+    /*
+     * インポートしたプロジェクトは新しいID。
+     */
     project.projectId =
         uid('project');
 
-    project.name =
-        String(
-            project.name ||
-            '読み込んだプロジェクト'
-        );
-
-    project.videoKey =
-        '';
-
-    const video =
-        await requestMissingVideo(project);
-
-    if (!video) {
-        throw new Error(
-            'JSONには動画本体が含まれていないため、対応する動画を選択してください。'
-        );
-    }
-
-    const videoKey =
-        uid('video');
-
     await idbPut(
-        'videos',
-        {
-            key:videoKey,
-            name:video.name,
-            type:video.type,
-            size:video.size,
-            savedAt:nowISO(),
-            blob:video
-        }
+        'projects',
+        project
     );
 
-    project.videoKey =
-        videoKey;
+    state.project = project;
 
-    await openEditor(
-        project,
-        video
-    );
+    $('projectName').value =
+        project.name;
 
-    markDirty();
-
-    showMessage(
-        'JSONを読み込みました。',
+    message(
+        'プロジェクト設定をローカルへ読み込みました。動画本体を選択してください。',
         true
     );
 }
 
-/* =========================================================
- * PROJECT MANAGEMENT
- * ======================================================= */
-
-async function openManage() {
-    await renderManageList();
-    $('manageModal').style.display =
-        'flex';
+function safeDownloadName(name){
+    return String(name)
+        .replace(/[\\/:*?"<>|]/g,'_')
+        .slice(0,100) ||
+        'video';
 }
 
-async function renderManageList() {
-    const box =
-        $('manageList');
+function downloadBlob(blob,name){
+    const url =
+        URL.createObjectURL(blob);
 
-    box.innerHTML =
-        '<div class="help">読み込み中...</div>';
+    const a =
+        document.createElement('a');
 
-    const server =
-        await loadServerList();
+    a.href = url;
+    a.download = name;
 
-    const local =
-        await idbGetAll('projects');
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
 
-    $('manageInfo').innerHTML = `
-        サーバー保存：
-        ${server.projects.length}
-        /
-        ${server.limit}
-        件<br>
-        ローカル保存：
-        ${local.length} 件
-    `;
-
-    const rows = [];
-
-    server.projects.forEach(project => {
-        rows.push({
-            ...project,
-            storage:'server'
-        });
-    });
-
-    local.forEach(project => {
-        rows.push({
-            ...project,
-            storage:'local'
-        });
-    });
-
-    if (!rows.length) {
-        box.innerHTML =
-            '<div class="help">保存データはありません。</div>';
-        return;
-    }
-
-    box.innerHTML =
-        rows.map(project => `
-            <div class="project">
-                <div class="project-info">
-                    <div class="project-name">
-                        ${escapeHtml(project.name)}
-                    </div>
-
-                    <div class="project-meta">
-                        ${project.storage === 'server'
-                            ? 'サーバー'
-                            : 'ローカル'}
-                        /
-                        ${escapeHtml(
-                            project.videoName || ''
-                        )}
-                    </div>
-                </div>
-
-                <div class="project-actions">
-                    <button
-                        class="small"
-                        data-manage-open="${escapeHtml(project.projectId)}"
-                        data-storage="${project.storage}"
-                    >
-                        開く
-                    </button>
-
-                    <button
-                        class="small danger"
-                        data-manage-delete="${escapeHtml(project.projectId)}"
-                        data-storage="${project.storage}"
-                    >
-                        削除
-                    </button>
-                </div>
-            </div>
-        `).join('');
-}
-
-/* =========================================================
- * RECORDER
- * ======================================================= */
-
-async function openRecorder() {
-    if (
-        !navigator.mediaDevices?.getDisplayMedia
-    ) {
-        showMessage(
-            'このブラウザでは画面録画に対応していません。'
-        );
-        return;
-    }
-
-    $('home').style.display = 'none';
-    $('recorder').style.display = 'flex';
-
-    $('preview').srcObject = null;
-    $('timer').textContent = '00:00:00';
-
-    state.recordChunks = [];
-    state.recordStream = null;
-    state.recorder = null;
-}
-
-async function startRecording() {
-    try {
-        const wantAudio =
-            $('systemAudio').checked;
-
-        const displayStream =
-            await navigator.mediaDevices.getDisplayMedia({
-                video:true,
-                audio:wantAudio
-            });
-
-        let stream =
-            displayStream;
-
-        if (
-            $('microphone').checked &&
-            navigator.mediaDevices.getUserMedia
-        ) {
-            const mic =
-                await navigator.mediaDevices.getUserMedia({
-                    audio:true
-                });
-
-            const tracks = [
-                ...displayStream.getVideoTracks(),
-                ...displayStream.getAudioTracks(),
-                ...mic.getAudioTracks()
-            ];
-
-            stream =
-                new MediaStream(tracks);
-        }
-
-        state.recordStream =
-            stream;
-
-        $('preview').srcObject =
-            stream;
-
-        const mimeTypes = [
-            'video/webm;codecs=vp9,opus',
-            'video/webm;codecs=vp8,opus',
-            'video/webm'
-        ];
-
-        const mimeType =
-            mimeTypes.find(
-                type =>
-                    MediaRecorder.isTypeSupported(type)
-            ) || '';
-
-        state.recordChunks = [];
-
-        state.recorder =
-            new MediaRecorder(
-                stream,
-                mimeType
-                    ? { mimeType }
-                    : undefined
-            );
-
-        state.recorder.ondataavailable =
-            event => {
-                if (event.data.size) {
-                    state.recordChunks.push(
-                        event.data
-                    );
-                }
-            };
-
-        state.recorder.onstop =
-            finishRecording;
-
-        state.recorder.start(
-            250
-        );
-
-        state.recordStartedAt =
-            Date.now();
-
-        state.recordTimer =
-            setInterval(
-                updateRecordTimer,
-                250
-            );
-
-        $('startRecord').disabled =
-            true;
-
-        $('pauseRecord').disabled =
-            false;
-
-        $('stopRecord').disabled =
-            false;
-
-        showMessage(
-            '録画を開始しました。',
-            true
-        );
-    } catch (error) {
-        showMessage(
-            '録画を開始できませんでした：' +
-            error.message
-        );
-    }
-}
-
-function updateRecordTimer() {
-    const elapsed =
-        Date.now() -
-        state.recordStartedAt;
-
-    $('timer').textContent =
-        formatTime(elapsed / 1000);
-}
-
-function pauseRecording() {
-    if (!state.recorder) {
-        return;
-    }
-
-    if (
-        state.recorder.state === 'recording'
-    ) {
-        state.recorder.pause();
-        $('pauseRecord').textContent =
-            '再開';
-        return;
-    }
-
-    if (
-        state.recorder.state === 'paused'
-    ) {
-        state.recorder.resume();
-        $('pauseRecord').textContent =
-            '一時停止';
-    }
-}
-
-function stopRecording() {
-    if (!state.recorder) {
-        return;
-    }
-
-    if (
-        state.recorder.state !== 'inactive'
-    ) {
-        state.recorder.stop();
-    }
-}
-
-async function finishRecording() {
-    clearInterval(
-        state.recordTimer
+    setTimeout(
+        () => URL.revokeObjectURL(url),
+        1000
     );
+}
 
-    state.recordTimer = null;
+/* =========================================================
+ * MP4書き出し
+ * ======================================================= */
 
-    state.recordStream?.getTracks()
-        .forEach(track => track.stop());
+async function exportMp4(){
+    if(!state.project || !state.videoBlob){
+        message(
+            '動画を読み込んで編集してから書き出してください。'
+        );
+        return;
+    }
 
-    const blob =
-        new Blob(
-            state.recordChunks,
-            {
-                type:
-                    state.recorder?.mimeType ||
-                    'video/webm'
+    if(state.dirty){
+        const ok =
+            confirm(
+                '未保存の編集があります。\n保存してからMP4を書き出しますか？'
+            );
+
+        if(ok){
+            await saveProject();
+
+            if(state.dirty){
+                message(
+                    '保存に失敗したため書き出しを中止しました。'
+                );
+                return;
             }
+        }
+    }
+
+    const button =
+        $('exportMp4');
+
+    button.disabled = true;
+    button.textContent =
+        'MP4生成中...';
+
+    try{
+
+        const project =
+            projectForSave();
+
+        const form =
+            new FormData();
+
+        form.append(
+            'video',
+            state.videoBlob,
+            state.project.videoName ||
+            'input.mp4'
         );
 
-    if (!blob.size) {
-        showMessage(
-            '録画データが空です。'
-        );
-        return;
-    }
-
-    const fileName =
-        'recording-' +
-        new Date()
-            .toISOString()
-            .replaceAll(':', '-') +
-        '.webm';
-
-    const videoKey =
-        uid('video');
-
-    await idbPut(
-        'videos',
-        {
-            key:videoKey,
-            name:fileName,
-            type:blob.type,
-            size:blob.size,
-            savedAt:nowISO(),
-            blob
-        }
-    );
-
-    const project =
-        createEmptyProject(
-            '画面録画',
-            fileName
+        form.append(
+            'project',
+            JSON.stringify(project)
         );
 
-    project.videoKey =
-        videoKey;
-
-    $('recorder').style.display =
-        'none';
-
-    await openEditor(
-        project,
-        blob
-    );
-
-    markDirty();
-
-    showMessage(
-        '録画した動画を編集対象として読み込みました。',
-        true
-    );
-}
-
-/* =========================================================
- * VIDEO EVENTS
- * ======================================================= */
-
-$('recordedVideo').addEventListener(
-    'loadedmetadata',
-    () => {
-        updateStageSize();
-        renderAll();
-    }
-);
-
-$('recordedVideo').addEventListener(
-    'timeupdate',
-    () => {
-        updateTimeReadout();
-        renderObjects();
-        renderConnections();
-    }
-);
-
-$('recordedVideo').addEventListener(
-    'seeked',
-    renderAll
-);
-
-$('recordedVideo').addEventListener(
-    'play',
-    () => {
-        renderObjects();
-        renderConnections();
-    }
-);
-
-window.addEventListener(
-    'resize',
-    () => {
-        if (
-            $('editor').style.display !== 'none'
-        ) {
-            updateStageSize();
-            renderAll();
-        }
-    }
-);
-
-/* =========================================================
- * GENERAL EVENTS
- * ======================================================= */
-
-$('newVideoBtn').addEventListener(
-    'click',
-    chooseVideo
-);
-
-$('videoFile').addEventListener(
-    'change',
-    () => {
-        const file =
-            $('videoFile').files?.[0];
-
-        if (!file) {
-            return;
-        }
-
-        if (
-            !file.type.startsWith('video/')
-        ) {
-            showMessage(
-                '動画ファイルを選択してください。'
-            );
-            return;
-        }
-
-        showNameModal(file);
-    }
-);
-
-$('nameCancel').addEventListener(
-    'click',
-    () => {
-        $('nameModal').style.display =
-            'none';
-
-        state.pendingVideoFile = null;
-    }
-);
-
-$('nameOk').addEventListener(
-    'click',
-    async () => {
-        const name =
-            $('projectNameInput').value.trim();
-
-        if (!name) {
-            showMessage(
-                'プロジェクト名を入力してください。'
-            );
-            return;
-        }
-
-        if (
-            name.length > 120
-        ) {
-            showMessage(
-                'プロジェクト名は120文字以内です。'
-            );
-            return;
-        }
-
-        const file =
-            state.pendingVideoFile;
-
-        $('nameModal').style.display =
-            'none';
-
-        state.pendingVideoFile = null;
-
-        try {
-            setStatus(
-                '動画を保存しています...'
-            );
-
-            await beginVideoProject(
-                name,
-                file
-            );
-
-            setStatus(
-                '編集モード'
-            );
-        } catch (error) {
-            showMessage(
-                error.message
-            );
-            $('home').style.display =
-                'flex';
-        }
-    }
-);
-
-$('recordScreenBtn').addEventListener(
-    'click',
-    openRecorder
-);
-
-$('startRecord').addEventListener(
-    'click',
-    startRecording
-);
-
-$('pauseRecord').addEventListener(
-    'click',
-    pauseRecording
-);
-
-$('stopRecord').addEventListener(
-    'click',
-    stopRecording
-);
-
-$('recordCancel').addEventListener(
-    'click',
-    () => {
-        state.recordStream?.getTracks()
-            .forEach(track => track.stop());
-
-        $('recorder').style.display =
-            'none';
-
-        $('home').style.display =
-            'flex';
-
-        refreshProjectList();
-    }
-);
-
-$('addComment').addEventListener(
-    'click',
-    () => addElement('comment')
-);
-
-$('addBox').addEventListener(
-    'click',
-    () => addElement('box')
-);
-
-$('connectMode').addEventListener(
-    'click',
-    () => {
-        state.connectMode =
-            !state.connectMode;
-
-        state.connectSource = null;
-
-        $('connectMode').textContent =
-            state.connectMode
-                ? '接続中：接点を選択'
-                : '線で接続';
-    }
-);
-
-$('deleteSelected').addEventListener(
-    'click',
-    deleteSelected
-);
-
-$('applyObject').addEventListener(
-    'click',
-    applyObjectFields
-);
-
-$('playVideo').addEventListener(
-    'click',
-    () => {
-        $('recordedVideo').play()
-            .catch(() => {});
-    }
-);
-
-$('pauseVideo').addEventListener(
-    'click',
-    () => {
-        $('recordedVideo').pause();
-    }
-);
-
-$('seek').addEventListener(
-    'input',
-    () => {
-        $('recordedVideo').currentTime =
-            number(
-                $('seek').value
-            );
-
-        renderAll();
-    }
-);
-
-$('startPoint').addEventListener(
-    'click',
-    () => {
-        if (
-            state.selectedType !== 'element'
-        ) {
-            return;
-        }
-
-        const element =
-            state.project.elements.find(
-                e => e.id === state.selected
-            );
-
-        if (!element) {
-            return;
-        }
-
-        element.start =
-            currentTime();
-
-        if (
-            element.end < element.start
-        ) {
-            element.end =
-                element.start;
-        }
-
-        markDirty();
-        renderAll();
-    }
-);
-
-$('endPoint').addEventListener(
-    'click',
-    () => {
-        if (
-            state.selectedType !== 'element'
-        ) {
-            return;
-        }
-
-        const element =
-            state.project.elements.find(
-                e => e.id === state.selected
-            );
-
-        if (!element) {
-            return;
-        }
-
-        element.end =
-            Math.max(
-                element.start,
-                currentTime()
-            );
-
-        markDirty();
-        renderAll();
-    }
-);
-
-$('saveServer').addEventListener(
-    'click',
-    saveServer
-);
-
-$('saveLocal').addEventListener(
-    'click',
-    () => {
-        saveLocal().catch(
-            error => showMessage(
-                error.message
-            )
-        );
-    }
-);
-
-$('exportJson').addEventListener(
-    'click',
-    exportProject
-);
-
-$('importJson').addEventListener(
-    'click',
-    () => $('jsonFile').click()
-);
-
-$('jsonFile').addEventListener(
-    'change',
-    async () => {
-        const file =
-            $('jsonFile').files?.[0];
-
-        if (!file) {
-            return;
-        }
-
-        try {
-            await importProjectFile(file);
-        } catch (error) {
-            showMessage(
-                error.message
-            );
-        } finally {
-            $('jsonFile').value = '';
-        }
-    }
-);
-
-$('manageBtn').addEventListener(
-    'click',
-    openManage
-);
-
-$('showManage').addEventListener(
-    'click',
-    openManage
-);
-
-$('backHome').addEventListener(
-    'click',
-    async () => {
-        if (
-            state.dirty &&
-            !confirm(
-                '未保存の変更があります。閉じますか？'
-            )
-        ) {
-            return;
-        }
-
-        closeEditor();
-
-        await refreshProjectList();
-    }
-);
-
-document.querySelectorAll(
-    '[data-close-modal]'
-).forEach(button => {
-    button.addEventListener(
-        'click',
-        () => {
-            button.closest(
-                '.modal-backdrop'
-            ).style.display = 'none';
-        }
-    );
-});
-
-/* =========================================================
- * MANAGEMENT EVENTS
- * ======================================================= */
-
-$('projectList').addEventListener(
-    'click',
-    async event => {
-        const load =
-            event.target.closest(
-                '[data-load-project]'
-            );
-
-        const del =
-            event.target.closest(
-                '[data-delete-project]'
-            );
-
-        if (load) {
-            try {
-                await loadProject(
-                    load.dataset.loadProject,
-                    load.dataset.storage
-                );
-            } catch (error) {
-                showMessage(
-                    error.message
-                );
-            }
-
-            return;
-        }
-
-        if (del) {
-            await deleteProject(
-                del.dataset.deleteProject,
-                del.dataset.storage
-            );
-        }
-    }
-);
-
-$('manageList').addEventListener(
-    'click',
-    async event => {
-        const load =
-            event.target.closest(
-                '[data-manage-open]'
-            );
-
-        const del =
-            event.target.closest(
-                '[data-manage-delete]'
-            );
-
-        if (load) {
-            $('manageModal').style.display =
-                'none';
-
-            try {
-                await loadProject(
-                    load.dataset.manageOpen,
-                    load.dataset.storage
-                );
-            } catch (error) {
-                showMessage(
-                    error.message
-                );
-            }
-
-            return;
-        }
-
-        if (del) {
-            await deleteProject(
-                del.dataset.manageDelete,
-                del.dataset.storage
-            );
-
-            await renderManageList();
-        }
-    }
-);
-
-async function deleteProject(id, storage) {
-    if (
-        !confirm(
-            'この保存データを削除しますか？'
-        )
-    ) {
-        return;
-    }
-
-    try {
-        if (storage === 'local') {
-            const project =
-                await idbGet(
-                    'projects',
-                    id
-                );
-
-            if (
-                project?.videoKey
-            ) {
-                await idbDelete(
-                    'videos',
-                    project.videoKey
-                );
-            }
-
-            await idbDelete(
-                'projects',
-                id
-            );
-        } else {
-            await api(
-                '?api=delete',
+        const response =
+            await fetch(
+                API +
+                '?api=export&_=' +
+                Date.now(),
                 {
                     method:'POST',
-                    headers:{
-                        'Content-Type':
-                            'application/json'
-                    },
-                    body:JSON.stringify({
-                        projectId:id
-                    })
+                    body:form,
+                    cache:'no-store'
                 }
+            );
+
+        const result =
+            await response.json();
+
+        if(!response.ok || !result.ok){
+            throw new Error(
+                result.message ||
+                'MP4書き出しに失敗しました。'
             );
         }
 
-        showMessage(
-            '削除しました。',
+        const a =
+            document.createElement('a');
+
+        a.href = result.url;
+        a.download =
+            result.filename ||
+            'edited.mp4';
+
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+
+        message(
+            '編集済みMP4を書き出しました。',
             true
         );
 
-        await refreshProjectList();
-    } catch (error) {
-        showMessage(
+    }catch(error){
+
+        message(
+            error.message ||
+            'MP4書き出しに失敗しました。'
+        );
+
+    }finally{
+
+        button.disabled =
+            !state.editing;
+
+        button.textContent =
+            'MP4書き出し';
+    }
+}
+
+/* =========================================================
+ * プロジェクト管理
+ * ======================================================= */
+
+async function openManage(){
+    $('manageModal').style.display =
+        'flex';
+
+    await refreshManage();
+}
+
+async function refreshManage(){
+    await Promise.all([
+        refreshServerProjects(),
+        refreshLocalProjects()
+    ]);
+}
+
+async function refreshServerProjects(){
+    const container =
+        $('serverProjects');
+
+    container.textContent =
+        '読み込み中...';
+
+    try{
+
+        const result =
+            await api(
+                '?api=list&_=' +
+                Date.now()
+            );
+
+        container.innerHTML = '';
+
+        if(!result.projects.length){
+
+            container.textContent =
+                'サーバー保存はありません。';
+
+            return;
+        }
+
+        for(const project of result.projects){
+
+            const row =
+                document.createElement('div');
+
+            row.className =
+                'projectItem';
+
+            row.innerHTML = `
+                <main>
+                    <strong>
+                        ${escapeHtml(project.name)}
+                    </strong>
+                    <small>
+                        ${escapeHtml(project.videoName)}
+                        /
+                        ${escapeHtml(project.savedAt)}
+                    </small>
+                </main>
+            `;
+
+            const load =
+                document.createElement('button');
+
+            load.textContent =
+                '読込';
+
+            load.addEventListener(
+                'click',
+                async () => {
+                    try{
+                        await loadServerProject(
+                            project.projectId
+                        );
+
+                        $('manageModal').style.display =
+                            'none';
+
+                    }catch(error){
+                        message(
+                            error.message
+                        );
+                    }
+                }
+            );
+
+            const del =
+                document.createElement('button');
+
+            del.textContent =
+                '削除';
+
+            del.className =
+                'danger';
+
+            del.addEventListener(
+                'click',
+                async () => {
+
+                    if(
+                        !confirm(
+                            `「${project.name}」を削除しますか？`
+                        )
+                    ){
+                        return;
+                    }
+
+                    try{
+
+                        await api(
+                            '?api=delete',
+                            {
+                                method:'POST',
+                                headers:{
+                                    'Content-Type':
+                                        'application/json'
+                                },
+                                body:
+                                    JSON.stringify({
+                                        projectId:
+                                            project.projectId
+                                    })
+                            }
+                        );
+
+                        await idbDelete(
+                            'projects',
+                            project.projectId
+                        );
+
+                        await idbDelete(
+                            'videos',
+                            project.projectId
+                        );
+
+                        await refreshManage();
+
+                        message(
+                            '削除しました。',
+                            true
+                        );
+
+                    }catch(error){
+                        message(
+                            error.message
+                        );
+                    }
+                }
+            );
+
+            row.appendChild(load);
+            row.appendChild(del);
+
+            container.appendChild(row);
+        }
+
+    }catch(error){
+
+        container.textContent =
+            'サーバーへ接続できません。';
+
+        message(
+            error.message
+        );
+    }
+}
+
+async function refreshLocalProjects(){
+    const container =
+        $('localProjects');
+
+    container.innerHTML = '';
+
+    try{
+
+        const projects =
+            await idbGetAll(
+                'projects'
+            );
+
+        if(!projects.length){
+
+            container.textContent =
+                'ローカル保存はありません。';
+
+            return;
+        }
+
+        projects.sort(
+            (a,b) =>
+                String(b.savedAt || '')
+                    .localeCompare(
+                        String(a.savedAt || '')
+                    )
+        );
+
+        for(const project of projects){
+
+            const row =
+                document.createElement('div');
+
+            row.className =
+                'projectItem';
+
+            row.innerHTML = `
+                <main>
+                    <strong>
+                        ${escapeHtml(project.name)}
+                    </strong>
+                    <small>
+                        ${escapeHtml(project.videoName)}
+                        /
+                        ローカル
+                    </small>
+                </main>
+            `;
+
+            const load =
+                document.createElement('button');
+
+            load.textContent =
+                '読込';
+
+            load.addEventListener(
+                'click',
+                async () => {
+                    try{
+
+                        await loadLocalProject(
+                            project.projectId
+                        );
+
+                        $('manageModal').style.display =
+                            'none';
+
+                    }catch(error){
+
+                        message(
+                            error.message
+                        );
+                    }
+                }
+            );
+
+            const del =
+                document.createElement('button');
+
+            del.textContent =
+                '削除';
+
+            del.className =
+                'danger';
+
+            del.addEventListener(
+                'click',
+                async () => {
+
+                    if(
+                        !confirm(
+                            `ローカルの「${project.name}」を削除しますか？`
+                        )
+                    ){
+                        return;
+                    }
+
+                    await idbDelete(
+                        'projects',
+                        project.projectId
+                    );
+
+                    await idbDelete(
+                        'videos',
+                        project.projectId
+                    );
+
+                    await refreshLocalProjects();
+
+                    message(
+                        'ローカルデータを削除しました。',
+                        true
+                    );
+                }
+            );
+
+            row.appendChild(load);
+            row.appendChild(del);
+
+            container.appendChild(row);
+        }
+
+    }catch(error){
+
+        container.textContent =
+            'IndexedDBを読み込めません。';
+
+        message(
             error.message
         );
     }
 }
 
 /* =========================================================
- * STAGE BACKGROUND CLICK
+ * 動画操作
  * ======================================================= */
 
-$('videoStage').addEventListener(
+function playVideo(){
+    $('video').play().catch(
+        error => message(error.message)
+    );
+}
+
+function pauseVideo(){
+    $('video').pause();
+}
+
+function seekTo(value){
+    const duration =
+        state.project?.duration || 0;
+
+    if(duration <= 0){
+        return;
+    }
+
+    $('video').currentTime =
+        clamp(
+            num(value),
+            0,
+            duration
+        );
+
+    updateTimeUI();
+    renderObjects();
+}
+
+$('video').addEventListener(
+    'loadedmetadata',
+    () => {
+
+        const duration =
+            Number($('video').duration);
+
+        if(
+            Number.isFinite(duration) &&
+            duration > 0
+        ){
+            if(state.project){
+                state.project.duration =
+                    duration;
+            }
+
+            /*
+             * duration取得直後に必ずrangeを同期。
+             */
+            $('seek').min = '0';
+            $('seek').max =
+                String(duration);
+            $('seek').step = '0.001';
+
+            updateTimeUI();
+            renderTimeline();
+        }
+    }
+);
+
+$('video').addEventListener(
+    'timeupdate',
+    () => {
+
+        updateTimeUI();
+
+        if(state.project){
+            renderObjects();
+        }
+    }
+);
+
+$('video').addEventListener(
+    'durationchange',
+    () => {
+
+        const duration =
+            Number($('video').duration);
+
+        if(
+            Number.isFinite(duration) &&
+            duration > 0
+        ){
+            if(state.project){
+                state.project.duration =
+                    duration;
+            }
+
+            $('seek').min = '0';
+            $('seek').max =
+                String(duration);
+            $('seek').step = '0.001';
+
+            updateTimeUI();
+            renderTimeline();
+        }
+    }
+);
+
+/* =========================================================
+ * 動画領域クリック
+ * ======================================================= */
+
+$('stageArea').addEventListener(
     'pointerdown',
     event => {
-        if (
-            event.target ===
-            $('recordedVideo')
-        ) {
-            selectNone();
+
+        if(
+            event.target !== $('video') &&
+            event.target !== $('stageArea')
+        ){
+            return;
         }
 
-        if (
-            event.target ===
-            $('overlay')
-        ) {
-            selectNone();
+        if(state.connectMode){
+            return;
         }
-    }
-);
 
-$('videoStage').addEventListener(
-    'contextmenu',
-    event => {
-        if (
-            event.target ===
-            $('recordedVideo') ||
-            event.target ===
-            $('overlay')
-        ) {
-            event.preventDefault();
-            hideContextMenu();
-        }
+        clearSelection();
     }
 );
 
 /* =========================================================
- * EDITOR CLOSE
+ * グローバル操作
  * ======================================================= */
 
-function closeEditor() {
-    $('recordedVideo').pause();
-
-    if (state.videoUrl) {
-        URL.revokeObjectURL(
-            state.videoUrl
-        );
-        state.videoUrl = '';
-    }
-
-    $('recordedVideo').removeAttribute(
-        'src'
-    );
-
-    $('recordedVideo').load();
-
-    state.project = null;
-    state.videoBlob = null;
-    state.selected = null;
-    state.selectedType = null;
-    state.connectMode = false;
-    state.connectSource = null;
-    state.dirty = false;
-
-    $('editor').style.display =
-        'none';
-
-    $('home').style.display =
-        'flex';
-
-    $('contextMenu').style.display =
-        'none';
-
-    setStatus('待機中');
-}
-
-/* =========================================================
- * AUTOSAVE
- * ======================================================= */
-
-let autosaveTimer = null;
-
-function scheduleAutosave() {
-    clearTimeout(
-        autosaveTimer
-    );
-
-    autosaveTimer =
-        setTimeout(
-            async () => {
-                if (
-                    !state.project ||
-                    !state.dirty ||
-                    state.saving
-                ) {
-                    return;
-                }
-
-                try {
-                    await saveLocal(false);
-                    setEditorStatus(
-                        '自動保存済み'
-                    );
-                } catch (error) {
-                    console.error(
-                        error
-                    );
-                }
-            },
-            1800
-        );
-}
-
-const originalMarkDirty =
-    markDirty;
-
-window.markDirty =
-    function() {
-        originalMarkDirty();
-        scheduleAutosave();
-    };
-
-/*
- * markDirtyを上書きした後も既存コードから
- * 呼び出されるよう、ローカル関数参照を
- * 使用する部分についてはイベント側で
- * scheduleAutosaveも呼ぶ。
- */
 document.addEventListener(
-    'input',
+    'pointermove',
+    handlePointerMove
+);
+
+document.addEventListener(
+    'pointerup',
+    handlePointerUp
+);
+
+document.addEventListener(
+    'click',
     event => {
-        if (
-            event.target.closest(
-                '#editor'
+
+        if(
+            !event.target.closest(
+                '#contextMenu'
             )
-        ) {
-            if (
-                state.project
-            ) {
-                state.dirty = true;
-                setEditorStatus(
-                    '未保存'
-                );
-                scheduleAutosave();
-            }
+        ){
+            closeContextMenu();
         }
     }
 );
-
-/* =========================================================
- * KEYBOARD
- * ======================================================= */
 
 document.addEventListener(
     'keydown',
     event => {
-        if (
-            event.key === 'Escape'
-        ) {
-            hideContextMenu();
 
-            document
-                .querySelectorAll(
-                    '.modal-backdrop'
-                )
-                .forEach(modal => {
-                    modal.style.display =
-                        'none';
-                });
+        const tag =
+            document.activeElement?.tagName;
 
+        const editingInput =
+            tag === 'INPUT' ||
+            tag === 'TEXTAREA' ||
+            tag === 'SELECT';
+
+        if(
+            editingInput &&
+            event.key !== 'Escape'
+        ){
             return;
         }
 
-        if (
-            event.key === 'Delete' &&
-            state.selected &&
-            !['INPUT','TEXTAREA','SELECT']
-                .includes(
-                    document.activeElement?.tagName
-                )
-        ) {
-            deleteSelected();
+        if(event.key === 'Delete'){
+            if(state.selectedId){
+                event.preventDefault();
+                deleteSelected();
+            }
         }
 
-        if (
-            (event.ctrlKey ||
-             event.metaKey) &&
-            event.key.toLowerCase() === 's'
-        ) {
+        if(
+            event.key === 'Escape'
+        ){
+            closeContextMenu();
+            closeStyleModal();
+            closeNameModal();
+
+            state.connectMode = false;
+            state.connectSource = null;
+
+            $('lineMode').textContent =
+                '＋接続線';
+        }
+
+        if(
+            event.key === ' '
+        ){
             event.preventDefault();
 
-            saveServer().catch(
-                error =>
-                    showMessage(
-                        error.message
-                    )
-            );
+            if($('video').paused){
+                playVideo();
+            }else{
+                pauseVideo();
+            }
         }
     }
 );
 
 /* =========================================================
- * INIT
+ * イベント
  * ======================================================= */
 
-async function init() {
-    try {
-        await openDB();
+$('openVideo').addEventListener(
+    'click',
+    () => $('videoFile').click()
+);
 
-        /*
-         * PHPからJavaScriptへ渡したAPP_VERSIONの
-         * 確認。ここでundefinedなら実装ミス。
-         */
-        if (
-            typeof APP_VERSION === 'undefined'
-        ) {
-            throw new Error(
-                'APP_VERSIONの初期化に失敗しました。'
+$('videoFile').addEventListener(
+    'change',
+    async event => {
+
+        const file =
+            event.target.files?.[0];
+
+        try{
+            await loadVideoFile(file);
+        }catch(error){
+            message(
+                error.message
             );
         }
 
-        const status =
-            await api(
-                '?api=status&_=' + Date.now()
+        event.target.value = '';
+    }
+);
+
+$('startEdit').addEventListener(
+    'click',
+    openNameModal
+);
+
+$('nameApply').addEventListener(
+    'click',
+    startEditing
+);
+
+$('nameCancel').addEventListener(
+    'click',
+    closeNameModal
+);
+
+$('nameInput').addEventListener(
+    'keydown',
+    event => {
+        if(event.key === 'Enter'){
+            startEditing();
+        }
+    }
+);
+
+$('projectName').addEventListener(
+    'change',
+    () => {
+
+        if(!state.project){
+            return;
+        }
+
+        const value =
+            $('projectName').value.trim();
+
+        if(!value){
+            message(
+                'プロジェクト名を空にできません。'
             );
 
-        setStatus(
-            `待機中 / v${APP_VERSION} / ` +
-            `サーバー ${status.serverCount}/${status.serverLimit}`
+            $('projectName').value =
+                state.project.name;
+
+            return;
+        }
+
+        if(value.length > 120){
+            message(
+                'プロジェクト名は120文字以内です。'
+            );
+
+            $('projectName').value =
+                state.project.name;
+
+            return;
+        }
+
+        state.project.name = value;
+        markDirty();
+    }
+);
+
+$('addText').addEventListener(
+    'click',
+    addText
+);
+
+$('addBox').addEventListener(
+    'click',
+    addBox
+);
+
+$('lineMode').addEventListener(
+    'click',
+    toggleLineMode
+);
+
+$('deleteElement').addEventListener(
+    'click',
+    deleteSelected
+);
+
+$('play').addEventListener(
+    'click',
+    playVideo
+);
+
+$('pause').addEventListener(
+    'click',
+    pauseVideo
+);
+
+$('toStart').addEventListener(
+    'click',
+    setSelectedStart
+);
+
+$('toEnd').addEventListener(
+    'click',
+    setSelectedEnd
+);
+
+$('seek').addEventListener(
+    'input',
+    event => {
+        seekTo(event.target.value);
+    }
+);
+
+$('saveProject').addEventListener(
+    'click',
+    saveProject
+);
+
+$('exportMp4').addEventListener(
+    'click',
+    exportMp4
+);
+
+$('manageProjects').addEventListener(
+    'click',
+    openManage
+);
+
+$('closeManage').addEventListener(
+    'click',
+    () => {
+        $('manageModal').style.display =
+            'none';
+    }
+);
+
+$('refreshProjects').addEventListener(
+    'click',
+    refreshManage
+);
+
+$('importProject').addEventListener(
+    'click',
+    () => $('projectFile').click()
+);
+
+$('projectFile').addEventListener(
+    'change',
+    async event => {
+
+        const file =
+            event.target.files?.[0];
+
+        try{
+
+            if(file){
+                await importProjectJson(file);
+            }
+
+        }catch(error){
+
+            message(
+                error.message
+            );
+
+        }finally{
+            event.target.value = '';
+        }
+    }
+);
+
+$('styleApply').addEventListener(
+    'click',
+    applyStyle
+);
+
+$('styleCancel').addEventListener(
+    'click',
+    closeStyleModal
+);
+
+/* =========================================================
+ * モーダル背景クリック
+ * ======================================================= */
+
+$('styleModal').addEventListener(
+    'click',
+    event => {
+        if(event.target === $('styleModal')){
+            closeStyleModal();
+        }
+    }
+);
+
+$('manageModal').addEventListener(
+    'click',
+    event => {
+        if(event.target === $('manageModal')){
+            $('manageModal').style.display =
+                'none';
+        }
+    }
+);
+
+$('nameModal').addEventListener(
+    'click',
+    event => {
+        if(event.target === $('nameModal')){
+            closeNameModal();
+        }
+    }
+);
+
+/* =========================================================
+ * 初期化
+ * ======================================================= */
+
+async function init(){
+
+    try{
+
+        await openDB();
+
+        const statusData =
+            await api(
+                '?api=status&_=' +
+                Date.now()
+            );
+
+        status(
+            `動画未読込 / v${APP_VERSION} / ` +
+            `サーバー ${statusData.serverCount}/${statusData.serverLimit}`
         );
 
-        await refreshProjectList();
+    }catch(error){
 
-    } catch (error) {
-        console.error(error);
-
-        setStatus(
-            '初期化エラー'
+        status(
+            'サーバー保存機能を確認できません'
         );
 
-        showMessage(
-            '初期化できませんでした：' +
+        message(
             error.message
         );
     }
+
+    enableEditingControls(false);
+
+    /*
+     * 編集開始だけは動画読み込み後。
+     */
+    $('startEdit').disabled = true;
+
+    $('seek').disabled = true;
 }
+
+window.addEventListener(
+    'beforeunload',
+    event => {
+
+        if(state.dirty){
+
+            event.preventDefault();
+
+            event.returnValue =
+                '';
+        }
+    }
+);
 
 init();
 </script>
