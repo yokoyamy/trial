@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-const APP_VERSION = '5.1.0';
+const APP_VERSION = '6.0.0';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -41,9 +41,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         header('Content-Type: application/json; charset=utf-8');
-        header(
-            'Content-Disposition: attachment; filename="video-editor-project.json"'
-        );
+        header('Content-Disposition: attachment; filename="video-editor-project.json"');
         echo $project;
         exit;
     }
@@ -66,9 +64,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     --muted:#94a3b8;
     --blue:#2563eb;
     --red:#ef4444;
-
     --label:120px;
     --track:56px;
+    --right-menu:270px;
 }
 
 *{
@@ -77,14 +75,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 html,
 body{
+    margin:0;
     width:100%;
     height:100%;
-    margin:0;
     overflow:hidden;
-
     background:var(--bg);
     color:var(--text);
-
     font-family:
         -apple-system,
         BlinkMacSystemFont,
@@ -114,27 +110,22 @@ button:disabled{
 }
 
 .app{
-    width:100%;
-    height:100%;
+    height:100vh;
     display:flex;
     flex-direction:column;
 }
 
-
-/* ========================================
-   上部操作バー
-======================================== */
+/* ------------------------------
+   上部
+------------------------------ */
 
 .topbar{
     height:52px;
     flex:none;
-
     display:flex;
     align-items:center;
     gap:7px;
-
     padding:7px 10px;
-
     background:#080f1b;
     border-bottom:1px solid var(--line);
 }
@@ -148,10 +139,8 @@ button:disabled{
 .btn{
     border:1px solid #40516a;
     border-radius:6px;
-
     background:#243247;
     color:var(--text);
-
     padding:7px 11px;
 }
 
@@ -164,6 +153,11 @@ button:disabled{
     border-color:#3b82f6;
 }
 
+.btn.danger{
+    background:#7f1d1d;
+    border-color:#991b1b;
+}
+
 .btn.small{
     padding:5px 8px;
     font-size:12px;
@@ -171,10 +165,8 @@ button:disabled{
 
 .status{
     margin-left:auto;
-
     color:var(--muted);
     font-size:12px;
-
     white-space:nowrap;
 }
 
@@ -182,45 +174,37 @@ button:disabled{
     display:none;
 }
 
-
-/* ========================================
+/* ------------------------------
    メイン
-======================================== */
+------------------------------ */
 
 .main{
     min-height:0;
     flex:1;
-
     display:flex;
     flex-direction:column;
+    padding-right:var(--right-menu);
 }
 
-
-/* ========================================
-   動画エリア
-======================================== */
+/* ------------------------------
+   動画
+------------------------------ */
 
 .video-area{
     min-height:260px;
     flex:1;
-
     display:flex;
     align-items:center;
     justify-content:center;
-
     padding:12px;
-
     background:#050a11;
-
     overflow:hidden;
 }
 
 .video-wrap{
     position:relative;
-
     width:min(1000px,100%);
     height:100%;
-
     display:flex;
     align-items:center;
     justify-content:center;
@@ -228,311 +212,411 @@ button:disabled{
 
 #video{
     display:block;
-
     max-width:100%;
     max-height:100%;
-
     background:#000;
 }
 
-
-/*
- * 動画上の編集領域
- *
- * SVGもここに配置する。
- * タイムラインには接続線を配置しない。
- */
 .video-overlay{
     position:absolute;
     inset:0;
-
     pointer-events:none;
 }
-
 
 /*
  * 動画上の接続線
  */
-.video-connection-svg{
+.video-connections{
     position:absolute;
-
-    z-index:5;
-
+    inset:0;
+    width:100%;
+    height:100%;
     overflow:visible;
-
     pointer-events:none;
+    z-index:10;
 }
 
-
-/*
- * 接続線の外周。
- * 背景が明るい動画でも線を視認しやすくする。
- */
-.video-connection-halo{
+.video-connection{
     fill:none;
-
-    stroke:#000;
-    stroke-width:8;
-
-    stroke-linecap:round;
-    stroke-linejoin:round;
-
-    opacity:.75;
-}
-
-
-/*
- * 接続線本体
- */
-.video-connection-path{
-    fill:none;
-
-    stroke:#f8fafc;
-    stroke-width:3;
-
-    stroke-linecap:round;
-    stroke-linejoin:round;
-
-    filter:
-        drop-shadow(
-            0 1px 2px rgba(0,0,0,.8)
-        );
-}
-
-
-/*
- * 選択された接続線
- */
-.video-connection-path.selected{
     stroke:#fbbf24;
+    stroke-width:3;
+    stroke-linecap:round;
+    stroke-linejoin:round;
+    pointer-events:stroke;
+    cursor:pointer;
+    filter:
+        drop-shadow(0 0 2px rgba(0,0,0,.9))
+        drop-shadow(0 0 3px rgba(0,0,0,.8));
+}
+
+.video-connection.selected{
+    stroke:#60a5fa;
     stroke-width:5;
 }
 
-
-/*
- * 接続先の丸印
- */
-.video-connection-endpoint{
-    stroke:#000;
-    stroke-width:2;
+.video-connection-hit{
+    fill:none;
+    stroke:transparent;
+    stroke-width:16;
+    pointer-events:stroke;
+    cursor:pointer;
 }
 
+.connection-arrow{
+    pointer-events:none;
+}
 
-/*
- * 接続先の矢印
- */
-.video-connection-arrow{
-    stroke:#000;
+.connection-handle{
+    fill:#fff;
+    stroke:#2563eb;
+    stroke-width:3;
+    cursor:crosshair;
+    pointer-events:auto;
+}
+
+.connection-handle.start{
+    fill:#22c55e;
+}
+
+.connection-handle.end{
+    fill:#ef4444;
+}
+
+.connection-label{
+    fill:#0f172a;
+    stroke:#475569;
     stroke-width:1;
+    opacity:.95;
+    pointer-events:none;
 }
 
+.connection-label-text{
+    fill:#fff;
+    font-size:11px;
+    font-weight:600;
+    pointer-events:none;
+}
 
-/* ========================================
+/* ------------------------------
    動画上の要素
-======================================== */
+------------------------------ */
 
 .overlay-element{
     position:absolute;
-
-    min-width:24px;
+    min-width:30px;
     min-height:20px;
-
     pointer-events:auto;
-
     user-select:none;
-
     touch-action:none;
-
-    cursor:move;
-
-    z-index:10;
+    z-index:20;
 }
 
 .overlay-element.selected{
     outline:2px solid #60a5fa;
+    outline-offset:2px;
 }
 
 .overlay-element.multi-selected{
     outline:2px solid #fbbf24;
+    outline-offset:2px;
 }
-
-
-/*
- * 要素のリサイズハンドル
- */
-.resize-handle{
-    position:absolute;
-
-    width:10px;
-    height:10px;
-
-    border:2px solid #fff;
-
-    background:#2563eb;
-
-    border-radius:2px;
-
-    z-index:30;
-
-    opacity:0;
-}
-
-.overlay-element.selected .resize-handle{
-    opacity:1;
-}
-
-.resize-handle.nw{
-    left:-6px;
-    top:-6px;
-    cursor:nwse-resize;
-}
-
-.resize-handle.n{
-    left:50%;
-    top:-6px;
-    transform:translateX(-50%);
-    cursor:ns-resize;
-}
-
-.resize-handle.ne{
-    right:-6px;
-    top:-6px;
-    cursor:nesw-resize;
-}
-
-.resize-handle.e{
-    right:-6px;
-    top:50%;
-    transform:translateY(-50%);
-    cursor:ew-resize;
-}
-
-.resize-handle.se{
-    right:-6px;
-    bottom:-6px;
-    cursor:nwse-resize;
-}
-
-.resize-handle.s{
-    left:50%;
-    bottom:-6px;
-    transform:translateX(-50%);
-    cursor:ns-resize;
-}
-
-.resize-handle.sw{
-    left:-6px;
-    bottom:-6px;
-    cursor:nesw-resize;
-}
-
-.resize-handle.w{
-    left:-6px;
-    top:50%;
-    transform:translateY(-50%);
-    cursor:ew-resize;
-}
-
 
 .overlay-text{
     width:100%;
     height:100%;
-
     display:flex;
     align-items:center;
     justify-content:center;
-
     padding:4px;
-
     overflow:hidden;
-
     white-space:pre-wrap;
-
-    text-shadow:
-        0 1px 3px #000,
-        0 0 2px #000;
 }
 
 .overlay-box{
     width:100%;
     height:100%;
-
     border:3px solid currentColor;
-
     background:#ffffff08;
 }
 
 .overlay-skip{
     width:100%;
     height:100%;
-
     display:flex;
     align-items:center;
     justify-content:center;
-
     border:2px dashed #f97316;
-
     color:#fdba74;
-
     background:#f973161f;
+}
+
+.overlay-element .resize-handle{
+    position:absolute;
+    width:10px;
+    height:10px;
+    border:2px solid #fff;
+    background:#2563eb;
+    border-radius:2px;
+    z-index:30;
+    display:none;
+}
+
+.overlay-element.selected .resize-handle{
+    display:block;
+}
+
+.resize-nw{
+    left:-6px;
+    top:-6px;
+    cursor:nwse-resize;
+}
+
+.resize-n{
+    left:50%;
+    top:-6px;
+    transform:translateX(-50%);
+    cursor:ns-resize;
+}
+
+.resize-ne{
+    right:-6px;
+    top:-6px;
+    cursor:nesw-resize;
+}
+
+.resize-e{
+    right:-6px;
+    top:50%;
+    transform:translateY(-50%);
+    cursor:ew-resize;
+}
+
+.resize-se{
+    right:-6px;
+    bottom:-6px;
+    cursor:nwse-resize;
+}
+
+.resize-s{
+    left:50%;
+    bottom:-6px;
+    transform:translateX(-50%);
+    cursor:ns-resize;
+}
+
+.resize-sw{
+    left:-6px;
+    bottom:-6px;
+    cursor:nesw-resize;
+}
+
+.resize-w{
+    left:-6px;
+    top:50%;
+    transform:translateY(-50%);
+    cursor:ew-resize;
 }
 
 .empty-video{
     position:absolute;
-
     text-align:center;
-
     color:#64748b;
-
     line-height:1.8;
-
     pointer-events:none;
 }
 
 .empty-video strong{
     display:block;
-
     color:#94a3b8;
-
     font-size:18px;
 }
 
+/* ------------------------------
+   右メニュー
+------------------------------ */
 
-/* ========================================
+.right-menu{
+    position:fixed;
+    top:52px;
+    right:0;
+    bottom:0;
+    width:var(--right-menu);
+    z-index:1000;
+    background:#111b2a;
+    border-left:1px solid var(--line);
+    overflow-y:auto;
+}
+
+.right-menu-header{
+    min-height:52px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:10px 14px;
+    border-bottom:1px solid var(--line);
+}
+
+.right-menu-title{
+    font-weight:700;
+    font-size:14px;
+}
+
+.right-menu-type{
+    color:#94a3b8;
+    font-size:11px;
+}
+
+.right-menu-body{
+    padding:13px;
+}
+
+.right-menu-empty{
+    padding:25px 12px;
+    color:#64748b;
+    font-size:12px;
+    line-height:1.8;
+    text-align:center;
+}
+
+.property-group{
+    margin-bottom:16px;
+}
+
+.property-title{
+    margin-bottom:7px;
+    color:#94a3b8;
+    font-size:11px;
+    font-weight:600;
+}
+
+.property-row{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    margin-bottom:7px;
+}
+
+.property-row label{
+    width:58px;
+    flex:none;
+    color:#94a3b8;
+    font-size:11px;
+}
+
+.property-row input,
+.property-row select{
+    min-width:0;
+    flex:1;
+    padding:6px 7px;
+    color:#e5e7eb;
+    background:#0f1722;
+    border:1px solid #40516a;
+    border-radius:5px;
+}
+
+.property-row input[type="color"]{
+    padding:2px;
+    height:30px;
+}
+
+.property-buttons{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:6px;
+}
+
+.property-buttons .btn{
+    width:100%;
+    font-size:12px;
+}
+
+.shape-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:6px;
+}
+
+.shape-button{
+    min-height:45px;
+    padding:5px;
+    border:1px solid #40516a;
+    border-radius:5px;
+    background:#1b293c;
+    color:#dbeafe;
+    font-size:11px;
+}
+
+.shape-button:hover{
+    background:#293a52;
+}
+
+.shape-button.active{
+    border-color:#60a5fa;
+    background:#1e3a5f;
+}
+
+.line-preview{
+    width:100%;
+    height:34px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:#0b1220;
+    border:1px solid #334155;
+    border-radius:5px;
+    margin-bottom:8px;
+}
+
+.line-preview span{
+    width:80%;
+    height:0;
+    border-top:3px solid #fbbf24;
+}
+
+.line-preview span.dashed{
+    border-top-style:dashed;
+}
+
+.line-preview span.dotted{
+    border-top-style:dotted;
+}
+
+.endpoint-help{
+    padding:8px;
+    background:#0f1722;
+    border:1px solid #334155;
+    border-radius:5px;
+    color:#94a3b8;
+    font-size:11px;
+    line-height:1.6;
+}
+
+/* ------------------------------
    タイムライン
-======================================== */
+------------------------------ */
 
 .timeline-panel{
     height:330px;
     flex:none;
-
     display:flex;
     flex-direction:column;
-
     border-top:1px solid var(--line);
-
     background:#0e1724;
 }
 
 .timeline-toolbar{
     height:43px;
     flex:none;
-
     display:flex;
     align-items:center;
-
     gap:7px;
-
     padding:5px 8px;
-
     border-bottom:1px solid var(--line);
 }
 
 .time-readout{
     min-width:120px;
-
     font-variant-numeric:tabular-nums;
-
     color:#dbeafe;
 }
 
@@ -543,14 +627,10 @@ button:disabled{
 
 .zoom-control{
     margin-left:auto;
-
     display:flex;
     align-items:center;
-
     gap:6px;
-
     color:var(--muted);
-
     font-size:12px;
 }
 
@@ -560,176 +640,119 @@ button:disabled{
 
 .timeline-scroll{
     position:relative;
-
     flex:1;
     min-height:0;
-
     width:100%;
-
     overflow-y:auto;
     overflow-x:hidden;
 }
 
 .timeline-content{
     position:relative;
-
     width:100%;
     min-width:0;
 }
 
 .axis-row{
     position:sticky;
-
     top:0;
-
     z-index:30;
-
     height:34px;
     width:100%;
-
     display:flex;
-
     background:#131d29;
-
     border-bottom:1px solid var(--line);
 }
 
 .axis-label{
     width:var(--label);
     min-width:var(--label);
-
     flex:none;
-
     display:flex;
     align-items:center;
-
     padding-left:8px;
-
     background:#131d29;
-
     border-right:1px solid var(--line);
-
     font-size:12px;
-
     position:sticky;
     left:0;
-
     z-index:40;
 }
 
 .axis-track{
     position:relative;
-
     height:100%;
-
     flex:1;
-
     min-width:0;
 }
 
 .tick{
     position:absolute;
-
     top:0;
-
     height:100%;
-
     border-left:1px solid #334155;
-
     padding:5px 0 0 3px;
-
     font-size:10px;
-
     color:#64748b;
-
     white-space:nowrap;
-
     pointer-events:none;
 }
 
 .track-row{
     height:var(--track);
     width:100%;
-
     display:flex;
-
     border-bottom:1px solid #263445;
 }
 
 .track-label{
     width:var(--label);
     min-width:var(--label);
-
     flex:none;
-
     display:flex;
     align-items:center;
-
     gap:5px;
-
     padding:0 8px;
-
     background:#111b27;
-
     border-right:1px solid var(--line);
-
     font-size:12px;
-
     position:sticky;
     left:0;
-
     z-index:20;
 }
 
 .type-dot{
     width:8px;
     height:8px;
-
     border-radius:50%;
-
     flex:none;
 }
 
 .track-lane{
     position:relative;
-
     flex:1;
-
     min-width:0;
 }
 
 .track-grid{
     position:absolute;
-
     inset:0;
-
     pointer-events:none;
 }
 
 .element-bar{
     position:absolute;
-
     top:9px;
-
     height:38px;
-
     min-width:12px;
-
     border:1px solid currentColor;
-
     border-radius:5px;
-
     display:flex;
     align-items:center;
-
     overflow:visible;
-
     cursor:grab;
-
     user-select:none;
-
     touch-action:none;
-
     z-index:5;
 }
 
@@ -738,191 +761,131 @@ button:disabled{
 }
 
 .element-bar.selected{
-    box-shadow:
-        0 0 0 2px #60a5fa;
+    box-shadow:0 0 0 2px #60a5fa;
 }
 
 .element-bar.multi-selected{
-    box-shadow:
-        0 0 0 2px #fbbf24;
+    box-shadow:0 0 0 2px #fbbf24;
 }
 
 .bar-label{
     padding:0 8px;
-
     overflow:hidden;
-
     text-overflow:ellipsis;
-
     white-space:nowrap;
-
     font-size:11px;
-
     pointer-events:none;
 }
 
 .element-bar .handle{
     position:absolute;
-
     top:0;
-
     width:10px;
-
     height:100%;
-
     z-index:8;
 }
 
 .element-bar .handle.left{
     left:-5px;
-
     cursor:ew-resize;
 }
 
 .element-bar .handle.right{
     right:-5px;
-
     cursor:ew-resize;
 }
 
 .playhead{
     position:absolute;
-
     top:34px;
     bottom:0;
-
     width:2px;
-
     z-index:50;
-
     pointer-events:none;
-
     background:var(--red);
-
-    box-shadow:
-        0 0 4px #ef444499;
+    box-shadow:0 0 4px #ef444499;
 }
 
 .playhead::before{
     content:"";
-
     position:absolute;
-
     top:-1px;
     left:-5px;
-
     width:12px;
     height:12px;
-
     background:var(--red);
-
-    clip-path:
-        polygon(
-            0 0,
-            100% 0,
-            50% 100%
-        );
+    clip-path:polygon(0 0,100% 0,50% 100%);
 }
 
 .playhead-label{
     position:absolute;
-
     top:12px;
     left:5px;
-
     padding:2px 4px;
-
     background:var(--red);
-
     color:#fff;
-
     font-size:10px;
-
     white-space:nowrap;
-
     border-radius:3px;
 }
 
-
-/* ========================================
+/* ------------------------------
    モーダル
-======================================== */
+------------------------------ */
 
 .modal-backdrop{
     position:fixed;
-
     inset:0;
-
     z-index:3000;
-
     display:none;
-
     align-items:center;
     justify-content:center;
-
     padding:20px;
-
     background:#000a;
 }
 
 .modal{
     width:min(520px,100%);
-
     background:#182231;
-
     border:1px solid #475569;
-
     border-radius:8px;
-
     overflow:hidden;
 }
 
 .modal-head,
 .modal-foot{
     padding:12px 15px;
-
     border-color:var(--line);
 }
 
 .modal-head{
     display:flex;
-
     justify-content:space-between;
-
     border-bottom:1px solid var(--line);
 }
 
 .modal-body{
     padding:15px;
-
     display:grid;
-
     gap:12px;
-
     max-height:75vh;
-
     overflow:auto;
 }
 
 .modal-foot{
     display:flex;
-
     justify-content:flex-end;
-
     gap:8px;
-
     border-top:1px solid var(--line);
 }
 
 .field{
     display:grid;
-
     gap:5px;
 }
 
 .field label{
     font-size:12px;
-
     color:var(--muted);
 }
 
@@ -930,89 +893,59 @@ button:disabled{
 .field select,
 .field textarea{
     width:100%;
-
     padding:7px;
-
     background:#0f1722;
-
     color:var(--text);
-
     border:1px solid #40516a;
-
     border-radius:5px;
 }
 
 .field textarea{
     min-height:80px;
-
     resize:vertical;
 }
 
 .color-grid{
     display:grid;
-
-    grid-template-columns:
-        repeat(6,1fr);
-
+    grid-template-columns:repeat(6,1fr);
     gap:6px;
 }
 
 .color-choice{
     height:28px;
-
     border:2px solid transparent;
-
     border-radius:4px;
 }
 
 .color-choice.active{
     border-color:#fff;
-
-    box-shadow:
-        0 0 0 1px #60a5fa;
+    box-shadow:0 0 0 1px #60a5fa;
 }
 
-
-/* ========================================
-   コンテキストメニュー
-======================================== */
+/* ------------------------------
+   右クリックメニュー
+------------------------------ */
 
 .context-menu{
     position:fixed;
-
     display:none;
-
-    z-index:2000;
-
+    z-index:4000;
     min-width:210px;
-
     padding:5px;
-
     background:#172235;
-
     border:1px solid #475569;
-
     border-radius:6px;
-
-    box-shadow:
-        0 12px 30px #0006;
+    box-shadow:0 12px 30px #0006;
 }
 
 .context-menu button{
     display:block;
-
     width:100%;
-
     padding:8px;
-
     border:0;
-
     background:transparent;
-
     color:var(--text);
-
     text-align:left;
-
     border-radius:4px;
 }
 
@@ -1020,81 +953,87 @@ button:disabled{
     background:#293a52;
 }
 
-
-/* ========================================
+/* ------------------------------
    保存データ
-======================================== */
+------------------------------ */
 
 .storage-item{
     display:flex;
-
     align-items:center;
-
     gap:8px;
-
     padding:10px;
-
     border-bottom:1px solid #334155;
 }
 
 .storage-item .info{
     min-width:0;
-
     flex:1;
 }
 
 .storage-item .name{
     font-weight:600;
-
     overflow:hidden;
-
     text-overflow:ellipsis;
-
     white-space:nowrap;
 }
 
 .storage-item .meta{
     font-size:11px;
-
     color:#64748b;
 }
 
-
-/* ========================================
-   通知
-======================================== */
+/* ------------------------------
+   Toast
+------------------------------ */
 
 .toast{
     position:fixed;
-
-    right:15px;
+    right:285px;
     bottom:15px;
-
     z-index:5000;
-
     display:none;
-
     padding:10px 14px;
-
     background:#1e293b;
-
     border:1px solid #475569;
-
     border-radius:6px;
-
-    box-shadow:
-        0 10px 30px #0006;
+    box-shadow:0 10px 30px #0006;
 }
 
+/* ------------------------------
+   レスポンシブ
+------------------------------ */
 
-@media(max-width:800px){
-
+@media(max-width:1000px){
     :root{
+        --right-menu:230px;
         --label:95px;
     }
 
     .brand{
         display:none;
+    }
+
+    .toast{
+        right:245px;
+    }
+}
+
+@media(max-width:700px){
+    :root{
+        --right-menu:205px;
+        --label:85px;
+    }
+
+    .topbar{
+        overflow-x:auto;
+    }
+
+    .right-menu{
+        width:var(--right-menu);
+    }
+
+    .toast{
+        right:220px;
     }
 
     .timeline-panel{
@@ -1192,13 +1131,22 @@ button:disabled{
             playsinline
         ></video>
 
-        <!--
-         * 動画上の要素・接続線を表示する領域
-         -->
+
+        <!-- 動画上の接続線 -->
+
+        <svg
+            class="video-connections"
+            id="videoConnections"
+        ></svg>
+
+
+        <!-- 動画上の要素 -->
+
         <div
             class="video-overlay"
             id="videoOverlay"
         ></div>
+
 
         <div
             class="empty-video"
@@ -1218,109 +1166,628 @@ button:disabled{
 
 <section class="timeline-panel">
 
-<div class="timeline-toolbar">
+    <div class="timeline-toolbar">
 
-    <button
-        class="btn small"
-        id="playBtn"
-        disabled
-    >
-        ▶
-    </button>
-
-    <button
-        class="btn small"
-        id="stopBtn"
-        disabled
-    >
-        ■
-    </button>
-
-    <span
-        class="time-readout"
-        id="timeReadout"
-    >
-        00:00.000 / 00:00.000
-    </span>
-
-    <span
-        class="selection-hint"
-        id="selectionHint"
-    ></span>
-
-    <div class="zoom-control">
-
-        <span>
-            時間スケール
-        </span>
-
-        <input
-            id="zoomRange"
-            type="range"
-            min="1"
-            max="5"
-            step=".1"
-            value="1"
+        <button
+            class="btn small"
+            id="playBtn"
+            disabled
         >
+            ▶
+        </button>
 
-        <span id="zoomValue">
-            1.0×
+        <button
+            class="btn small"
+            id="stopBtn"
+            disabled
+        >
+            ■
+        </button>
+
+        <span
+            class="time-readout"
+            id="timeReadout"
+        >
+            00:00.000 / 00:00.000
         </span>
 
-    </div>
+        <span
+            class="selection-hint"
+            id="selectionHint"
+        ></span>
 
-</div>
+        <div class="zoom-control">
 
+            <span>
+                時間スケール
+            </span>
 
-<div
-    class="timeline-scroll"
-    id="timelineScroll"
->
+            <input
+                id="zoomRange"
+                type="range"
+                min="1"
+                max="5"
+                step=".1"
+                value="1"
+            >
 
-<div
-    class="timeline-content"
-    id="timelineContent"
->
+            <span id="zoomValue">
+                1.0×
+            </span>
 
-    <div class="axis-row">
-
-        <div class="axis-label">
-            時間
         </div>
 
-        <div
-            class="axis-track"
-            id="axisTrack"
-        ></div>
-
     </div>
 
-    <div id="tracksContainer"></div>
 
     <div
-        class="playhead"
-        id="playhead"
+        class="timeline-scroll"
+        id="timelineScroll"
     >
-        <span
-            class="playhead-label"
-            id="playheadLabel"
+
+        <div
+            class="timeline-content"
+            id="timelineContent"
         >
-            00:00.000
-        </span>
+
+            <div class="axis-row">
+
+                <div class="axis-label">
+                    時間
+                </div>
+
+                <div
+                    class="axis-track"
+                    id="axisTrack"
+                ></div>
+
+            </div>
+
+            <div id="tracksContainer"></div>
+
+            <div
+                class="playhead"
+                id="playhead"
+            >
+                <span
+                    class="playhead-label"
+                    id="playheadLabel"
+                >
+                    00:00.000
+                </span>
+            </div>
+
+        </div>
+
     </div>
-
-</div>
-
-</div>
 
 </section>
 
 </main>
 
-</div>
+
+<!-- ======================================
+     右メニュー
+======================================= -->
+
+<aside
+    class="right-menu"
+    id="rightMenu"
+>
+
+    <div class="right-menu-header">
+
+        <div>
+
+            <div
+                class="right-menu-title"
+                id="rightMenuTitle"
+            >
+                プロパティ
+            </div>
+
+            <div
+                class="right-menu-type"
+                id="rightMenuType"
+            >
+                未選択
+            </div>
+
+        </div>
+
+    </div>
 
 
-<!-- コンテキストメニュー -->
+    <div
+        class="right-menu-body"
+        id="rightMenuBody"
+    >
+
+        <div
+            class="right-menu-empty"
+            id="rightMenuEmpty"
+        >
+            動画上またはタイムライン上の<br>
+            要素を選択してください。
+        </div>
+
+
+        <!-- 要素メニュー -->
+
+        <div
+            id="elementProperties"
+            class="hidden"
+        >
+
+            <div class="property-group">
+
+                <div class="property-title">
+                    基本設定
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        名前
+                    </label>
+
+                    <input
+                        id="sideElementName"
+                        type="text"
+                    >
+
+                </div>
+
+                <div
+                    class="property-row"
+                    id="sideTextRow"
+                >
+
+                    <label>
+                        テキスト
+                    </label>
+
+                    <input
+                        id="sideElementText"
+                        type="text"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <!-- 強調枠専用 -->
+
+            <div
+                class="property-group hidden"
+                id="shapeGroup"
+            >
+
+                <div class="property-title">
+                    強調枠の形
+                </div>
+
+                <div
+                    class="shape-grid"
+                    id="shapeGrid"
+                >
+
+                    <button
+                        class="shape-button"
+                        data-shape="rectangle"
+                    >
+                        □ 四角
+                    </button>
+
+                    <button
+                        class="shape-button"
+                        data-shape="rounded"
+                    >
+                        ▢ 角丸
+                    </button>
+
+                    <button
+                        class="shape-button"
+                        data-shape="ellipse"
+                    >
+                        ○ 円形
+                    </button>
+
+                    <button
+                        class="shape-button"
+                        data-shape="pill"
+                    >
+                        ▭ カプセル
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <div class="property-group">
+
+                <div class="property-title">
+                    動画上の位置・サイズ
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        X
+                    </label>
+
+                    <input
+                        id="sideX"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step=".1"
+                    >
+
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        Y
+                    </label>
+
+                    <input
+                        id="sideY"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step=".1"
+                    >
+
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        幅
+                    </label>
+
+                    <input
+                        id="sideW"
+                        type="number"
+                        min="1"
+                        max="100"
+                        step=".1"
+                    >
+
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        高さ
+                    </label>
+
+                    <input
+                        id="sideH"
+                        type="number"
+                        min="1"
+                        max="100"
+                        step=".1"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div class="property-group">
+
+                <div class="property-title">
+                    表示時間
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        開始
+                    </label>
+
+                    <input
+                        id="sideStart"
+                        type="number"
+                        min="0"
+                        step=".001"
+                    >
+
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        終了
+                    </label>
+
+                    <input
+                        id="sideEnd"
+                        type="number"
+                        min="0"
+                        step=".001"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div
+                class="property-group"
+                id="sideTextStyleGroup"
+            >
+
+                <div class="property-title">
+                    文字設定
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        サイズ
+                    </label>
+
+                    <input
+                        id="sideFontSize"
+                        type="number"
+                        min="8"
+                        max="100"
+                    >
+
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        太さ
+                    </label>
+
+                    <select id="sideFontWeight">
+
+                        <option value="400">
+                            標準
+                        </option>
+
+                        <option value="700">
+                            太字
+                        </option>
+
+                        <option value="900">
+                            極太
+                        </option>
+
+                    </select>
+
+                </div>
+
+            </div>
+
+
+            <div class="property-group">
+
+                <div class="property-title">
+                    色
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        色
+                    </label>
+
+                    <input
+                        id="sideColor"
+                        type="color"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div class="property-buttons">
+
+                <button
+                    class="btn"
+                    id="sideEditDetail"
+                >
+                    詳細編集
+                </button>
+
+                <button
+                    class="btn danger"
+                    id="sideDeleteElement"
+                >
+                    削除
+                </button>
+
+            </div>
+
+        </div>
+
+
+        <!-- 接続線メニュー -->
+
+        <div
+            id="connectionProperties"
+            class="hidden"
+        >
+
+            <div class="property-group">
+
+                <div class="property-title">
+                    接続線
+                </div>
+
+                <div class="line-preview">
+                    <span id="linePreview"></span>
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        線種
+                    </label>
+
+                    <select id="connectionStyle">
+
+                        <option value="solid">
+                            実線
+                        </option>
+
+                        <option value="dashed">
+                            破線
+                        </option>
+
+                        <option value="dotted">
+                            点線
+                        </option>
+
+                    </select>
+
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        太さ
+                    </label>
+
+                    <input
+                        id="connectionWidth"
+                        type="number"
+                        min="1"
+                        max="12"
+                        step="1"
+                    >
+
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        色
+                    </label>
+
+                    <input
+                        id="connectionColor"
+                        type="color"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div class="property-group">
+
+                <div class="property-title">
+                    接続元
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        位置
+                    </label>
+
+                    <select id="connectionFromAnchor">
+
+                        <option value="top">
+                            上
+                        </option>
+
+                        <option value="right">
+                            右
+                        </option>
+
+                        <option value="bottom">
+                            下
+                        </option>
+
+                        <option value="left">
+                            左
+                        </option>
+
+                    </select>
+
+                </div>
+
+            </div>
+
+
+            <div class="property-group">
+
+                <div class="property-title">
+                    接続先
+                </div>
+
+                <div class="property-row">
+
+                    <label>
+                        位置
+                    </label>
+
+                    <select id="connectionToAnchor">
+
+                        <option value="top">
+                            上
+                        </option>
+
+                        <option value="right">
+                            右
+                        </option>
+
+                        <option value="bottom">
+                            下
+                        </option>
+
+                        <option value="left">
+                            左
+                        </option>
+
+                    </select>
+
+                </div>
+
+            </div>
+
+
+            <div class="endpoint-help">
+                動画上の接続線を選択すると、線の両端にハンドルが表示されます。<br>
+                ハンドルをドラッグすると、接続位置を直接変更できます。
+            </div>
+
+
+            <div
+                style="height:8px"
+            ></div>
+
+
+            <button
+                class="btn danger"
+                id="sideDeleteConnection"
+                style="width:100%"
+            >
+                接続を削除
+            </button>
+
+        </div>
+
+    </div>
+
+</aside>
+
+
+<!-- ======================================
+     右クリックメニュー
+======================================= -->
 
 <div
     class="context-menu"
@@ -1358,266 +1825,366 @@ button:disabled{
 </div>
 
 
-<!-- 要素編集 -->
+<!-- ======================================
+     要素編集モーダル
+======================================= -->
 
 <div
     class="modal-backdrop"
     id="elementModal"
 >
 
-<div class="modal">
+    <div class="modal">
 
-    <div class="modal-head">
+        <div class="modal-head">
 
-        <strong>
-            要素を編集
-        </strong>
+            <strong>
+                要素を編集
+            </strong>
 
-        <button
-            class="btn small"
-            id="elementModalClose"
-        >
-            閉じる
-        </button>
-
-    </div>
-
-    <div class="modal-body">
-
-        <div class="field">
-
-            <label>
-                要素名
-            </label>
-
-            <input
-                id="elementName"
+            <button
+                class="btn small"
+                id="elementModalClose"
             >
+                閉じる
+            </button>
 
         </div>
 
-        <div
-            class="field"
-            id="textField"
-        >
 
-            <label>
-                テキスト
-            </label>
+        <div class="modal-body">
 
-            <textarea
-                id="elementText"
-            ></textarea>
+            <div class="field">
 
-        </div>
+                <label>
+                    要素名
+                </label>
 
-        <div class="field">
+                <input id="elementName">
 
-            <label>
-                開始時間
-            </label>
+            </div>
 
-            <input
-                id="elementStart"
-                type="number"
-                min="0"
-                step=".001"
-            >
-
-        </div>
-
-        <div class="field">
-
-            <label>
-                終了時間
-            </label>
-
-            <input
-                id="elementEnd"
-                type="number"
-                min="0"
-                step=".001"
-            >
-
-        </div>
-
-        <div class="field">
-
-            <label>
-                横位置（%）
-            </label>
-
-            <input
-                id="elementX"
-                type="number"
-                min="0"
-                max="100"
-                step=".1"
-            >
-
-        </div>
-
-        <div class="field">
-
-            <label>
-                縦位置（%）
-            </label>
-
-            <input
-                id="elementY"
-                type="number"
-                min="0"
-                max="100"
-                step=".1"
-            >
-
-        </div>
-
-        <div class="field">
-
-            <label>
-                幅（%）
-            </label>
-
-            <input
-                id="elementW"
-                type="number"
-                min="1"
-                max="100"
-                step=".1"
-            >
-
-        </div>
-
-        <div class="field">
-
-            <label>
-                高さ（%）
-            </label>
-
-            <input
-                id="elementH"
-                type="number"
-                min="1"
-                max="100"
-                step=".1"
-            >
-
-        </div>
-
-        <div
-            class="field"
-            id="fontField"
-        >
-
-            <label>
-                文字サイズ
-            </label>
-
-            <input
-                id="elementFontSize"
-                type="number"
-                min="8"
-                max="100"
-            >
-
-        </div>
-
-        <div
-            class="field"
-            id="weightField"
-        >
-
-            <label>
-                文字太さ
-            </label>
-
-            <select id="elementFontWeight">
-
-                <option value="400">
-                    標準
-                </option>
-
-                <option value="700">
-                    太字
-                </option>
-
-                <option value="900">
-                    極太
-                </option>
-
-            </select>
-
-        </div>
-
-        <div class="field">
-
-            <label>
-                色
-            </label>
 
             <div
-                class="color-grid"
-                id="colorGrid"
-            ></div>
+                class="field"
+                id="textField"
+            >
+
+                <label>
+                    テキスト
+                </label>
+
+                <textarea id="elementText"></textarea>
+
+            </div>
+
+
+            <div class="field">
+
+                <label>
+                    開始時間
+                </label>
+
+                <input
+                    id="elementStart"
+                    type="number"
+                    min="0"
+                    step=".001"
+                >
+
+            </div>
+
+
+            <div class="field">
+
+                <label>
+                    終了時間
+                </label>
+
+                <input
+                    id="elementEnd"
+                    type="number"
+                    min="0"
+                    step=".001"
+                >
+
+            </div>
+
+
+            <div class="field">
+
+                <label>
+                    横位置（%）
+                </label>
+
+                <input
+                    id="elementX"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step=".1"
+                >
+
+            </div>
+
+
+            <div class="field">
+
+                <label>
+                    縦位置（%）
+                </label>
+
+                <input
+                    id="elementY"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step=".1"
+                >
+
+            </div>
+
+
+            <div class="field">
+
+                <label>
+                    幅（%）
+                </label>
+
+                <input
+                    id="elementW"
+                    type="number"
+                    min="1"
+                    max="100"
+                    step=".1"
+                >
+
+            </div>
+
+
+            <div class="field">
+
+                <label>
+                    高さ（%）
+                </label>
+
+                <input
+                    id="elementH"
+                    type="number"
+                    min="1"
+                    max="100"
+                    step=".1"
+                >
+
+            </div>
+
+
+            <div
+                class="field"
+                id="fontField"
+            >
+
+                <label>
+                    文字サイズ
+                </label>
+
+                <input
+                    id="elementFontSize"
+                    type="number"
+                    min="8"
+                    max="100"
+                >
+
+            </div>
+
+
+            <div
+                class="field"
+                id="weightField"
+            >
+
+                <label>
+                    文字太さ
+                </label>
+
+                <select id="elementFontWeight">
+
+                    <option value="400">
+                        標準
+                    </option>
+
+                    <option value="700">
+                        太字
+                    </option>
+
+                    <option value="900">
+                        極太
+                    </option>
+
+                </select>
+
+            </div>
+
+
+            <div
+                class="field"
+                id="modalShapeField"
+            >
+
+                <label>
+                    強調枠の形
+                </label>
+
+                <select id="elementShape">
+
+                    <option value="rectangle">
+                        四角
+                    </option>
+
+                    <option value="rounded">
+                        角丸
+                    </option>
+
+                    <option value="ellipse">
+                        円形
+                    </option>
+
+                    <option value="pill">
+                        カプセル
+                    </option>
+
+                </select>
+
+            </div>
+
+
+            <div class="field">
+
+                <label>
+                    色
+                </label>
+
+                <div
+                    class="color-grid"
+                    id="colorGrid"
+                ></div>
+
+            </div>
+
+        </div>
+
+
+        <div class="modal-foot">
+
+            <button
+                class="btn"
+                id="elementModalCancel"
+            >
+                キャンセル
+            </button>
+
+            <button
+                class="btn primary"
+                id="elementModalSave"
+            >
+                保存
+            </button>
 
         </div>
 
     </div>
 
-    <div class="modal-foot">
-
-        <button
-            class="btn"
-            id="elementModalCancel"
-        >
-            キャンセル
-        </button>
-
-        <button
-            class="btn primary"
-            id="elementModalSave"
-        >
-            保存
-        </button>
-
-    </div>
-
-</div>
-
 </div>
 
 
-<!-- 保存データ -->
+<!-- ======================================
+     保存データ
+======================================= -->
 
 <div
     class="modal-backdrop"
     id="storageModal"
 >
 
-<div class="modal">
+    <div class="modal">
 
-    <div class="modal-head">
+        <div class="modal-head">
 
-        <strong>
-            保存データ
-        </strong>
+            <strong>
+                保存データ
+            </strong>
 
-        <button
-            class="btn small"
-            id="storageClose"
-        >
-            閉じる
-        </button>
+            <button
+                class="btn small"
+                id="storageClose"
+            >
+                閉じる
+            </button>
+
+        </div>
+
+        <div
+            class="modal-body"
+            id="storageList"
+        ></div>
 
     </div>
 
-    <div
-        class="modal-body"
-        id="storageList"
-    ></div>
-
 </div>
+
+
+<!-- ======================================
+     プロジェクト名
+======================================= -->
+
+<div
+    class="modal-backdrop"
+    id="nameModal"
+>
+
+    <div class="modal">
+
+        <div class="modal-head">
+
+            <strong>
+                プロジェクト名
+            </strong>
+
+        </div>
+
+        <div class="modal-body">
+
+            <div class="field">
+
+                <label>
+                    名前
+                </label>
+
+                <input id="projectName">
+
+            </div>
+
+        </div>
+
+        <div class="modal-foot">
+
+            <button
+                class="btn"
+                id="nameCancel"
+            >
+                キャンセル
+            </button>
+
+            <button
+                class="btn primary"
+                id="nameOk"
+            >
+                作成
+            </button>
+
+        </div>
+
+    </div>
 
 </div>
 
@@ -1631,121 +2198,81 @@ button:disabled{
 <script>
 'use strict';
 
-const $ =
-    id => document.getElementById(id);
-
+const $ = id => document.getElementById(id);
 
 const els = {
 
-    video:
-        $('video'),
+    video: $('video'),
+    videoWrap: $('videoWrap'),
+    overlay: $('videoOverlay'),
+    videoConnections: $('videoConnections'),
+    empty: $('emptyVideo'),
 
-    videoWrap:
-        $('videoWrap'),
+    file: $('videoFile'),
+    open: $('openVideoBtn'),
+    newBtn: $('newProjectBtn'),
+    save: $('saveProjectBtn'),
+    load: $('loadProjectBtn'),
+    exportBtn: $('exportProjectBtn'),
+    import: $('importProjectInput'),
 
-    overlay:
-        $('videoOverlay'),
+    status: $('statusText'),
+    play: $('playBtn'),
+    stop: $('stopBtn'),
+    readout: $('timeReadout'),
+    hint: $('selectionHint'),
 
-    empty:
-        $('emptyVideo'),
+    zoom: $('zoomRange'),
+    zoomValue: $('zoomValue'),
+    scroll: $('timelineScroll'),
 
-    file:
-        $('videoFile'),
+    content: $('timelineContent'),
+    axis: $('axisTrack'),
+    tracks: $('tracksContainer'),
+    playhead: $('playhead'),
+    playheadLabel: $('playheadLabel'),
 
-    open:
-        $('openVideoBtn'),
+    menu: $('contextMenu'),
 
-    save:
-        $('saveProjectBtn'),
+    modal: $('elementModal'),
+    nameModal: $('nameModal'),
+    storageModal: $('storageModal'),
 
-    load:
-        $('loadProjectBtn'),
-
-    exportBtn:
-        $('exportProjectBtn'),
-
-    import:
-        $('importProjectInput'),
-
-    status:
-        $('statusText'),
-
-    play:
-        $('playBtn'),
-
-    stop:
-        $('stopBtn'),
-
-    readout:
-        $('timeReadout'),
-
-    hint:
-        $('selectionHint'),
-
-    zoom:
-        $('zoomRange'),
-
-    zoomValue:
-        $('zoomValue'),
-
-    scroll:
-        $('timelineScroll'),
-
-    content:
-        $('timelineContent'),
-
-    axis:
-        $('axisTrack'),
-
-    tracks:
-        $('tracksContainer'),
-
-    playhead:
-        $('playhead'),
-
-    playheadLabel:
-        $('playheadLabel'),
-
-    menu:
-        $('contextMenu'),
-
-    modal:
-        $('elementModal'),
-
-    storageModal:
-        $('storageModal')
+    rightMenuTitle: $('rightMenuTitle'),
+    rightMenuType: $('rightMenuType'),
+    rightMenuEmpty: $('rightMenuEmpty'),
+    elementProperties: $('elementProperties'),
+    connectionProperties: $('connectionProperties')
 };
 
 
 const state = {
 
-    project:null,
+    project: null,
 
-    duration:0,
+    duration: 0,
+    currentTime: 0,
 
-    currentTime:0,
+    videoUrl: '',
+    videoBlob: null,
 
-    videoUrl:'',
+    selectedIds: new Set(),
+    selectedConnectionId: null,
 
-    videoBlob:null,
+    contextElementId: null,
+    contextConnectionId: null,
 
-    selectedIds:new Set(),
+    drag: null,
 
-    selectedConnectionId:null,
+    connectionDrag: null,
 
-    contextElementId:null,
+    dirty: false,
 
-    contextConnectionId:null,
+    modalElementId: null,
 
-    pendingXY:null,
+    pendingXY: null,
 
-    drag:null,
-
-    dirty:false,
-
-    modalElementId:null,
-
-    colors:[
+    colors: [
         '#60a5fa',
         '#22c55e',
         '#f59e0b',
@@ -1762,84 +2289,67 @@ const state = {
 };
 
 
-/* ========================================
+/* ----------------------------------------
    共通
-======================================== */
+---------------------------------------- */
 
-function uid(prefix='id'){
+function uid(prefix = 'id') {
 
     return (
         prefix +
         '-' +
         Date.now().toString(36) +
         '-' +
-        Math.random()
-            .toString(36)
-            .slice(2,8)
+        Math.random().toString(36).slice(2, 8)
     );
 }
 
 
-function clamp(value,min,max){
+function clamp(value, min, max) {
 
     return Math.max(
         min,
-        Math.min(max,value)
+        Math.min(max, value)
     );
 }
 
 
-function time(value){
+function time(value) {
 
-    value =
-        Math.max(
-            0,
-            Number(value) || 0
-        );
+    value = Math.max(
+        0,
+        Number(value) || 0
+    );
 
     return (
-        String(
-            Math.floor(value / 60)
-        ).padStart(2,'0') +
+        String(Math.floor(value / 60)).padStart(2, '0') +
         ':' +
-        String(
-            Math.floor(value % 60)
-        ).padStart(2,'0') +
+        String(Math.floor(value % 60)).padStart(2, '0') +
         '.' +
         String(
-            Math.floor(
-                (value % 1) * 1000
-            )
-        ).padStart(3,'0')
+            Math.floor((value % 1) * 1000)
+        ).padStart(3, '0')
     );
 }
 
 
-function shortTime(value){
+function shortTime(value) {
 
     return value < 60
-
-        ? value.toFixed(
-            value % 1 ? 1 : 0
-        ) + 's'
-
-        : String(
-            Math.floor(value / 60)
-        ).padStart(2,'0') +
-        ':' +
-        String(
-            Math.floor(value % 60)
-        ).padStart(2,'0');
+        ? value.toFixed(value % 1 ? 1 : 0) + 's'
+        : String(Math.floor(value / 60)).padStart(2, '0') +
+          ':' +
+          String(Math.floor(value % 60)).padStart(2, '0');
 }
 
 
-function elementColor(type){
+function color(type) {
 
-    if(type === 'text'){
+    if (type === 'text') {
         return '#60a5fa';
     }
 
-    if(type === 'box'){
+    if (type === 'box') {
         return '#22c55e';
     }
 
@@ -1847,128 +2357,107 @@ function elementColor(type){
 }
 
 
-function rgba(hex,alpha){
+function rgba(hex, alpha) {
 
-    const n =
-        parseInt(
-            hex.slice(1),
-            16
-        );
+    const n = parseInt(
+        String(hex).replace('#', ''),
+        16
+    );
 
     return (
-        `rgba(` +
-        `${n >> 16},` +
-        `${(n >> 8) & 255},` +
-        `${n & 255},` +
-        `${alpha})`
+        'rgba(' +
+        ((n >> 16) & 255) +
+        ',' +
+        ((n >> 8) & 255) +
+        ',' +
+        (n & 255) +
+        ',' +
+        alpha +
+        ')'
     );
 }
 
 
-function toast(
-    message,
-    error=false
-){
+function toast(message, error = false) {
 
-    els.status.textContent =
-        message;
+    els.status.textContent = message;
 
-    const t =
-        $('toast');
+    const box = $('toast');
 
-    t.textContent =
-        message;
+    box.textContent = message;
 
-    t.style.display =
-        'block';
+    box.style.display = 'block';
 
-    t.style.borderColor =
+    box.style.borderColor =
         error
             ? '#ef4444'
             : '#475569';
 
-    clearTimeout(
-        toast.timer
-    );
+    clearTimeout(toast.timer);
 
-    toast.timer =
-        setTimeout(
-            () => {
-                t.style.display =
-                    'none';
-            },
-            2200
-        );
+    toast.timer = setTimeout(() => {
+
+        box.style.display = 'none';
+
+    }, 2200);
 }
 
 
-function setStatus(message){
+function setStatus(message) {
 
-    els.status.textContent =
-        message;
+    els.status.textContent = message;
 }
 
 
-function markDirty(){
+function markDirty() {
 
-    state.dirty =
-        true;
+    state.dirty = true;
 
-    setStatus(
-        '変更あり'
-    );
+    setStatus('変更あり');
 }
 
 
-function markClean(){
+function markClean() {
 
-    state.dirty =
-        false;
+    state.dirty = false;
 
     setStatus(
         state.project
-            ? `編集中：${state.project.name}`
+            ? '編集中：' + state.project.name
             : '動画を読み込んでください'
     );
 }
 
 
-function emptyProject(
-    name='新規プロジェクト'
-){
+function get(id) {
 
-    return {
-
-        version:5,
-
-        name,
-
-        duration:
-            state.duration,
-
-        videoName:
-            state.videoBlob?.name ||
-            'video',
-
-        elements:[],
-
-        connections:[]
-    };
-}
-
-
-function getElement(id){
+    if (!state.project) {
+        return null;
+    }
 
     return (
-        state.project?.elements.find(
-            e => e.id === id
-        ) ||
-        null
+        state.project.elements.find(
+            element => element.id === id
+        ) || null
     );
 }
 
 
-function canEdit(){
+function getConnection(id) {
+
+    if (!state.project) {
+        return null;
+    }
+
+    return (
+        state.project.connections.find(
+            connection => connection.id === id
+        ) || null
+    );
+}
+
+
+function canEdit() {
 
     return (
         !!state.project &&
@@ -1977,195 +2466,189 @@ function canEdit(){
 }
 
 
-function visible(element){
+function visible(element) {
 
     return (
-        state.currentTime >=
-            element.start &&
-        state.currentTime <
-            element.end
+        state.currentTime >= element.start &&
+        state.currentTime < element.end
     );
 }
 
 
-/* ========================================
+/* ----------------------------------------
    プロジェクト
-======================================== */
+---------------------------------------- */
 
-function normalizeProject(project){
+function emptyProject(
+    name = '新規プロジェクト'
+) {
 
-    if(
+    return {
+
+        version: 6,
+
+        name,
+
+        duration: state.duration,
+
+        videoName:
+            state.videoBlob?.name || 'video',
+
+        elements: [],
+
+        connections: []
+    };
+}
+
+
+function normalizeProject(project) {
+
+    if (
         !project ||
         typeof project !== 'object'
-    ){
-
-        throw Error(
+    ) {
+        throw new Error(
             'プロジェクト形式が不正です'
         );
     }
 
-
-    project.version =
-        5;
+    project.version = 6;
 
     project.name =
         String(
-            project.name ||
-            'プロジェクト'
+            project.name || 'プロジェクト'
         );
 
     project.duration =
         Number(project.duration) ||
         state.duration;
 
-
     project.elements =
-        Array.isArray(
-            project.elements
-        )
+        Array.isArray(project.elements)
             ? project.elements
             : [];
 
-
     project.connections =
-        Array.isArray(
-            project.connections
-        )
+        Array.isArray(project.connections)
             ? project.connections
             : [];
 
 
     project.elements =
-        project.elements.map(
-            element => {
+        project.elements.map(element => ({
 
-                const type =
-                    [
-                        'text',
-                        'box',
-                        'skip'
-                    ].includes(
-                        element.type
-                    )
-                        ? element.type
-                        : 'text';
+            id:
+                String(
+                    element.id ||
+                    uid('el')
+                ),
+
+            type:
+                ['text', 'box', 'skip'].includes(
+                    element.type
+                )
+                    ? element.type
+                    : 'text',
+
+            name:
+                String(
+                    element.name || '要素'
+                ),
+
+            text:
+                String(
+                    element.text || ''
+                ),
+
+            start:
+                clamp(
+                    Number(element.start) || 0,
+                    0,
+                    project.duration
+                ),
+
+            end:
+                clamp(
+                    Number(element.end) ||
+                    Math.min(
+                        project.duration,
+                        (Number(element.start) || 0) + 2
+                    ),
+                    .05,
+                    project.duration
+                ),
+
+            x:
+                clamp(
+                    Number(element.x) || 10,
+                    0,
+                    99
+                ),
+
+            y:
+                clamp(
+                    Number(element.y) || 10,
+                    0,
+                    99
+                ),
+
+            w:
+                clamp(
+                    Number(element.w) || 30,
+                    1,
+                    100
+                ),
+
+            h:
+                clamp(
+                    Number(element.h) || 15,
+                    1,
+                    100
+                ),
+
+            color:
+                element.color ||
+                color(element.type),
+
+            fontSize:
+                Number(element.fontSize) ||
+                28,
+
+            fontWeight:
+                String(
+                    element.fontWeight || '700'
+                ),
+
+            shape:
+                ['rectangle','rounded','ellipse','pill'].includes(
+                    element.shape
+                )
+                    ? element.shape
+                    : 'rectangle'
+
+        }));
 
 
-                const start =
-                    clamp(
-                        Number(
-                            element.start
-                        ) || 0,
-                        0,
-                        project.duration
-                    );
+    project.elements.forEach(element => {
 
+        if (
+            element.end <=
+            element.start
+        ) {
+            element.end =
+                Math.min(
+                    project.duration,
+                    element.start + .05
+                );
+        }
 
-                const end =
-                    clamp(
-                        Number(
-                            element.end
-                        ) ||
-                        Math.min(
-                            project.duration,
-                            start + 2
-                        ),
-                        .05,
-                        project.duration
-                    );
-
-
-                return {
-
-                    id:
-                        String(
-                            element.id ||
-                            uid('el')
-                        ),
-
-                    type,
-
-                    name:
-                        String(
-                            element.name ||
-                            '要素'
-                        ),
-
-                    text:
-                        String(
-                            element.text ||
-                            ''
-                        ),
-
-                    start,
-
-                    end:
-                        end <= start
-                            ? Math.min(
-                                project.duration,
-                                start + .05
-                            )
-                            : end,
-
-                    x:
-                        clamp(
-                            Number(
-                                element.x
-                            ) || 10,
-                            0,
-                            99
-                        ),
-
-                    y:
-                        clamp(
-                            Number(
-                                element.y
-                            ) || 10,
-                            0,
-                            99
-                        ),
-
-                    w:
-                        clamp(
-                            Number(
-                                element.w
-                            ) || 30,
-                            1,
-                            100
-                        ),
-
-                    h:
-                        clamp(
-                            Number(
-                                element.h
-                            ) || 15,
-                            1,
-                            100
-                        ),
-
-                    color:
-                        element.color ||
-                        elementColor(type),
-
-                    fontSize:
-                        Number(
-                            element.fontSize
-                        ) || 28,
-
-                    fontWeight:
-                        String(
-                            element.fontWeight ||
-                            '700'
-                        )
-                };
-            }
-        );
+    });
 
 
     const ids =
         new Set(
             project.elements.map(
-                e => e.id
+                element => element.id
             )
         );
 
@@ -2173,55 +2656,67 @@ function normalizeProject(project){
     project.connections =
         project.connections
 
-            .filter(
-                connection =>
-                    connection &&
-                    connection.from !==
-                        connection.to &&
-                    ids.has(
-                        connection.from
-                    ) &&
-                    ids.has(
-                        connection.to
-                    )
+            .filter(connection =>
+                connection &&
+                connection.from !== connection.to &&
+                ids.has(connection.from) &&
+                ids.has(connection.to)
             )
 
-            .map(
-                connection => ({
+            .map(connection => ({
 
-                    id:
-                        String(
-                            connection.id ||
-                            uid('c')
-                        ),
+                id:
+                    String(
+                        connection.id ||
+                        uid('c')
+                    ),
 
-                    from:
-                        connection.from,
+                from:
+                    connection.from,
 
-                    to:
-                        connection.to,
+                to:
+                    connection.to,
 
-                    color:
-                        connection.color ||
-                        '#60a5fa',
+                color:
+                    connection.color ||
+                    '#fbbf24',
 
-                    width:
-                        Number(
-                            connection.width
-                        ) || 3
-                })
-            );
+                width:
+                    Number(connection.width) ||
+                    3,
+
+                style:
+                    ['solid','dashed','dotted'].includes(
+                        connection.style
+                    )
+                        ? connection.style
+                        : 'solid',
+
+                fromAnchor:
+                    ['top','right','bottom','left'].includes(
+                        connection.fromAnchor
+                    )
+                        ? connection.fromAnchor
+                        : 'right',
+
+                toAnchor:
+                    ['top','right','bottom','left'].includes(
+                        connection.toAnchor
+                    )
+                        ? connection.toAnchor
+                        : 'left'
+            }));
 
 
     return project;
 }
 
 
-/* ========================================
+/* ----------------------------------------
    全体描画
-======================================== */
+---------------------------------------- */
 
-function renderAll(){
+function renderAll() {
 
     renderTimeline();
 
@@ -2232,57 +2727,65 @@ function renderAll(){
     updatePlayhead();
 
     updateHint();
+
+    renderRightMenu();
 }
 
 
-/* ========================================
+/* ----------------------------------------
    タイムライン
-======================================== */
+---------------------------------------- */
 
-function timelineGeometry(){
+function timelineGeometry() {
 
     const rect =
         els.axis.getBoundingClientRect();
 
     return {
 
-        left:
-            rect.left,
+        left: rect.left,
 
-        width:
-            rect.width
+        width: rect.width
     };
 }
 
 
-function xToTime(clientX){
+function timeToX(value) {
 
     const geometry =
         timelineGeometry();
 
+    return (
+        geometry.left +
+        clamp(
+            value / state.duration,
+            0,
+            1
+        ) *
+        geometry.width
+    );
+}
 
-    if(
+
+function xToTime(clientX) {
+
+    const geometry =
+        timelineGeometry();
+
+    if (
         !geometry.width ||
         !state.duration
-    ){
-
+    ) {
         return 0;
     }
 
-
     return clamp(
-
         (
-            (
-                clientX -
-                geometry.left
-            ) /
+            (clientX - geometry.left) /
             geometry.width
         ) *
         state.duration,
-
         0,
-
         state.duration
     );
 }
@@ -2291,10 +2794,9 @@ function xToTime(clientX){
 function chooseStep(
     duration,
     width
-){
+) {
 
-    const target =
-        85;
+    const target = 85;
 
     const approx =
         duration /
@@ -2302,7 +2804,6 @@ function chooseStep(
             1,
             width / target
         );
-
 
     return [
         .1,
@@ -2319,25 +2820,21 @@ function chooseStep(
         300,
         600
     ].find(
-        x => x >= approx
+        value => value >= approx
     ) || 600;
 }
 
 
-function renderAxis(){
+function renderAxis() {
 
-    els.axis.innerHTML =
-        '';
+    els.axis.innerHTML = '';
 
-
-    if(!state.duration){
+    if (!state.duration) {
         return;
     }
 
-
     const width =
         els.axis.clientWidth;
-
 
     const step =
         chooseStep(
@@ -2346,134 +2843,107 @@ function renderAxis(){
         );
 
 
-    for(
-        let t = 0;
-        t <=
-            state.duration +
-            .0001;
-        t += step
-    ){
+    for (
+        let current = 0;
+        current <= state.duration + .0001;
+        current += step
+    ) {
 
         const tick =
-            document.createElement(
-                'div'
-            );
+            document.createElement('div');
 
-        tick.className =
-            'tick';
+        tick.className = 'tick';
 
         tick.style.left =
-            `${t / state.duration * 100}%`;
+            (
+                current /
+                state.duration *
+                100
+            ) + '%';
 
         tick.textContent =
-            shortTime(t);
+            shortTime(current);
 
-        els.axis.appendChild(
-            tick
-        );
+        els.axis.appendChild(tick);
     }
 }
 
 
-function renderTimeline(){
+function renderTimeline() {
 
-    els.tracks.innerHTML =
-        '';
-
+    els.tracks.innerHTML = '';
 
     const groups = [
 
-        ['text','テキスト'],
+        ['text', 'テキスト'],
 
-        ['box','強調枠'],
+        ['box', '強調枠'],
 
-        ['skip','スキップ']
+        ['skip', 'スキップ']
+
     ];
 
 
-    for(
-        const [type,label]
+    for (
+        const [type, label]
         of groups
-    ){
+    ) {
 
         const row =
-            document.createElement(
-                'div'
-            );
+            document.createElement('div');
 
         row.className =
             'track-row';
 
 
         const trackLabel =
-            document.createElement(
-                'div'
-            );
+            document.createElement('div');
 
         trackLabel.className =
             'track-label';
 
 
         const dot =
-            document.createElement(
-                'span'
-            );
+            document.createElement('span');
 
         dot.className =
             'type-dot';
 
         dot.style.background =
-            elementColor(type);
+            color(type);
 
 
         trackLabel.append(
             dot,
-            document.createTextNode(
-                label
-            )
+            document.createTextNode(label)
         );
 
 
         const lane =
-            document.createElement(
-                'div'
-            );
+            document.createElement('div');
 
         lane.className =
             'track-lane';
 
 
         const grid =
-            document.createElement(
-                'div'
-            );
+            document.createElement('div');
 
         grid.className =
             'track-grid';
 
         grid.style.backgroundImage =
-            'linear-gradient(' +
-            'to right,' +
-            'rgba(148,163,184,.09) 1px,' +
-            'transparent 1px' +
-            ')';
-
+            'linear-gradient(to right,rgba(148,163,184,.09) 1px,transparent 1px)';
 
         grid.style.backgroundSize =
-            `${Math.max(
-                10,
-                100 / state.duration
-            )}% 100%`;
+            `${Math.max(10,100 / state.duration)}% 100%`;
 
 
-        lane.appendChild(
-            grid
-        );
+        lane.appendChild(grid);
 
 
         (
-            state.project?.elements ||
-            []
+            state.project?.elements || []
         )
             .filter(
                 element =>
@@ -2482,9 +2952,7 @@ function renderTimeline(){
             .forEach(
                 element =>
                     lane.appendChild(
-                        createTimelineBar(
-                            element
-                        )
+                        createTimelineBar(element)
                     )
             );
 
@@ -2494,10 +2962,7 @@ function renderTimeline(){
             lane
         );
 
-
-        els.tracks.appendChild(
-            row
-        );
+        els.tracks.appendChild(row);
     }
 
 
@@ -2505,14 +2970,10 @@ function renderTimeline(){
 }
 
 
-function createTimelineBar(
-    element
-){
+function createTimelineBar(element) {
 
     const bar =
-        document.createElement(
-            'div'
-        );
+        document.createElement('div');
 
     bar.className =
         'element-bar';
@@ -2521,11 +2982,11 @@ function createTimelineBar(
         element.id;
 
 
-    if(
+    if (
         state.selectedIds.has(
             element.id
         )
-    ){
+    ) {
 
         bar.classList.add(
             state.selectedIds.size > 1
@@ -2536,28 +2997,29 @@ function createTimelineBar(
 
 
     bar.style.left =
-        `${
+        (
             element.start /
             state.duration *
             100
-        }%`;
+        ) + '%';
 
 
     bar.style.width =
-        `${Math.max(
+        Math.max(
             .001,
             (
-                element.end -
-                element.start
-            ) /
-            state.duration *
-            100
-        )}%`;
+                (
+                    element.end -
+                    element.start
+                ) /
+                state.duration *
+                100
+            )
+        ) + '%';
 
 
     bar.style.color =
         element.color;
-
 
     bar.style.background =
         rgba(
@@ -2567,23 +3029,21 @@ function createTimelineBar(
 
 
     const label =
-        document.createElement(
-            'span'
-        );
+        document.createElement('span');
 
     label.className =
         'bar-label';
 
     label.textContent =
-        `${element.name} ` +
-        `${time(element.start)} ～ ` +
-        `${time(element.end)}`;
+        element.name +
+        ' ' +
+        time(element.start) +
+        ' ～ ' +
+        time(element.end);
 
 
     const left =
-        document.createElement(
-            'span'
-        );
+        document.createElement('span');
 
     left.className =
         'handle left';
@@ -2593,9 +3053,7 @@ function createTimelineBar(
 
 
     const right =
-        document.createElement(
-            'span'
-        );
+        document.createElement('span');
 
     right.className =
         'handle right';
@@ -2671,20 +3129,19 @@ function createTimelineBar(
 }
 
 
-/* ========================================
-   選択・接続
-======================================== */
+/* ----------------------------------------
+   要素選択
+---------------------------------------- */
 
 function selectElement(
     id,
-    additive=false
-){
+    additive = false
+) {
 
     const element =
-        getElement(id);
+        get(id);
 
-
-    if(!element){
+    if (!element) {
         return;
     }
 
@@ -2693,84 +3150,60 @@ function selectElement(
         null;
 
 
-    if(!additive){
-
+    if (!additive) {
         state.selectedIds.clear();
     }
 
 
-    if(
+    if (
         additive &&
         state.selectedIds.has(id)
-    ){
+    ) {
 
-        state.selectedIds.delete(
-            id
-        );
+        state.selectedIds.delete(id);
 
-    }else{
+    } else {
 
-        state.selectedIds.add(
-            id
-        );
+        state.selectedIds.add(id);
     }
 
 
-    if(
+    if (
         state.selectedIds.size === 1 &&
         !additive
-    ){
+    ) {
 
-        seek(
-            element.start
-        );
+        seek(element.start);
     }
 
 
-    updateHint();
-
-    renderTimeline();
-
-    renderOverlay();
-
-    renderVideoConnections();
+    renderAll();
 
 
-    /*
-     * 2要素を選択したら接続する。
-     */
-    if(
+    if (
         state.selectedIds.size === 2
-    ){
+    ) {
 
         connectSelected();
     }
 }
 
 
-function connectSelected(){
-
-    if(
-        !state.project ||
-        state.selectedIds.size !== 2
-    ){
-
-        return;
-    }
-
+function connectSelected() {
 
     const ids =
         [...state.selectedIds];
 
-
-    const from =
-        ids[0];
-
-    const to =
-        ids[1];
+    if (ids.length !== 2) {
+        return;
+    }
 
 
-    const exists =
+    const [from, to] =
+        ids;
+
+
+    if (
         state.project.connections.some(
             connection =>
                 (
@@ -2781,10 +3214,8 @@ function connectSelected(){
                     connection.from === to &&
                     connection.to === from
                 )
-        );
-
-
-    if(exists){
+        )
+    ) {
 
         toast(
             'この2要素はすでに接続されています'
@@ -2792,10 +3223,6 @@ function connectSelected(){
 
         return;
     }
-
-
-    const source =
-        getElement(from);
 
 
     state.project.connections.push({
@@ -2808,16 +3235,25 @@ function connectSelected(){
         to,
 
         color:
-            source?.color ||
-            '#60a5fa',
+            '#fbbf24',
 
-        width:3
+        width:
+            3,
+
+        style:
+            'solid',
+
+        fromAnchor:
+            'right',
+
+        toAnchor:
+            'left'
     });
 
 
     markDirty();
 
-    renderVideoConnections();
+    renderAll();
 
     toast(
         '2要素を接続しました'
@@ -2825,172 +3261,31 @@ function connectSelected(){
 }
 
 
-function updateHint(){
-
-    els.hint.textContent =
-        state.selectedIds.size
-            ? `${state.selectedIds.size}要素選択中`
-            : '';
-}
-
-
-/* ========================================
+/* ----------------------------------------
    動画上の要素
-======================================== */
+---------------------------------------- */
 
-function getVideoRect(){
+function renderOverlay() {
 
-    const rect =
-        els.video.getBoundingClientRect();
+    els.overlay.innerHTML = '';
 
-
-    return {
-
-        left:
-            rect.left,
-
-        top:
-            rect.top,
-
-        width:
-            rect.width,
-
-        height:
-            rect.height
-    };
-}
-
-
-function elementPixelRect(
-    element
-){
-
-    const video =
-        getVideoRect();
-
-
-    return {
-
-        left:
-            video.left +
-            video.width *
-            element.x /
-            100,
-
-        top:
-            video.top +
-            video.height *
-            element.y /
-            100,
-
-        width:
-            video.width *
-            element.w /
-            100,
-
-        height:
-            video.height *
-            element.h /
-            100
-    };
-}
-
-
-function renderOverlay(){
-
-    els.overlay.innerHTML =
-        '';
-
-
-    if(!canEdit()){
+    if (!canEdit()) {
         return;
     }
 
 
-    /*
-     * SVGは要素より下、要素はその上に表示する。
-     */
-    const connectionSvg =
-        document.createElementNS(
-            'http://www.w3.org/2000/svg',
-            'svg'
-        );
-
-    connectionSvg.id =
-        'videoConnectionSvg';
-
-    connectionSvg.classList.add(
-        'video-connection-svg'
-    );
-
-    connectionSvg.style.pointerEvents =
-        'none';
-
-
-    els.overlay.appendChild(
-        connectionSvg
-    );
-
-
-    const videoRect =
-        getVideoRect();
-
-
-    if(
-        !videoRect.width ||
-        !videoRect.height
-    ){
-
-        return;
-    }
-
-
-    connectionSvg.style.left =
-        `${videoRect.left -
-          els.videoWrap.getBoundingClientRect().left}px`;
-
-
-    connectionSvg.style.top =
-        `${videoRect.top -
-          els.videoWrap.getBoundingClientRect().top}px`;
-
-
-    connectionSvg.setAttribute(
-        'width',
-        videoRect.width
-    );
-
-    connectionSvg.setAttribute(
-        'height',
-        videoRect.height
-    );
-
-    connectionSvg.setAttribute(
-        'viewBox',
-        `0 0 ${videoRect.width} ${videoRect.height}`
-    );
-
-
-    /*
-     * 要素を表示。
-     */
-    for(
+    for (
         const element
         of state.project.elements
-    ){
+    ) {
 
-        if(
-            !visible(element)
-        ){
-
+        if (!visible(element)) {
             continue;
         }
 
 
         const node =
-            document.createElement(
-                'div'
-            );
+            document.createElement('div');
 
         node.className =
             'overlay-element';
@@ -2999,11 +3294,11 @@ function renderOverlay(){
             element.id;
 
 
-        if(
+        if (
             state.selectedIds.has(
                 element.id
             )
-        ){
+        ) {
 
             node.classList.add(
                 state.selectedIds.size > 1
@@ -3014,53 +3309,27 @@ function renderOverlay(){
 
 
         node.style.left =
-            `${
-                videoRect.left -
-                els.videoWrap.getBoundingClientRect().left +
-                videoRect.width *
-                element.x /
-                100
-            }px`;
-
+            element.x + '%';
 
         node.style.top =
-            `${
-                videoRect.top -
-                els.videoWrap.getBoundingClientRect().top +
-                videoRect.height *
-                element.y /
-                100
-            }px`;
-
+            element.y + '%';
 
         node.style.width =
-            `${
-                videoRect.width *
-                element.w /
-                100
-            }px`;
-
+            element.w + '%';
 
         node.style.height =
-            `${
-                videoRect.height *
-                element.h /
-                100
-            }px`;
-
+            element.h + '%';
 
         node.style.color =
             element.color;
 
 
-        if(
+        if (
             element.type === 'text'
-        ){
+        ) {
 
             const text =
-                document.createElement(
-                    'div'
-                );
+                document.createElement('div');
 
             text.className =
                 'overlay-text';
@@ -3070,38 +3339,34 @@ function renderOverlay(){
                 element.name;
 
             text.style.fontSize =
-                element.fontSize +
-                'px';
+                element.fontSize + 'px';
 
             text.style.fontWeight =
                 element.fontWeight;
 
-            node.appendChild(
-                text
-            );
+            node.appendChild(text);
 
-        }else if(
+        } else if (
             element.type === 'box'
-        ){
+        ) {
 
             const box =
-                document.createElement(
-                    'div'
-                );
+                document.createElement('div');
 
             box.className =
                 'overlay-box';
 
-            node.appendChild(
-                box
+            applyShape(
+                box,
+                element.shape
             );
 
-        }else{
+            node.appendChild(box);
+
+        } else {
 
             const skip =
-                document.createElement(
-                    'div'
-                );
+                document.createElement('div');
 
             skip.className =
                 'overlay-skip';
@@ -3109,69 +3374,20 @@ function renderOverlay(){
             skip.textContent =
                 'スキップ';
 
-            node.appendChild(
-                skip
-            );
+            node.appendChild(skip);
         }
 
 
-        /*
-         * 8方向のリサイズハンドル。
-         */
-        [
-            'nw',
-            'n',
-            'ne',
-            'e',
-            'se',
-            's',
-            'sw',
-            'w'
-        ].forEach(
-            direction => {
-
-                const handle =
-                    document.createElement(
-                        'span'
-                    );
-
-                handle.className =
-                    `resize-handle ${direction}`;
-
-                handle.dataset.direction =
-                    direction;
-
-                node.appendChild(
-                    handle
-                );
-            }
-        );
+        addResizeHandles(node);
 
 
-        /*
-         * 動画上の位置変更・サイズ変更。
-         */
         node.addEventListener(
             'pointerdown',
-            event => {
-
-                if(
-                    event.button !== 0
-                ){
-
-                    return;
-                }
-
-
-                event.stopPropagation();
-
-                event.preventDefault();
-
-                startVideoElementDrag(
+            event =>
+                beginVideoElementDrag(
                     event,
                     element
-                );
-            }
+                )
         );
 
 
@@ -3181,15 +3397,10 @@ function renderOverlay(){
 
                 event.stopPropagation();
 
-                if(
-                    !state.drag
-                ){
-
-                    selectElement(
-                        element.id,
-                        event.shiftKey
-                    );
-                }
+                selectElement(
+                    element.id,
+                    event.shiftKey
+                );
             }
         );
 
@@ -3230,86 +3441,126 @@ function renderOverlay(){
         );
 
 
-        els.overlay.appendChild(
-            node
-        );
+        els.overlay.appendChild(node);
     }
-
-
-    /*
-     * 要素を描画した後に接続線を描画。
-     */
-    renderVideoConnections();
 }
 
 
-/* ========================================
-   動画上の要素ドラッグ
-======================================== */
+function addResizeHandles(node) {
 
-function startVideoElementDrag(
+    const positions = [
+        'nw',
+        'n',
+        'ne',
+        'e',
+        'se',
+        's',
+        'sw',
+        'w'
+    ];
+
+
+    positions.forEach(
+        position => {
+
+            const handle =
+                document.createElement('span');
+
+            handle.className =
+                'resize-handle resize-' +
+                position;
+
+            handle.dataset.resize =
+                position;
+
+            node.appendChild(handle);
+        }
+    );
+}
+
+
+function applyShape(
+    element,
+    shape
+) {
+
+    element.style.borderRadius =
+        '0';
+
+    element.style.clipPath =
+        'none';
+
+
+    if (shape === 'rounded') {
+
+        element.style.borderRadius =
+            '14px';
+
+    } else if (
+        shape === 'ellipse'
+    ) {
+
+        element.style.borderRadius =
+            '50%';
+
+    } else if (
+        shape === 'pill'
+    ) {
+
+        element.style.borderRadius =
+            '999px';
+    }
+}
+
+
+/* ----------------------------------------
+   動画上の要素ドラッグ
+---------------------------------------- */
+
+function beginVideoElementDrag(
     event,
     element
-){
+) {
 
-    const video =
-        getVideoRect();
+    event.stopPropagation();
+
+    event.preventDefault();
 
 
-    if(
-        !video.width ||
-        !video.height
-    ){
+    if (
+        event.target.closest(
+            '.resize-handle'
+        )
+    ) {
+
+        beginVideoResize(
+            event,
+            element
+        );
 
         return;
     }
 
 
-    const handle =
-        event.target.closest(
-            '.resize-handle'
-        );
-
-
-    /*
-     * 選択状態を更新。
-     */
-    if(
-        !state.selectedIds.has(
-            element.id
-        )
-    ){
-
-        selectElement(
-            element.id,
-            event.shiftKey
-        );
-    }
+    const rect =
+        els.videoWrap.getBoundingClientRect();
 
 
     state.drag = {
 
-        kind:'video-element',
+        type:
+            'video-move',
 
         id:
             element.id,
 
-        mode:
-            handle
-                ? 'resize'
-                : 'move',
-
-        direction:
-            handle?.dataset.direction ||
-            '',
-
-        startClientX:
+        startX:
             event.clientX,
 
-        startClientY:
+        startY:
             event.clientY,
 
-        original:{
+        original: {
 
             x:
                 element.x,
@@ -3324,23 +3575,28 @@ function startVideoElementDrag(
                 element.h
         },
 
-        videoWidth:
-            video.width,
+        width:
+            rect.width,
 
-        videoHeight:
-            video.height
+        height:
+            rect.height
     };
+
+
+    event.currentTarget.setPointerCapture?.(
+        event.pointerId
+    );
 
 
     window.addEventListener(
         'pointermove',
-        moveVideoElementDrag
+        moveVideoDrag
     );
 
 
     window.addEventListener(
         'pointerup',
-        endVideoElementDrag,
+        endVideoDrag,
         {
             once:true
         }
@@ -3348,31 +3604,91 @@ function startVideoElementDrag(
 }
 
 
-function moveVideoElementDrag(
-    event
-){
+function beginVideoResize(
+    event,
+    element
+) {
+
+    const rect =
+        els.videoWrap.getBoundingClientRect();
+
+
+    state.drag = {
+
+        type:
+            'video-resize',
+
+        id:
+            element.id,
+
+        direction:
+            event.target.dataset.resize,
+
+        startX:
+            event.clientX,
+
+        startY:
+            event.clientY,
+
+        original: {
+
+            x:
+                element.x,
+
+            y:
+                element.y,
+
+            w:
+                element.w,
+
+            h:
+                element.h
+        },
+
+        width:
+            rect.width,
+
+        height:
+            rect.height
+    };
+
+
+    event.currentTarget
+        .setPointerCapture?.(
+            event.pointerId
+        );
+
+
+    window.addEventListener(
+        'pointermove',
+        moveVideoDrag
+    );
+
+
+    window.addEventListener(
+        'pointerup',
+        endVideoDrag,
+        {
+            once:true
+        }
+    );
+}
+
+
+function moveVideoDrag(event) {
 
     const drag =
         state.drag;
 
-
-    if(
-        !drag ||
-        drag.kind !==
-            'video-element'
-    ){
-
+    if (!drag) {
         return;
     }
 
 
     const element =
-        getElement(
-            drag.id
-        );
+        get(drag.id);
 
-
-    if(!element){
+    if (!element) {
         return;
     }
 
@@ -3380,659 +3696,887 @@ function moveVideoElementDrag(
     const dx =
         (
             event.clientX -
-            drag.startClientX
-        );
+            drag.startX
+        ) /
+        drag.width *
+        100;
 
 
     const dy =
         (
             event.clientY -
-            drag.startClientY
-        );
-
-
-    const dxPercent =
-        dx /
-        drag.videoWidth *
+            drag.startY
+        ) /
+        drag.height *
         100;
 
 
-    const dyPercent =
-        dy /
-        drag.videoHeight *
-        100;
+    if (
+        drag.type ===
+        'video-move'
+    ) {
 
+        const maxX =
+            100 -
+            drag.original.w;
 
-    const original =
-        drag.original;
+        const maxY =
+            100 -
+            drag.original.h;
 
-
-    const minWidth =
-        2;
-
-
-    const minHeight =
-        2;
-
-
-    if(
-        drag.mode === 'move'
-    ){
 
         element.x =
             clamp(
-                original.x +
-                dxPercent,
+                drag.original.x + dx,
                 0,
-                100 -
-                original.w
+                maxX
             );
 
 
         element.y =
             clamp(
-                original.y +
-                dyPercent,
+                drag.original.y + dy,
                 0,
-                100 -
-                original.h
+                maxY
             );
 
-    }else{
+    } else {
 
         resizeVideoElement(
             element,
-            original,
-            drag.direction,
-            dxPercent,
-            dyPercent,
-            minWidth,
-            minHeight
+            drag,
+            dx,
+            dy
         );
     }
 
 
     markDirty();
 
-    /*
-     * 動画上の要素を再描画。
-     * これにより接続線も追従する。
-     */
     renderOverlay();
 
     renderVideoConnections();
+
+    renderRightMenu();
 }
 
 
 function resizeVideoElement(
     element,
-    original,
-    direction,
+    drag,
     dx,
-    dy,
-    minWidth,
-    minHeight
-){
+    dy
+) {
+
+    const direction =
+        drag.direction;
+
 
     let x =
-        original.x;
+        drag.original.x;
 
     let y =
-        original.y;
+        drag.original.y;
 
     let w =
-        original.w;
+        drag.original.w;
 
     let h =
-        original.h;
+        drag.original.h;
 
 
-    if(
-        direction.includes('w')
-    ){
+    if (
+        direction.includes('e')
+    ) {
 
-        const nextX =
+        w =
             clamp(
-                original.x +
-                dx,
-                0,
-                original.x +
-                original.w -
-                minWidth
+                drag.original.w + dx,
+                2,
+                100 - x
             );
+    }
+
+
+    if (
+        direction.includes('s')
+    ) {
+
+        h =
+            clamp(
+                drag.original.h + dy,
+                2,
+                100 - y
+            );
+    }
+
+
+    if (
+        direction.includes('w')
+    ) {
+
+        const right =
+            drag.original.x +
+            drag.original.w;
 
         x =
-            nextX;
-
-        w =
-            original.w -
-            (
-                nextX -
-                original.x
-            );
-    }
-
-
-    if(
-        direction.includes('e')
-    ){
-
-        w =
             clamp(
-                original.w +
-                dx,
-                minWidth,
-                100 -
-                original.x
-            );
-    }
-
-
-    if(
-        direction.includes('n')
-    ){
-
-        const nextY =
-            clamp(
-                original.y +
-                dy,
+                drag.original.x + dx,
                 0,
-                original.y +
-                original.h -
-                minHeight
+                right - 2
             );
+
+        w =
+            right - x;
+    }
+
+
+    if (
+        direction.includes('n')
+    ) {
+
+        const bottom =
+            drag.original.y +
+            drag.original.h;
 
         y =
-            nextY;
-
-        h =
-            original.h -
-            (
-                nextY -
-                original.y
-            );
-    }
-
-
-    if(
-        direction.includes('s')
-    ){
-
-        h =
             clamp(
-                original.h +
-                dy,
-                minHeight,
-                100 -
-                original.y
+                drag.original.y + dy,
+                0,
+                bottom - 2
             );
+
+        h =
+            bottom - y;
     }
 
 
-    element.x =
-        x;
-
-    element.y =
-        y;
-
-    element.w =
-        w;
-
-    element.h =
-        h;
+    element.x = x;
+    element.y = y;
+    element.w = w;
+    element.h = h;
 }
 
 
-function endVideoElementDrag(){
+function endVideoDrag() {
 
-    state.drag =
-        null;
-
+    state.drag = null;
 
     window.removeEventListener(
         'pointermove',
-        moveVideoElementDrag
+        moveVideoDrag
     );
-
 
     renderAll();
 }
 
 
-/* ========================================
-   動画上の接続線
-======================================== */
+/* ----------------------------------------
+   接続線
+---------------------------------------- */
 
-function getOverlayElement(
-    id
-){
+function anchorPoint(
+    element,
+    anchor
+) {
 
-    return els.overlay.querySelector(
-        `.overlay-element[data-id="${CSS.escape(id)}"]`
-    );
-}
-
-
-function videoConnectionPoint(
-    id,
-    side
-){
-
-    const element =
-        getElement(id);
-
-
-    const node =
-        getOverlayElement(id);
-
-
-    if(
-        !element ||
-        !node ||
-        !visible(element)
-    ){
-
-        return null;
-    }
-
-
-    const video =
-        getVideoRect();
-
-
-    const wrap =
-        els.videoWrap.getBoundingClientRect();
-
-
-    const rect =
-        node.getBoundingClientRect();
-
-
-    let x;
-
-    if(side === 'right'){
-
-        x =
-            rect.right -
-            video.left;
-
-    }else{
-
-        x =
-            rect.left -
-            video.left;
-    }
-
+    const x =
+        element.x;
 
     const y =
-        rect.top +
-        rect.height / 2 -
-        video.top;
+        element.y;
+
+    const w =
+        element.w;
+
+    const h =
+        element.h;
+
+
+    if (anchor === 'top') {
+
+        return {
+            x: x + w / 2,
+            y
+        };
+    }
+
+
+    if (anchor === 'bottom') {
+
+        return {
+            x: x + w / 2,
+            y: y + h
+        };
+    }
+
+
+    if (anchor === 'left') {
+
+        return {
+            x,
+            y: y + h / 2
+        };
+    }
 
 
     return {
-        x,
-        y
+
+        x:
+            x + w,
+
+        y:
+            y + h / 2
     };
 }
 
 
-function renderVideoConnections(){
+function renderVideoConnections() {
 
-    const svg =
-        document.getElementById(
-            'videoConnectionSvg'
-        );
+    els.videoConnections.innerHTML = '';
 
-
-    if(!svg){
+    if (
+        !state.project ||
+        !canEdit()
+    ) {
         return;
     }
 
 
-    svg.innerHTML =
-        '';
+    const width =
+        els.videoWrap.clientWidth;
+
+    const height =
+        els.videoWrap.clientHeight;
 
 
-    const video =
-        getVideoRect();
-
-
-    if(
-        !video.width ||
-        !video.height ||
-        !state.project
-    ){
-
-        return;
-    }
-
-
-    svg.setAttribute(
-        'width',
-        video.width
-    );
-
-    svg.setAttribute(
-        'height',
-        video.height
-    );
-
-    svg.setAttribute(
+    els.videoConnections.setAttribute(
         'viewBox',
-        `0 0 ${video.width} ${video.height}`
+        `0 0 ${width} ${height}`
+    );
+
+    els.videoConnections.setAttribute(
+        'width',
+        width
+    );
+
+    els.videoConnections.setAttribute(
+        'height',
+        height
     );
 
 
-    /*
-     * 現在表示されている要素間だけ
-     * 接続線を表示。
-     */
-    for(
+    for (
         const connection
         of state.project.connections
-    ){
+    ) {
 
         const from =
-            getElement(
-                connection.from
-            );
+            get(connection.from);
 
         const to =
-            getElement(
-                connection.to
-            );
+            get(connection.to);
 
 
-        if(
+        if (
             !from ||
             !to ||
             !visible(from) ||
             !visible(to)
-        ){
-
-            continue;
-        }
-
-
-        const start =
-            videoConnectionPoint(
-                connection.from,
-                'right'
-            );
-
-
-        const end =
-            videoConnectionPoint(
-                connection.to,
-                'left'
-            );
-
-
-        if(
-            !start ||
-            !end
-        ){
-
+        ) {
             continue;
         }
 
 
         drawVideoConnection(
-            svg,
-            start,
-            end,
-            connection
+            connection,
+            from,
+            to,
+            width,
+            height
         );
     }
 }
 
 
 function drawVideoConnection(
-    svg,
-    start,
-    end,
-    connection
-){
+    connection,
+    from,
+    to,
+    width,
+    height
+) {
+
+    const start =
+        anchorPoint(
+            from,
+            connection.fromAnchor
+        );
+
+
+    const end =
+        anchorPoint(
+            to,
+            connection.toAnchor
+        );
+
+
+    const sx =
+        start.x /
+        100 *
+        width;
+
+    const sy =
+        start.y /
+        100 *
+        height;
+
+    const ex =
+        end.x /
+        100 *
+        width;
+
+    const ey =
+        end.y /
+        100 *
+        height;
+
 
     const distance =
-        Math.abs(
-            end.x -
-            start.x
-        );
-
-
-    const bend =
         Math.max(
-            30,
-            Math.min(
-                140,
-                distance * .35
-            )
+            35,
+            Math.abs(ex - sx) * .35 +
+            Math.abs(ey - sy) * .15
         );
 
 
-    /*
-     * 接続先が左側にある場合でも
-     * 見やすい曲線になるようにする。
-     */
-    const direction =
-        end.x >= start.x
-            ? 1
-            : -1;
+    let c1x = sx;
+    let c1y = sy;
+    let c2x = ex;
+    let c2y = ey;
 
 
-    const pathData =
-        end.x >= start.x
+    if (
+        connection.fromAnchor === 'left'
+    ) {
+        c1x -= distance;
 
-            ? `M ${start.x} ${start.y}
-               C ${start.x + bend} ${start.y},
-                 ${end.x - bend} ${end.y},
-                 ${end.x} ${end.y}`
+    } else if (
+        connection.fromAnchor === 'right'
+    ) {
+        c1x += distance;
 
-            : `M ${start.x} ${start.y}
-               C ${start.x - bend} ${start.y},
-                 ${end.x + bend} ${end.y},
-                 ${end.x} ${end.y}`;
+    } else if (
+        connection.fromAnchor === 'top'
+    ) {
+        c1y -= distance;
 
-
-    /*
-     * 黒い外周。
-     */
-    const halo =
-        document.createElementNS(
-            'http://www.w3.org/2000/svg',
-            'path'
-        );
+    } else {
+        c1y += distance;
+    }
 
 
-    halo.classList.add(
-        'video-connection-halo'
-    );
+    if (
+        connection.toAnchor === 'left'
+    ) {
+        c2x -= distance;
+
+    } else if (
+        connection.toAnchor === 'right'
+    ) {
+        c2x += distance;
+
+    } else if (
+        connection.toAnchor === 'top'
+    ) {
+        c2y -= distance;
+
+    } else {
+        c2y += distance;
+    }
 
 
-    halo.setAttribute(
-        'd',
-        pathData
-    );
-
-
-    svg.appendChild(
-        halo
-    );
-
-
-    /*
-     * 本線。
-     */
     const path =
+        `M ${sx} ${sy} ` +
+        `C ${c1x} ${c1y}, ` +
+        `${c2x} ${c2y}, ` +
+        `${ex} ${ey}`;
+
+
+    const hit =
         document.createElementNS(
             'http://www.w3.org/2000/svg',
             'path'
         );
 
+    hit.classList.add(
+        'video-connection-hit'
+    );
 
-    path.classList.add(
-        'video-connection-path'
+    hit.setAttribute(
+        'd',
+        path
     );
 
 
-    if(
+    hit.addEventListener(
+        'click',
+        event => {
+
+            event.stopPropagation();
+
+            selectConnection(
+                connection.id
+            );
+        }
+    );
+
+
+    const visiblePath =
+        document.createElementNS(
+            'http://www.w3.org/2000/svg',
+            'path'
+        );
+
+    visiblePath.classList.add(
+        'video-connection'
+    );
+
+
+    if (
         state.selectedConnectionId ===
         connection.id
-    ){
+    ) {
 
-        path.classList.add(
+        visiblePath.classList.add(
             'selected'
         );
     }
 
 
-    path.setAttribute(
-        'stroke',
-        connection.color ||
-        '#60a5fa'
-    );
-
-
-    path.setAttribute(
-        'stroke-width',
-        state.selectedConnectionId ===
-            connection.id
-            ? 5
-            : 3
-    );
-
-
-    path.setAttribute(
+    visiblePath.setAttribute(
         'd',
-        pathData
+        path
+    );
+
+    visiblePath.setAttribute(
+        'stroke',
+        connection.color
+    );
+
+    visiblePath.setAttribute(
+        'stroke-width',
+        connection.width
     );
 
 
-    svg.appendChild(
-        path
+    if (
+        connection.style ===
+        'dashed'
+    ) {
+
+        visiblePath.setAttribute(
+            'stroke-dasharray',
+            '9 6'
+        );
+
+    } else if (
+        connection.style ===
+        'dotted'
+    ) {
+
+        visiblePath.setAttribute(
+            'stroke-dasharray',
+            '2 6'
+        );
+    }
+
+
+    visiblePath.addEventListener(
+        'click',
+        event => {
+
+            event.stopPropagation();
+
+            selectConnection(
+                connection.id
+            );
+        }
+    );
+
+
+    els.videoConnections.appendChild(
+        hit
+    );
+
+    els.videoConnections.appendChild(
+        visiblePath
     );
 
 
     /*
-     * 接続先。
+     * 終端矢印
      */
-    const endpoint =
+
+    const arrow =
         document.createElementNS(
             'http://www.w3.org/2000/svg',
             'circle'
         );
 
-
-    endpoint.classList.add(
-        'video-connection-endpoint'
-    );
-
-
-    endpoint.setAttribute(
+    arrow.setAttribute(
         'cx',
-        end.x
+        ex
     );
 
-    endpoint.setAttribute(
+    arrow.setAttribute(
         'cy',
-        end.y
+        ey
     );
 
-    endpoint.setAttribute(
+    arrow.setAttribute(
         'r',
-        state.selectedConnectionId ===
-            connection.id
+        state.selectedConnectionId === connection.id
             ? 7
             : 5
     );
 
-    endpoint.setAttribute(
+    arrow.setAttribute(
         'fill',
-        connection.color ||
-        '#60a5fa'
+        connection.color
     );
 
+    arrow.classList.add(
+        'connection-arrow'
+    );
 
-    svg.appendChild(
-        endpoint
+    els.videoConnections.appendChild(
+        arrow
     );
 
 
     /*
-     * 矢印。
+     * 選択時のみ両端ハンドル
      */
-    const arrowSize =
-        8;
+
+    if (
+        state.selectedConnectionId ===
+        connection.id
+    ) {
+
+        const startHandle =
+            createConnectionHandle(
+                sx,
+                sy,
+                'start'
+            );
 
 
-    const arrow =
+        const endHandle =
+            createConnectionHandle(
+                ex,
+                ey,
+                'end'
+            );
+
+
+        els.videoConnections.appendChild(
+            startHandle
+        );
+
+        els.videoConnections.appendChild(
+            endHandle
+        );
+    }
+}
+
+
+function createConnectionHandle(
+    x,
+    y,
+    type
+) {
+
+    const handle =
         document.createElementNS(
             'http://www.w3.org/2000/svg',
-            'path'
+            'circle'
+        );
+
+    handle.classList.add(
+        'connection-handle',
+        type
+    );
+
+    handle.setAttribute(
+        'cx',
+        x
+    );
+
+    handle.setAttribute(
+        'cy',
+        y
+    );
+
+    handle.setAttribute(
+        'r',
+        7
+    );
+
+
+    handle.addEventListener(
+        'pointerdown',
+        event => {
+
+            event.stopPropagation();
+
+            beginConnectionHandleDrag(
+                event,
+                type
+            );
+        }
+    );
+
+
+    return handle;
+}
+
+
+function selectConnection(id) {
+
+    const connection =
+        getConnection(id);
+
+    if (!connection) {
+        return;
+    }
+
+
+    state.selectedIds.clear();
+
+    state.selectedConnectionId =
+        id;
+
+
+    renderAll();
+}
+
+
+function beginConnectionHandleDrag(
+    event,
+    type
+) {
+
+    const connection =
+        getConnection(
+            state.selectedConnectionId
         );
 
 
-    arrow.classList.add(
-        'video-connection-arrow'
+    if (!connection) {
+        return;
+    }
+
+
+    state.connectionDrag = {
+
+        id:
+            connection.id,
+
+        type,
+
+        startX:
+            event.clientX,
+
+        startY:
+            event.clientY,
+
+        original:
+            type === 'start'
+                ? connection.fromAnchor
+                : connection.toAnchor
+    };
+
+
+    window.addEventListener(
+        'pointermove',
+        moveConnectionHandle
     );
 
 
-    const arrowX =
-        end.x;
-
-
-    const arrowY =
-        end.y;
-
-
-    const arrowPath =
-        direction === 1
-
-            ? `M ${arrowX - arrowSize}
-                 ${arrowY - arrowSize}
-               L ${arrowX}
-                 ${arrowY}
-               L ${arrowX - arrowSize}
-                 ${arrowY + arrowSize}
-               Z`
-
-            : `M ${arrowX + arrowSize}
-                 ${arrowY - arrowSize}
-               L ${arrowX}
-                 ${arrowY}
-               L ${arrowX + arrowSize}
-                 ${arrowY + arrowSize}
-               Z`;
-
-
-    arrow.setAttribute(
-        'd',
-        arrowPath
-    );
-
-
-    arrow.setAttribute(
-        'fill',
-        connection.color ||
-        '#60a5fa'
-    );
-
-
-    svg.appendChild(
-        arrow
+    window.addEventListener(
+        'pointerup',
+        endConnectionHandle,
+        {
+            once:true
+        }
     );
 }
 
 
-/* ========================================
+function moveConnectionHandle(event) {
+
+    const drag =
+        state.connectionDrag;
+
+    if (!drag) {
+        return;
+    }
+
+
+    const connection =
+        getConnection(
+            drag.id
+        );
+
+
+    if (!connection) {
+        return;
+    }
+
+
+    const rect =
+        els.videoWrap.getBoundingClientRect();
+
+
+    const x =
+        clamp(
+            (
+                event.clientX -
+                rect.left
+            ) /
+            rect.width *
+            100,
+            0,
+            100
+        );
+
+
+    const y =
+        clamp(
+            (
+                event.clientY -
+                rect.top
+            ) /
+            rect.height *
+            100,
+            0,
+            100
+        );
+
+
+    const target =
+        drag.type === 'start'
+            ? get(connection.from)
+            : get(connection.to);
+
+
+    if (!target) {
+        return;
+    }
+
+
+    const candidates = [
+        {
+            anchor:'top',
+            x:target.x + target.w / 2,
+            y:target.y
+        },
+        {
+            anchor:'right',
+            x:target.x + target.w,
+            y:target.y + target.h / 2
+        },
+        {
+            anchor:'bottom',
+            x:target.x + target.w / 2,
+            y:target.y + target.h
+        },
+        {
+            anchor:'left',
+            x:target.x,
+            y:target.y + target.h / 2
+        }
+    ];
+
+
+    candidates.sort(
+        (a,b) =>
+            distance(
+                a.x,
+                a.y,
+                x,
+                y
+            ) -
+            distance(
+                b.x,
+                b.y,
+                x,
+                y
+            )
+    );
+
+
+    const nearest =
+        candidates[0];
+
+
+    if (
+        drag.type === 'start'
+    ) {
+
+        connection.fromAnchor =
+            nearest.anchor;
+
+    } else {
+
+        connection.toAnchor =
+            nearest.anchor;
+    }
+
+
+    markDirty();
+
+    renderVideoConnections();
+
+    renderRightMenu();
+}
+
+
+function endConnectionHandle() {
+
+    state.connectionDrag = null;
+
+    window.removeEventListener(
+        'pointermove',
+        moveConnectionHandle
+    );
+
+    renderAll();
+}
+
+
+function distance(
+    x1,
+    y1,
+    x2,
+    y2
+) {
+
+    return Math.sqrt(
+        Math.pow(x1 - x2, 2) +
+        Math.pow(y1 - y2, 2)
+    );
+}
+
+
+/* ----------------------------------------
    再生位置
-======================================== */
+---------------------------------------- */
 
-function updatePlayhead(){
+function updatePlayhead() {
 
-    if(!canEdit()){
+    if (!canEdit()) {
 
         els.playhead.style.display =
             'none';
@@ -4060,28 +4604,21 @@ function updatePlayhead(){
 
 
     els.playhead.style.left =
-        `calc(
-            var(--label) +
-            ${x}px
-        )`;
+        `calc(var(--label) + ${x}px)`;
 
 
     els.playheadLabel.textContent =
-        time(
-            state.currentTime
-        );
+        time(state.currentTime);
 
 
     els.readout.textContent =
-        `${time(
-            state.currentTime
-        )} / ${time(
-            state.duration
-        )}`;
+        time(state.currentTime) +
+        ' / ' +
+        time(state.duration);
 }
 
 
-function seek(value){
+function seek(value) {
 
     state.currentTime =
         clamp(
@@ -4091,12 +4628,12 @@ function seek(value){
         );
 
 
-    try{
+    try {
 
         els.video.currentTime =
             state.currentTime;
 
-    }catch(_){}
+    } catch (_) {}
 
 
     renderOverlay();
@@ -4107,32 +4644,48 @@ function seek(value){
 }
 
 
-/* ========================================
-   タイムライン上の操作
-======================================== */
+function updateHint() {
 
-function beginTimelineDrag(
-    event
-){
+    if (
+        state.selectedConnectionId
+    ) {
 
-    const bar =
-        event.currentTarget;
+        els.hint.textContent =
+            '接続線を選択中';
 
-
-    const element =
-        getElement(
-            bar.dataset.id
-        );
-
-
-    if(!element){
         return;
     }
 
 
-    event.preventDefault();
+    els.hint.textContent =
+        state.selectedIds.size
+            ? state.selectedIds.size +
+              '要素選択中'
+            : '';
+}
+
+
+/* ----------------------------------------
+   タイムライン操作
+---------------------------------------- */
+
+function beginTimelineDrag(event) {
+
+    const bar =
+        event.currentTarget;
+
+    const element =
+        get(bar.dataset.id);
+
+
+    if (!element) {
+        return;
+    }
+
 
     event.stopPropagation();
+
+    event.preventDefault();
 
 
     const handle =
@@ -4147,7 +4700,7 @@ function beginTimelineDrag(
 
     state.drag = {
 
-        kind:
+        type:
             'timeline',
 
         id:
@@ -4162,10 +4715,10 @@ function beginTimelineDrag(
             handle?.dataset.edge ||
             '',
 
-        startClientX:
+        x:
             event.clientX,
 
-        original:{
+        original: {
 
             start:
                 element.start,
@@ -4175,9 +4728,13 @@ function beginTimelineDrag(
         },
 
         laneWidth:
-            lane.getBoundingClientRect()
-                .width
+            lane.getBoundingClientRect().width
     };
+
+
+    bar.setPointerCapture?.(
+        event.pointerId
+    );
 
 
     window.addEventListener(
@@ -4196,39 +4753,32 @@ function beginTimelineDrag(
 }
 
 
-function moveTimelineDrag(
-    event
-){
+function moveTimelineDrag(event) {
 
     const drag =
         state.drag;
 
-
-    if(
+    if (
         !drag ||
-        drag.kind !==
-            'timeline'
-    ){
-
+        drag.type !== 'timeline'
+    ) {
         return;
     }
 
 
     const element =
-        getElement(
-            drag.id
-        );
+        get(drag.id);
 
 
-    if(!element){
+    if (!element) {
         return;
     }
 
 
-    const dt =
+    const delta =
         (
             event.clientX -
-            drag.startClientX
+            drag.x
         ) /
         Math.max(
             1,
@@ -4241,9 +4791,10 @@ function moveTimelineDrag(
         .05;
 
 
-    if(
-        drag.mode === 'move'
-    ){
+    if (
+        drag.mode ===
+        'move'
+    ) {
 
         const length =
             drag.original.end -
@@ -4253,7 +4804,7 @@ function moveTimelineDrag(
         element.start =
             clamp(
                 drag.original.start +
-                dt,
+                delta,
                 0,
                 state.duration -
                 length
@@ -4264,25 +4815,26 @@ function moveTimelineDrag(
             element.start +
             length;
 
-    }else if(
-        drag.edge === 'left'
-    ){
+    } else if (
+        drag.edge ===
+        'left'
+    ) {
 
         element.start =
             clamp(
                 drag.original.start +
-                dt,
+                delta,
                 0,
                 drag.original.end -
                 minimum
             );
 
-    }else{
+    } else {
 
         element.end =
             clamp(
                 drag.original.end +
-                dt,
+                delta,
                 drag.original.start +
                 minimum,
                 state.duration
@@ -4299,36 +4851,790 @@ function moveTimelineDrag(
     renderVideoConnections();
 
     updatePlayhead();
+
+    renderRightMenu();
 }
 
 
-function endTimelineDrag(){
+function endTimelineDrag() {
 
-    state.drag =
-        null;
-
+    state.drag = null;
 
     window.removeEventListener(
         'pointermove',
         moveTimelineDrag
     );
 
-
     renderAll();
 }
 
 
-/* ========================================
-   要素編集
-======================================== */
+/* ----------------------------------------
+   右メニュー
+---------------------------------------- */
 
-function openElement(id){
+function renderRightMenu() {
+
+    if (
+        state.selectedConnectionId
+    ) {
+
+        renderConnectionMenu();
+
+        return;
+    }
+
+
+    if (
+        state.selectedIds.size === 1
+    ) {
+
+        const id =
+            [...state.selectedIds][0];
+
+        const element =
+            get(id);
+
+
+        if (element) {
+
+            renderElementMenu(
+                element
+            );
+
+            return;
+        }
+    }
+
+
+    els.rightMenuTitle.textContent =
+        'プロパティ';
+
+    els.rightMenuType.textContent =
+        '未選択';
+
+    els.rightMenuEmpty.classList.remove(
+        'hidden'
+    );
+
+    els.elementProperties.classList.add(
+        'hidden'
+    );
+
+    els.connectionProperties.classList.add(
+        'hidden'
+    );
+}
+
+
+function renderElementMenu(
+    element
+) {
+
+    els.rightMenuTitle.textContent =
+        element.name;
+
+
+    els.rightMenuType.textContent =
+        element.type === 'text'
+            ? 'テキスト'
+            : element.type === 'box'
+                ? '強調枠'
+                : 'スキップ';
+
+
+    els.rightMenuEmpty.classList.add(
+        'hidden'
+    );
+
+    els.elementProperties.classList.remove(
+        'hidden'
+    );
+
+    els.connectionProperties.classList.add(
+        'hidden'
+    );
+
+
+    $('sideElementName').value =
+        element.name;
+
+    $('sideElementText').value =
+        element.text;
+
+    $('sideX').value =
+        Number(element.x.toFixed(1));
+
+    $('sideY').value =
+        Number(element.y.toFixed(1));
+
+    $('sideW').value =
+        Number(element.w.toFixed(1));
+
+    $('sideH').value =
+        Number(element.h.toFixed(1));
+
+    $('sideStart').value =
+        element.start;
+
+    $('sideEnd').value =
+        element.end;
+
+    $('sideFontSize').value =
+        element.fontSize;
+
+    $('sideFontWeight').value =
+        element.fontWeight;
+
+    $('sideColor').value =
+        element.color;
+
+
+    const isText =
+        element.type === 'text';
+
+    const isBox =
+        element.type === 'box';
+
+
+    $('sideTextRow')
+        .classList
+        .toggle(
+            'hidden',
+            !isText
+        );
+
+
+    $('sideTextStyleGroup')
+        .classList
+        .toggle(
+            'hidden',
+            !isText
+        );
+
+
+    $('shapeGroup')
+        .classList
+        .toggle(
+            'hidden',
+            !isBox
+        );
+
+
+    updateShapeButtons(
+        element.shape
+    );
+}
+
+
+function renderConnectionMenu() {
+
+    const connection =
+        getConnection(
+            state.selectedConnectionId
+        );
+
+
+    if (!connection) {
+
+        state.selectedConnectionId =
+            null;
+
+        renderRightMenu();
+
+        return;
+    }
+
+
+    els.rightMenuTitle.textContent =
+        '接続線';
+
+    els.rightMenuType.textContent =
+        '要素間接続';
+
+
+    els.rightMenuEmpty.classList.add(
+        'hidden'
+    );
+
+    els.elementProperties.classList.add(
+        'hidden'
+    );
+
+    els.connectionProperties.classList.remove(
+        'hidden'
+    );
+
+
+    $('connectionStyle').value =
+        connection.style;
+
+    $('connectionWidth').value =
+        connection.width;
+
+    $('connectionColor').value =
+        connection.color;
+
+    $('connectionFromAnchor').value =
+        connection.fromAnchor;
+
+    $('connectionToAnchor').value =
+        connection.toAnchor;
+
+
+    updateLinePreview(
+        connection
+    );
+}
+
+
+function updateLinePreview(
+    connection
+) {
+
+    const preview =
+        $('linePreview');
+
+
+    preview.className = '';
+
+
+    if (
+        connection.style ===
+        'dashed'
+    ) {
+
+        preview.classList.add(
+            'dashed'
+        );
+
+    } else if (
+        connection.style ===
+        'dotted'
+    ) {
+
+        preview.classList.add(
+            'dotted'
+        );
+    }
+
+
+    preview.style.borderTop =
+        `${connection.width}px ${connection.style === 'solid' ? 'solid' : connection.style} ${connection.color}`;
+}
+
+
+function updateShapeButtons(
+    shape
+) {
+
+    document
+        .querySelectorAll(
+            '.shape-button'
+        )
+        .forEach(
+            button => {
+
+                button.classList.toggle(
+                    'active',
+                    button.dataset.shape ===
+                    shape
+                );
+            }
+        );
+}
+
+
+/* ----------------------------------------
+   強調枠形状
+---------------------------------------- */
+
+document
+    .querySelectorAll(
+        '.shape-button'
+    )
+    .forEach(
+        button => {
+
+            button.addEventListener(
+                'click',
+                () => {
+
+                    const id =
+                        [...state.selectedIds][0];
+
+                    const element =
+                        get(id);
+
+
+                    if (
+                        !element ||
+                        element.type !==
+                        'box'
+                    ) {
+                        return;
+                    }
+
+
+                    element.shape =
+                        button.dataset.shape;
+
+
+                    markDirty();
+
+                    renderAll();
+                }
+            );
+        }
+    );
+
+
+$('elementShape')
+    .addEventListener(
+        'change',
+        event => {
+
+            const element =
+                get(
+                    state.modalElementId
+                );
+
+
+            if (!element) {
+                return;
+            }
+
+
+            element.shape =
+                event.target.value;
+        }
+    );
+
+
+/* ----------------------------------------
+   右メニュー変更
+---------------------------------------- */
+
+$('sideElementName')
+    .addEventListener(
+        'input',
+        event => {
+
+            const element =
+                getSelectedElement();
+
+            if (!element) {
+                return;
+            }
+
+            element.name =
+                event.target.value;
+
+            markDirty();
+
+            renderTimeline();
+        }
+    );
+
+
+$('sideElementText')
+    .addEventListener(
+        'input',
+        event => {
+
+            const element =
+                getSelectedElement();
+
+            if (!element) {
+                return;
+            }
+
+            element.text =
+                event.target.value;
+
+            markDirty();
+
+            renderOverlay();
+        }
+    );
+
+
+[
+    ['sideX','x',0,99],
+    ['sideY','y',0,99],
+    ['sideW','w',1,100],
+    ['sideH','h',1,100],
+    ['sideStart','start',0,null],
+    ['sideEnd','end',0,null]
+].forEach(
+    ([id,key,min,max]) => {
+
+        $(id).addEventListener(
+            'change',
+            event => {
+
+                const element =
+                    getSelectedElement();
+
+                if (!element) {
+                    return;
+                }
+
+
+                let value =
+                    Number(
+                        event.target.value
+                    );
+
+
+                if (
+                    !Number.isFinite(value)
+                ) {
+                    return;
+                }
+
+
+                if (max !== null) {
+                    value =
+                        clamp(
+                            value,
+                            min,
+                            max
+                        );
+                }
+
+
+                if (
+                    key === 'start' &&
+                    value >= element.end
+                ) {
+
+                    value =
+                        Math.max(
+                            0,
+                            element.end - .05
+                        );
+                }
+
+
+                if (
+                    key === 'end' &&
+                    value <= element.start
+                ) {
+
+                    value =
+                        Math.min(
+                            state.duration,
+                            element.start + .05
+                        );
+                }
+
+
+                element[key] =
+                    value;
+
+
+                markDirty();
+
+                renderAll();
+            }
+        );
+    }
+);
+
+
+$('sideFontSize')
+    .addEventListener(
+        'change',
+        event => {
+
+            const element =
+                getSelectedElement();
+
+            if (!element) {
+                return;
+            }
+
+
+            element.fontSize =
+                clamp(
+                    Number(event.target.value) || 28,
+                    8,
+                    100
+                );
+
+
+            markDirty();
+
+            renderAll();
+        }
+    );
+
+
+$('sideFontWeight')
+    .addEventListener(
+        'change',
+        event => {
+
+            const element =
+                getSelectedElement();
+
+            if (!element) {
+                return;
+            }
+
+
+            element.fontWeight =
+                event.target.value;
+
+            markDirty();
+
+            renderAll();
+        }
+    );
+
+
+$('sideColor')
+    .addEventListener(
+        'change',
+        event => {
+
+            const element =
+                getSelectedElement();
+
+            if (!element) {
+                return;
+            }
+
+
+            element.color =
+                event.target.value;
+
+            markDirty();
+
+            renderAll();
+        }
+    );
+
+
+$('sideDeleteElement')
+    .addEventListener(
+        'click',
+        () => {
+
+            deleteSelected();
+        }
+    );
+
+
+$('sideEditDetail')
+    .addEventListener(
+        'click',
+        () => {
+
+            const element =
+                getSelectedElement();
+
+            if (element) {
+                openElement(
+                    element.id
+                );
+            }
+        }
+    );
+
+
+function getSelectedElement() {
+
+    if (
+        state.selectedIds.size !== 1
+    ) {
+        return null;
+    }
+
+
+    return get(
+        [...state.selectedIds][0]
+    );
+}
+
+
+/* ----------------------------------------
+   接続線メニュー変更
+---------------------------------------- */
+
+$('connectionStyle')
+    .addEventListener(
+        'change',
+        event => {
+
+            const connection =
+                getConnection(
+                    state.selectedConnectionId
+                );
+
+            if (!connection) {
+                return;
+            }
+
+
+            connection.style =
+                event.target.value;
+
+            markDirty();
+
+            renderAll();
+        }
+    );
+
+
+$('connectionWidth')
+    .addEventListener(
+        'change',
+        event => {
+
+            const connection =
+                getConnection(
+                    state.selectedConnectionId
+                );
+
+            if (!connection) {
+                return;
+            }
+
+
+            connection.width =
+                clamp(
+                    Number(
+                        event.target.value
+                    ) || 3,
+                    1,
+                    12
+                );
+
+            markDirty();
+
+            renderAll();
+        }
+    );
+
+
+$('connectionColor')
+    .addEventListener(
+        'change',
+        event => {
+
+            const connection =
+                getConnection(
+                    state.selectedConnectionId
+                );
+
+            if (!connection) {
+                return;
+            }
+
+
+            connection.color =
+                event.target.value;
+
+            markDirty();
+
+            renderAll();
+        }
+    );
+
+
+$('connectionFromAnchor')
+    .addEventListener(
+        'change',
+        event => {
+
+            const connection =
+                getConnection(
+                    state.selectedConnectionId
+                );
+
+            if (!connection) {
+                return;
+            }
+
+
+            connection.fromAnchor =
+                event.target.value;
+
+            markDirty();
+
+            renderAll();
+        }
+    );
+
+
+$('connectionToAnchor')
+    .addEventListener(
+        'change',
+        event => {
+
+            const connection =
+                getConnection(
+                    state.selectedConnectionId
+                );
+
+            if (!connection) {
+                return;
+            }
+
+
+            connection.toAnchor =
+                event.target.value;
+
+            markDirty();
+
+            renderAll();
+        }
+    );
+
+
+$('sideDeleteConnection')
+    .addEventListener(
+        'click',
+        () => {
+
+            if (
+                !state.selectedConnectionId
+            ) {
+                return;
+            }
+
+
+            state.project.connections =
+                state.project.connections.filter(
+                    connection =>
+                        connection.id !==
+                        state.selectedConnectionId
+                );
+
+
+            state.selectedConnectionId =
+                null;
+
+
+            markDirty();
+
+            renderAll();
+        }
+    );
+
+
+/* ----------------------------------------
+   要素編集
+---------------------------------------- */
+
+function openElement(id) {
 
     const element =
-        getElement(id);
+        get(id);
 
-
-    if(!element){
+    if (!element) {
         return;
     }
 
@@ -4367,12 +5673,22 @@ function openElement(id){
     $('elementFontWeight').value =
         element.fontWeight;
 
+    $('elementShape').value =
+        element.shape;
+
+
+    const isText =
+        element.type === 'text';
+
+    const isBox =
+        element.type === 'box';
+
 
     $('textField')
         .classList
         .toggle(
             'hidden',
-            element.type !== 'text'
+            !isText
         );
 
 
@@ -4380,7 +5696,7 @@ function openElement(id){
         .classList
         .toggle(
             'hidden',
-            element.type !== 'text'
+            !isText
         );
 
 
@@ -4388,7 +5704,15 @@ function openElement(id){
         .classList
         .toggle(
             'hidden',
-            element.type !== 'text'
+            !isText
+        );
+
+
+    $('modalShapeField')
+        .classList
+        .toggle(
+            'hidden',
+            !isBox
         );
 
 
@@ -4402,26 +5726,21 @@ function openElement(id){
 }
 
 
-function buildColors(
-    active
-){
+function buildColors(active) {
 
     const grid =
         $('colorGrid');
 
-
-    grid.innerHTML =
-        '';
+    grid.innerHTML = '';
 
 
     state.colors.forEach(
-        colorValue => {
+        currentColor => {
 
             const button =
                 document.createElement(
                     'button'
                 );
-
 
             button.type =
                 'button';
@@ -4429,18 +5748,16 @@ function buildColors(
             button.className =
                 'color-choice' +
                 (
-                    colorValue === active
+                    currentColor === active
                         ? ' active'
                         : ''
                 );
 
-
             button.style.background =
-                colorValue;
-
+                currentColor;
 
             button.dataset.color =
-                colorValue;
+                currentColor;
 
 
             button.onclick =
@@ -4452,12 +5769,10 @@ function buildColors(
                         )
                         .forEach(
                             node =>
-                                node.classList
-                                    .remove(
-                                        'active'
-                                    )
+                                node.classList.remove(
+                                    'active'
+                                )
                         );
-
 
                     button.classList.add(
                         'active'
@@ -4473,7 +5788,7 @@ function buildColors(
 }
 
 
-function closeElement(){
+function closeElement() {
 
     els.modal.style.display =
         'none';
@@ -4483,15 +5798,15 @@ function closeElement(){
 }
 
 
-function saveElement(){
+function saveElement() {
 
     const element =
-        getElement(
+        get(
             state.modalElementId
         );
 
 
-    if(!element){
+    if (!element) {
         return;
     }
 
@@ -4501,20 +5816,19 @@ function saveElement(){
             $('elementStart').value
         );
 
-
     const end =
         Number(
             $('elementEnd').value
         );
 
 
-    if(
+    if (
         !Number.isFinite(start) ||
         !Number.isFinite(end) ||
         start < 0 ||
         end <= start ||
         end > state.duration
-    ){
+    ) {
 
         toast(
             '開始・終了時間が不正です',
@@ -4526,22 +5840,17 @@ function saveElement(){
 
 
     element.name =
-        $('elementName')
-            .value
-            .trim() ||
+        $('elementName').value.trim() ||
         '要素';
-
 
     element.text =
         $('elementText').value;
-
 
     element.start =
         start;
 
     element.end =
         end;
-
 
     element.x =
         clamp(
@@ -4552,7 +5861,6 @@ function saveElement(){
             99
         );
 
-
     element.y =
         clamp(
             Number(
@@ -4561,7 +5869,6 @@ function saveElement(){
             0,
             99
         );
-
 
     element.w =
         clamp(
@@ -4572,7 +5879,6 @@ function saveElement(){
             100
         );
 
-
     element.h =
         clamp(
             Number(
@@ -4581,7 +5887,6 @@ function saveElement(){
             1,
             100
         );
-
 
     element.fontSize =
         clamp(
@@ -4592,15 +5897,14 @@ function saveElement(){
             100
         );
 
-
     element.fontWeight =
         $('elementFontWeight').value;
 
+    element.shape =
+        $('elementShape').value;
 
     element.color =
-        $('colorGrid .active')
-            ?.dataset
-            .color ||
+        $('colorGrid .active')?.dataset.color ||
         element.color;
 
 
@@ -4612,13 +5916,15 @@ function saveElement(){
 }
 
 
-/* ========================================
+/* ----------------------------------------
    要素追加
-======================================== */
+---------------------------------------- */
 
-function addElement(type){
+function addElement(
+    type
+) {
 
-    if(!canEdit()){
+    if (!canEdit()) {
 
         toast(
             '先に動画を読み込んでください',
@@ -4633,8 +5939,7 @@ function addElement(type){
         clamp(
             state.currentTime,
             0,
-            state.duration -
-            .05
+            state.duration - .05
         );
 
 
@@ -4681,29 +5986,28 @@ function addElement(type){
         end,
 
         x:
-            clamp(
-                xy.x,
-                0,
-                99
-            ),
+            xy.x,
 
         y:
-            clamp(
-                xy.y,
-                0,
-                99
-            ),
+            xy.y,
 
-        w:35,
+        w:
+            35,
 
-        h:18,
+        h:
+            18,
 
         color:
-            elementColor(type),
+            color(type),
 
-        fontSize:28,
+        fontSize:
+            28,
 
-        fontWeight:'700'
+        fontWeight:
+            '700',
+
+        shape:
+            'rectangle'
     };
 
 
@@ -4718,6 +6022,9 @@ function addElement(type){
         element.id
     );
 
+    state.selectedConnectionId =
+        null;
+
 
     markDirty();
 
@@ -4729,15 +6036,15 @@ function addElement(type){
 }
 
 
-/* ========================================
-   削除・接続解除
-======================================== */
+/* ----------------------------------------
+   削除
+---------------------------------------- */
 
-function deleteSelected(){
+function deleteSelected() {
 
-    if(
+    if (
         state.selectedConnectionId
-    ){
+    ) {
 
         state.project.connections =
             state.project.connections.filter(
@@ -4746,10 +6053,8 @@ function deleteSelected(){
                     state.selectedConnectionId
             );
 
-
         state.selectedConnectionId =
             null;
-
 
         markDirty();
 
@@ -4759,10 +6064,9 @@ function deleteSelected(){
     }
 
 
-    if(
+    if (
         !state.selectedIds.size
-    ){
-
+    ) {
         return;
     }
 
@@ -4785,12 +6089,8 @@ function deleteSelected(){
     state.project.connections =
         state.project.connections.filter(
             connection =>
-                !ids.has(
-                    connection.from
-                ) &&
-                !ids.has(
-                    connection.to
-                )
+                !ids.has(connection.from) &&
+                !ids.has(connection.to)
         );
 
 
@@ -4802,11 +6102,11 @@ function deleteSelected(){
 }
 
 
-function disconnectSelected(){
+function disconnectSelected() {
 
-    if(
+    if (
         state.selectedConnectionId
-    ){
+    ) {
 
         state.project.connections =
             state.project.connections.filter(
@@ -4815,10 +6115,8 @@ function disconnectSelected(){
                     state.selectedConnectionId
             );
 
-
         state.selectedConnectionId =
             null;
-
 
         markDirty();
 
@@ -4828,13 +6126,13 @@ function disconnectSelected(){
     }
 
 
-    if(
+    if (
         state.selectedIds.size === 2
-    ){
+    ) {
 
         const [
-            a,
-            b
+            first,
+            second
         ] =
             [...state.selectedIds];
 
@@ -4844,12 +6142,12 @@ function disconnectSelected(){
                 connection =>
                     !(
                         (
-                            connection.from === a &&
-                            connection.to === b
+                            connection.from === first &&
+                            connection.to === second
                         ) ||
                         (
-                            connection.from === b &&
-                            connection.to === a
+                            connection.from === second &&
+                            connection.to === first
                         )
                     )
             );
@@ -4862,22 +6160,22 @@ function disconnectSelected(){
 }
 
 
-/* ========================================
+/* ----------------------------------------
    コンテキストメニュー
-======================================== */
+---------------------------------------- */
 
 function openMenu(
     x,
     y,
-    elementId,
-    connectionId
-){
+    id,
+    connection
+) {
 
     state.contextElementId =
-        elementId;
+        id;
 
     state.contextConnectionId =
-        connectionId;
+        connection;
 
 
     els.menu.style.display =
@@ -4899,14 +6197,14 @@ function openMenu(
 }
 
 
-function closeMenu(){
+function closeMenu() {
 
     els.menu.style.display =
         'none';
 }
 
 
-function createAt(type){
+function createAt(type) {
 
     addElement(type);
 
@@ -4914,13 +6212,13 @@ function createAt(type){
 }
 
 
-/* ========================================
-   保存・読込
-======================================== */
+/* ----------------------------------------
+   保存
+---------------------------------------- */
 
-function saveLocal(){
+function saveLocal() {
 
-    if(!state.project){
+    if (!state.project) {
         return;
     }
 
@@ -4942,9 +6240,7 @@ function saveLocal(){
 
     localStorage.setItem(
         key,
-        JSON.stringify(
-            project
-        )
+        JSON.stringify(project)
     );
 
 
@@ -4956,14 +6252,12 @@ function saveLocal(){
 }
 
 
-function listStorage(){
+function listStorage() {
 
     const list =
         $('storageList');
 
-
-    list.innerHTML =
-        '';
+    list.innerHTML = '';
 
 
     Object.keys(
@@ -4979,7 +6273,7 @@ function listStorage(){
         .forEach(
             key => {
 
-                try{
+                try {
 
                     const project =
                         JSON.parse(
@@ -5002,18 +6296,7 @@ function listStorage(){
                         `
                         <div class="info">
                             <div class="name"></div>
-                            <div class="meta">
-                                ${
-                                    project.videoName ||
-                                    ''
-                                }
-                                /
-                                ${
-                                    project.elements?.length ||
-                                    0
-                                }
-                                要素
-                            </div>
+                            <div class="meta"></div>
                         </div>
                         `;
 
@@ -5024,41 +6307,60 @@ function listStorage(){
                         project.name;
 
 
-                    const button =
+                    row.querySelector(
+                        '.meta'
+                    ).textContent =
+                        (
+                            project.videoName ||
+                            ''
+                        ) +
+                        ' / ' +
+                        (
+                            project.elements?.length ||
+                            0
+                        ) +
+                        '要素 / ' +
+                        (
+                            project.connections?.length ||
+                            0
+                        ) +
+                        '接続';
+
+
+                    const load =
                         document.createElement(
                             'button'
                         );
 
-
-                    button.className =
+                    load.className =
                         'btn small';
 
-                    button.textContent =
+                    load.textContent =
                         '読込';
 
 
-                    button.onclick =
+                    load.onclick =
                         () => {
 
                             loadProject(
                                 project
                             );
 
-                            els.storageModal.style.display =
+                            els.storageModal
+                                .style.display =
                                 'none';
                         };
 
 
                     row.appendChild(
-                        button
+                        load
                     );
-
 
                     list.appendChild(
                         row
                     );
 
-                }catch(_){}
+                } catch (_) {}
             }
         );
 
@@ -5068,9 +6370,13 @@ function listStorage(){
 }
 
 
-function loadProject(project){
+/* ----------------------------------------
+   読込
+---------------------------------------- */
 
-    try{
+function loadProject(project) {
+
+    try {
 
         state.project =
             normalizeProject(
@@ -5084,30 +6390,28 @@ function loadProject(project){
             state.project.duration;
 
 
-        if(
-            els.video.duration &&
-            Number.isFinite(
-                els.video.duration
-            )
-        ){
+        state.selectedIds.clear();
 
-            state.duration =
-                els.video.duration;
-        }
-
-
-        state.project.duration =
-            state.duration;
-
+        state.selectedConnectionId =
+            null;
 
         state.currentTime =
             0;
 
 
-        state.selectedIds.clear();
+        if (
+            els.video.duration &&
+            Number.isFinite(
+                els.video.duration
+            )
+        ) {
 
-        state.selectedConnectionId =
-            null;
+            state.duration =
+                els.video.duration;
+
+            state.project.duration =
+                state.duration;
+        }
 
 
         enableEditor();
@@ -5120,7 +6424,7 @@ function loadProject(project){
             'プロジェクトを読み込みました'
         );
 
-    }catch(error){
+    } catch (error) {
 
         toast(
             'プロジェクトを読み込めません：' +
@@ -5131,9 +6435,163 @@ function loadProject(project){
 }
 
 
-function exportProject(){
+function enableEditor() {
 
-    if(!state.project){
+    els.play.disabled =
+        false;
+
+    els.stop.disabled =
+        false;
+
+    els.save.disabled =
+        false;
+
+    els.empty.style.display =
+        'none';
+}
+
+
+function disableEditor() {
+
+    els.play.disabled =
+        true;
+
+    els.stop.disabled =
+        true;
+
+    els.save.disabled =
+        true;
+
+    els.empty.style.display =
+        'block';
+
+    els.overlay.innerHTML =
+        '';
+
+    els.videoConnections.innerHTML =
+        '';
+
+    els.tracks.innerHTML =
+        '';
+
+    els.playhead.style.display =
+        'none';
+
+    renderRightMenu();
+}
+
+
+/* ----------------------------------------
+   動画
+---------------------------------------- */
+
+function handleVideo(file) {
+
+    if (
+        !file ||
+        !file.type.startsWith(
+            'video/'
+        )
+    ) {
+
+        toast(
+            '動画ファイルを選択してください',
+            true
+        );
+
+        return;
+    }
+
+
+    if (state.videoUrl) {
+
+        URL.revokeObjectURL(
+            state.videoUrl
+        );
+    }
+
+
+    state.videoBlob =
+        file;
+
+    state.videoUrl =
+        URL.createObjectURL(
+            file
+        );
+
+
+    state.project =
+        emptyProject(
+            file.name
+        );
+
+
+    state.duration =
+        0;
+
+    disableEditor();
+
+
+    els.video.src =
+        state.videoUrl;
+
+
+    setStatus(
+        '動画を読み込んでいます…'
+    );
+}
+
+
+function newProject() {
+
+    state.project =
+        null;
+
+    state.selectedIds.clear();
+
+    state.selectedConnectionId =
+        null;
+
+    state.duration =
+        0;
+
+    state.currentTime =
+        0;
+
+
+    if (state.videoUrl) {
+
+        URL.revokeObjectURL(
+            state.videoUrl
+        );
+
+        state.videoUrl =
+            '';
+    }
+
+
+    els.video.removeAttribute(
+        'src'
+    );
+
+    els.video.load();
+
+
+    disableEditor();
+
+    setStatus(
+        '動画を読み込んでください'
+    );
+}
+
+
+/* ----------------------------------------
+   書き出し
+---------------------------------------- */
+
+function exportProject() {
+
+    if (!state.project) {
         return;
     }
 
@@ -5156,6 +6614,12 @@ function exportProject(){
         );
 
 
+    const url =
+        URL.createObjectURL(
+            blob
+        );
+
+
     const link =
         document.createElement(
             'a'
@@ -5163,10 +6627,7 @@ function exportProject(){
 
 
     link.href =
-        URL.createObjectURL(
-            blob
-        );
-
+        url;
 
     link.download =
         (
@@ -5176,189 +6637,30 @@ function exportProject(){
         '.json';
 
 
+    document.body.appendChild(
+        link
+    );
+
     link.click();
+
+    document.body.removeChild(
+        link
+    );
 
 
     setTimeout(
-        () => {
-
+        () =>
             URL.revokeObjectURL(
-                link.href
-            );
-
-        },
+                url
+            ),
         1000
     );
 }
 
 
-/* ========================================
-   動画
-======================================== */
-
-function enableEditor(){
-
-    els.play.disabled =
-        false;
-
-    els.stop.disabled =
-        false;
-
-    els.save.disabled =
-        false;
-
-    els.empty.style.display =
-        'none';
-}
-
-
-function disableEditor(){
-
-    els.play.disabled =
-        true;
-
-    els.stop.disabled =
-        true;
-
-    els.save.disabled =
-        true;
-
-    els.empty.style.display =
-        'block';
-
-
-    els.overlay.innerHTML =
-        '';
-
-
-    els.tracks.innerHTML =
-        '';
-
-
-    els.playhead.style.display =
-        'none';
-}
-
-
-function handleVideo(file){
-
-    if(
-        !file ||
-        !file.type.startsWith(
-            'video/'
-        )
-    ){
-
-        toast(
-            '動画ファイルを選択してください',
-            true
-        );
-
-        return;
-    }
-
-
-    if(state.videoUrl){
-
-        URL.revokeObjectURL(
-            state.videoUrl
-        );
-    }
-
-
-    state.videoBlob =
-        file;
-
-
-    state.videoUrl =
-        URL.createObjectURL(
-            file
-        );
-
-
-    state.project =
-        emptyProject(
-            file.name
-        );
-
-
-    state.duration =
-        0;
-
-
-    state.currentTime =
-        0;
-
-
-    state.selectedIds.clear();
-
-    state.selectedConnectionId =
-        null;
-
-
-    disableEditor();
-
-
-    els.video.src =
-        state.videoUrl;
-
-
-    setStatus(
-        '動画を読み込んでいます…'
-    );
-}
-
-
-function newProject(){
-
-    state.project =
-        null;
-
-
-    state.selectedIds.clear();
-
-    state.selectedConnectionId =
-        null;
-
-
-    state.duration =
-        0;
-
-    state.currentTime =
-        0;
-
-
-    if(state.videoUrl){
-
-        URL.revokeObjectURL(
-            state.videoUrl
-        );
-
-        state.videoUrl =
-            '';
-    }
-
-
-    els.video.removeAttribute(
-        'src'
-    );
-
-
-    els.video.load();
-
-
-    disableEditor();
-
-
-    setStatus(
-        '動画を読み込んでください'
-    );
-}
-
-
-/* ========================================
+/* ----------------------------------------
    イベント
-======================================== */
+---------------------------------------- */
 
 els.open.onclick =
     () =>
@@ -5372,7 +6674,7 @@ els.file.onchange =
         );
 
 
-$('newProjectBtn').onclick =
+els.newBtn.onclick =
     newProject;
 
 
@@ -5394,13 +6696,12 @@ els.import.onchange =
         const file =
             event.target.files[0];
 
-
-        if(!file){
+        if (!file) {
             return;
         }
 
 
-        try{
+        try {
 
             loadProject(
                 JSON.parse(
@@ -5408,7 +6709,7 @@ els.import.onchange =
                 )
             );
 
-        }catch(error){
+        } catch (error) {
 
             toast(
                 'JSONを読み込めません：' +
@@ -5432,9 +6733,7 @@ els.video.onloadedmetadata =
             );
 
 
-        if(
-            !state.project
-        ){
+        if (!state.project) {
 
             state.project =
                 emptyProject();
@@ -5443,7 +6742,6 @@ els.video.onloadedmetadata =
 
         state.project.duration =
             state.duration;
-
 
         state.currentTime =
             0;
@@ -5460,15 +6758,19 @@ els.video.onloadedmetadata =
 els.video.ontimeupdate =
     () => {
 
-        state.currentTime =
-            els.video.currentTime;
+        if (
+            !els.video.paused
+        ) {
 
+            state.currentTime =
+                els.video.currentTime;
 
-        updatePlayhead();
+            updatePlayhead();
 
-        renderOverlay();
+            renderOverlay();
 
-        renderVideoConnections();
+            renderVideoConnections();
+        }
     };
 
 
@@ -5478,10 +6780,8 @@ els.video.onended =
         els.play.textContent =
             '▶';
 
-
         state.currentTime =
             state.duration;
-
 
         renderAll();
     };
@@ -5490,23 +6790,23 @@ els.video.onended =
 els.play.onclick =
     async () => {
 
-        if(!canEdit()){
+        if (!canEdit()) {
             return;
         }
 
 
-        if(
+        if (
             els.video.paused
-        ){
+        ) {
 
-            try{
+            try {
 
                 await els.video.play();
 
                 els.play.textContent =
                     'Ⅱ';
 
-            }catch(error){
+            } catch (error) {
 
                 toast(
                     '再生できません',
@@ -5514,7 +6814,7 @@ els.play.onclick =
                 );
             }
 
-        }else{
+        } else {
 
             els.video.pause();
 
@@ -5536,32 +6836,49 @@ els.stop.onclick =
     };
 
 
-/*
- * タイムライン上をクリックして
- * 再生位置を変更。
- */
+els.zoom.oninput =
+    () => {
+
+        els.zoomValue.textContent =
+            Number(
+                els.zoom.value
+            ).toFixed(1) +
+            '×';
+
+        renderAxis();
+
+        updatePlayhead();
+    };
+
+
+/* ----------------------------------------
+   タイムラインクリック
+---------------------------------------- */
+
 els.content.addEventListener(
     'pointerdown',
     event => {
 
-        if(
+        if (
             event.target.closest(
                 '.element-bar'
+            ) ||
+            event.target.closest(
+                '.playhead'
             )
-        ){
-
+        ) {
             return;
         }
 
 
-        if(
+        if (
             event.target.closest(
                 '.axis-track'
             ) ||
             event.target.closest(
                 '.track-lane'
             )
-        ){
+        ) {
 
             seek(
                 xToTime(
@@ -5573,68 +6890,85 @@ els.content.addEventListener(
 );
 
 
-/*
- * 動画上で右クリックして要素を追加。
- */
+/* ----------------------------------------
+   動画クリック
+---------------------------------------- */
+
+els.videoWrap.addEventListener(
+    'click',
+    event => {
+
+        if (
+            event.target.closest(
+                '.overlay-element'
+            ) ||
+            event.target.closest(
+                '.video-connection'
+            ) ||
+            event.target.closest(
+                '.video-connection-hit'
+            ) ||
+            event.target.closest(
+                '.connection-handle'
+            )
+        ) {
+            return;
+        }
+
+
+        state.selectedIds.clear();
+
+        state.selectedConnectionId =
+            null;
+
+        renderAll();
+    }
+);
+
+
+/* ----------------------------------------
+   動画右クリック
+---------------------------------------- */
+
 els.videoWrap.addEventListener(
     'contextmenu',
     event => {
 
         event.preventDefault();
 
-
-        if(!canEdit()){
+        if (!canEdit()) {
             return;
         }
 
 
-        const video =
-            getVideoRect();
+        const rect =
+            els.video.getBoundingClientRect();
 
 
-        if(
-            event.clientX <
-                video.left ||
-            event.clientX >
-                video.left +
-                video.width ||
-            event.clientY <
-                video.top ||
-            event.clientY >
-                video.top +
-                video.height
-        ){
-
-            return;
-        }
+        const x =
+            clamp(
+                (
+                    event.clientX -
+                    rect.left
+                ) /
+                rect.width *
+                100,
+                0,
+                99
+            );
 
 
-        state.pendingXY = {
-
-            x:
-                clamp(
-                    (
-                        event.clientX -
-                        video.left
-                    ) /
-                    video.width *
-                    100,
-                    0,
-                    99
-                ),
-
-            y:
-                clamp(
-                    (
-                        event.clientY -
-                        video.top
-                    ) /
-                    video.height *
-                    100,
-                    0,
-                    99
-                )
-        };
+        const y =
+            clamp(
+                (
+                    event.clientY -
+                    rect.top
+                ) /
+                rect.height *
+                100,
+                0,
+                99
+            );
 
 
         state.contextElementId =
@@ -5642,6 +6976,11 @@ els.videoWrap.addEventListener(
 
         state.contextConnectionId =
             null;
+
+        state.pendingXY = {
+            x,
+            y
+        };
 
 
         openMenu(
@@ -5654,9 +6993,10 @@ els.videoWrap.addEventListener(
 );
 
 
-/*
- * 右クリックメニュー
- */
+/* ----------------------------------------
+   右クリックメニュー
+---------------------------------------- */
+
 $('ctxAddText').onclick =
     () =>
         createAt('text');
@@ -5675,9 +7015,9 @@ $('ctxAddSkip').onclick =
 $('ctxEdit').onclick =
     () => {
 
-        if(
+        if (
             state.contextElementId
-        ){
+        ) {
 
             openElement(
                 state.contextElementId
@@ -5691,20 +7031,20 @@ $('ctxEdit').onclick =
 $('ctxConnect').onclick =
     () => {
 
-        if(
-            state.selectedIds.size === 2
-        ){
+        if (
+            state.selectedIds.size ===
+            2
+        ) {
 
             connectSelected();
 
-        }else{
+        } else {
 
             toast(
                 '2要素を選択してください',
                 true
             );
         }
-
 
         closeMenu();
     };
@@ -5732,11 +7072,11 @@ document.addEventListener(
     'click',
     event => {
 
-        if(
+        if (
             !event.target.closest(
                 '.context-menu'
             )
-        ){
+        ) {
 
             closeMenu();
         }
@@ -5744,16 +7084,18 @@ document.addEventListener(
 );
 
 
-/*
- * キーボード操作
- */
+/* ----------------------------------------
+   キーボード
+---------------------------------------- */
+
 document.addEventListener(
     'keydown',
     event => {
 
-        if(
-            event.key === 'Escape'
-        ){
+        if (
+            event.key ===
+            'Escape'
+        ) {
 
             closeMenu();
 
@@ -5761,10 +7103,12 @@ document.addEventListener(
         }
 
 
-        if(
+        if (
             (
-                event.key === 'Delete' ||
-                event.key === 'Backspace'
+                event.key ===
+                'Delete' ||
+                event.key ===
+                'Backspace'
             ) &&
             ![
                 'INPUT',
@@ -5773,13 +7117,13 @@ document.addEventListener(
             ].includes(
                 document.activeElement.tagName
             )
-        ){
+        ) {
 
             deleteSelected();
         }
 
 
-        if(
+        if (
             event.key === ' ' &&
             ![
                 'INPUT',
@@ -5787,7 +7131,7 @@ document.addEventListener(
             ].includes(
                 document.activeElement.tagName
             )
-        ){
+        ) {
 
             event.preventDefault();
 
@@ -5797,9 +7141,10 @@ document.addEventListener(
 );
 
 
-/*
- * 要素編集モーダル
- */
+/* ----------------------------------------
+   モーダル
+---------------------------------------- */
+
 $('elementModalClose').onclick =
     closeElement;
 
@@ -5812,28 +7157,19 @@ $('elementModalSave').onclick =
     saveElement;
 
 
-/*
- * 保存データ
- */
 $('storageClose').onclick =
-    () => {
-
+    () =>
         els.storageModal.style.display =
             'none';
-    };
 
 
-/*
- * ウィンドウサイズ変更時。
- *
- * 動画サイズが変わると要素・接続線の
- * 表示位置も変わるため再描画する。
- */
+/* ----------------------------------------
+   リサイズ・スクロール
+---------------------------------------- */
+
 window.addEventListener(
     'resize',
     () => {
-
-        renderOverlay();
 
         renderVideoConnections();
 
@@ -5844,10 +7180,6 @@ window.addEventListener(
 );
 
 
-/*
- * スクロール時はタイムラインだけ更新。
- * 接続線は動画上なのでスクロールの影響を受けない。
- */
 els.scroll.addEventListener(
     'scroll',
     () => {
@@ -5857,11 +7189,33 @@ els.scroll.addEventListener(
 );
 
 
-/*
- * 初期状態。
- */
-els.empty.style.display =
-    'block';
+/* ----------------------------------------
+   描画ループ
+---------------------------------------- */
+
+function animationLoop() {
+
+    if (
+        state.selectedConnectionId
+    ) {
+
+        renderVideoConnections();
+    }
+
+    requestAnimationFrame(
+        animationLoop
+    );
+}
+
+
+animationLoop();
+
+
+/* ----------------------------------------
+   初期状態
+---------------------------------------- */
+
+renderRightMenu();
 
 </script>
 
