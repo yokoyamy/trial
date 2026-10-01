@@ -5,17 +5,21 @@ declare(strict_types=1);
  * 動画上直接編集ツール
  * Apache + PHP / index.php 1ファイル
  *
- * 必要ディレクトリ:
- *   ./data/projects/
+ * 編集データ:
+ *   サーバー ./data/projects/*.json
+ *   ブラウザ IndexedDB
  *
- * サーバー側には編集プロジェクト(JSON)のみ保存します。
- * 動画本体はブラウザ側IndexedDBに保存します。
+ * 動画本体:
+ *   ブラウザ IndexedDB
  *
- * v7
+ * 「プロジェクト書き出し」はJSON。
+ * MP4再エンコードは行わない。
  */
 
-const APP_VERSION = 7;
+const APP_VERSION = 10;
+const DB_VERSION = 3;
 const MAX_SERVER_PROJECTS = 20;
+
 const DATA_DIR = __DIR__ . DIRECTORY_SEPARATOR . 'data';
 const PROJECT_DIR = DATA_DIR . DIRECTORY_SEPARATOR . 'projects';
 
@@ -46,7 +50,7 @@ function ensureProjectDir(): bool
 
 function validProjectId(string $id): bool
 {
-    return (bool)preg_match('/^[A-Za-z0-9_-]{8,100}$/', $id);
+    return (bool)preg_match('/^[A-Za-z0-9_-]{8,120}$/', $id);
 }
 
 function projectPath(string $id): string
@@ -54,7 +58,7 @@ function projectPath(string $id): string
     return PROJECT_DIR . DIRECTORY_SEPARATOR . $id . '.json';
 }
 
-function getServerProjects(): array
+function readServerProjects(): array
 {
     if (!is_dir(PROJECT_DIR)) {
         return [];
@@ -63,13 +67,7 @@ function getServerProjects(): array
     $result = [];
 
     foreach (glob(PROJECT_DIR . DIRECTORY_SEPARATOR . '*.json') ?: [] as $file) {
-        $json = @file_get_contents($file);
-
-        if ($json === false) {
-            continue;
-        }
-
-        $data = json_decode($json, true);
+        $data = json_decode(@file_get_contents($file) ?: '', true);
 
         if (is_array($data) && isset($data['projectId'])) {
             $result[] = $data;
@@ -94,7 +92,6 @@ function projectSummary(array $project): array
         'projectId' => (string)($project['projectId'] ?? ''),
         'name' => (string)($project['name'] ?? '名称未設定'),
         'videoName' => (string)($project['videoName'] ?? ''),
-        'duration' => (float)($project['duration'] ?? 0),
         'savedAt' => (string)($project['savedAt'] ?? ''),
         'version' => (int)($project['version'] ?? 1),
         'storage' => 'server'
@@ -114,7 +111,7 @@ if (isset($_GET['api'])) {
             'version' => APP_VERSION,
             'serverWritable' => ensureProjectDir(),
             'serverLimit' => MAX_SERVER_PROJECTS,
-            'serverCount' => count(getServerProjects()),
+            'serverCount' => count(readServerProjects()),
             'php' => PHP_VERSION
         ]);
     }
@@ -124,7 +121,7 @@ if (isset($_GET['api'])) {
             'ok' => true,
             'projects' => array_map(
                 'projectSummary',
-                getServerProjects()
+                readServerProjects()
             ),
             'limit' => MAX_SERVER_PROJECTS
         ]);
@@ -149,10 +146,12 @@ if (isset($_GET['api'])) {
             ], 404);
         }
 
-        $json = @file_get_contents($file);
-        $project = $json === false ? null : json_decode($json, true);
+        $data = json_decode(
+            @file_get_contents($file) ?: '',
+            true
+        );
 
-        if (!is_array($project)) {
+        if (!is_array($data)) {
             jsonResponse([
                 'ok' => false,
                 'message' => '保存データが壊れています。'
@@ -161,7 +160,7 @@ if (isset($_GET['api'])) {
 
         jsonResponse([
             'ok' => true,
-            'project' => $project
+            'project' => $data
         ]);
     }
 
@@ -176,14 +175,14 @@ if (isset($_GET['api'])) {
         if (!ensureProjectDir()) {
             jsonResponse([
                 'ok' => false,
-                'message' =>
-                    'data/projects に書き込めません。' .
-                    'Apache/PHPの書込権限を確認してください。'
+                'message' => 'data/projects に書き込めません。'
             ], 500);
         }
 
-        $raw = file_get_contents('php://input') ?: '';
-        $payload = json_decode($raw, true);
+        $payload = json_decode(
+            file_get_contents('php://input') ?: '',
+            true
+        );
 
         if (!is_array($payload)) {
             jsonResponse([
@@ -195,11 +194,7 @@ if (isset($_GET['api'])) {
         $id = trim((string)($payload['projectId'] ?? ''));
 
         if ($id === '') {
-            try {
-                $id = 'project-' . bin2hex(random_bytes(10));
-            } catch (Throwable) {
-                $id = 'project-' . uniqid('', true);
-            }
+            $id = 'project-' . bin2hex(random_bytes(10));
         }
 
         if (!validProjectId($id)) {
@@ -221,20 +216,19 @@ if (isset($_GET['api'])) {
         if (mb_strlen($name) > 120) {
             jsonResponse([
                 'ok' => false,
-                'message' => 'プロジェクト名は120文字以内です。'
+                'message' => 'プロジェクト名は120文字以内にしてください。'
             ], 422);
         }
 
         $existing = is_file(projectPath($id));
-        $projects = getServerProjects();
+        $projects = readServerProjects();
 
         if (!$existing && count($projects) >= MAX_SERVER_PROJECTS) {
             jsonResponse([
                 'ok' => false,
                 'limit' => true,
                 'message' =>
-                    'サーバー保存上限に達しています。' .
-                    'ローカル保存を使用してください。'
+                    'サーバー保存上限に達しました。ローカル保存を使用してください。'
             ], 409);
         }
 
@@ -250,14 +244,18 @@ if (isset($_GET['api'])) {
             JSON_PRETTY_PRINT
         );
 
-        if (
-            $json === false ||
-            @file_put_contents(
-                projectPath($id),
-                $json,
-                LOCK_EX
-            ) === false
-        ) {
+        if ($json === false) {
+            jsonResponse([
+                'ok' => false,
+                'message' => 'JSON生成に失敗しました。'
+            ], 500);
+        }
+
+        if (@file_put_contents(
+            projectPath($id),
+            $json,
+            LOCK_EX
+        ) === false) {
             jsonResponse([
                 'ok' => false,
                 'message' => '編集データを保存できませんでした。'
@@ -286,7 +284,7 @@ if (isset($_GET['api'])) {
         );
 
         $id = is_array($payload)
-            ? trim((string)($payload['projectId'] ?? ''))
+            ? (string)($payload['projectId'] ?? '')
             : '';
 
         if (!validProjectId($id)) {
@@ -323,21 +321,22 @@ if (isset($_GET['api'])) {
 
 <style>
 :root{
-    --bg:#0e1013;
-    --panel:#181c21;
-    --panel2:#232830;
-    --panel3:#2b3139;
-    --border:#414952;
+    --bg:#101216;
+    --panel:#1b1e23;
+    --panel2:#252a30;
+    --border:#414750;
     --text:#f5f7fa;
-    --muted:#929ba6;
-    --blue:#267bd3;
-    --green:#277849;
-    --red:#a53b3b;
-    --orange:#d78225;
+    --muted:#9ca5af;
+    --blue:#176bb9;
+    --green:#277a47;
+    --red:#a73535;
     --yellow:#ffd447;
+    --orange:#e38b28;
 }
 
-*{box-sizing:border-box}
+*{
+    box-sizing:border-box;
+}
 
 html,
 body{
@@ -355,7 +354,9 @@ body{
         sans-serif;
 }
 
-body{overflow:hidden}
+body{
+    overflow:hidden;
+}
 
 button,
 input,
@@ -365,16 +366,16 @@ textarea{
 }
 
 button{
-    border:1px solid #555e68;
-    background:#30363d;
+    border:1px solid #565d66;
+    background:#30353c;
     color:#fff;
     border-radius:6px;
-    padding:7px 11px;
+    padding:7px 10px;
     cursor:pointer;
 }
 
 button:hover:not(:disabled){
-    background:#414850;
+    background:#424850;
 }
 
 button:disabled{
@@ -382,93 +383,91 @@ button:disabled{
     cursor:not-allowed;
 }
 
-button.primary{background:var(--blue)}
-button.success{background:var(--green)}
-button.danger{background:var(--red)}
-button.orange{background:#8d571d}
+button.primary{
+    background:var(--blue);
+}
+
+button.success{
+    background:var(--green);
+}
+
+button.danger{
+    background:var(--red);
+}
 
 input,
 select,
 textarea{
     width:100%;
-    padding:7px 8px;
     color:#fff;
-    background:#242a31;
-    border:1px solid #555e68;
+    background:#252a30;
+    border:1px solid #555c65;
     border-radius:5px;
+    padding:7px;
 }
 
 textarea{
-    min-height:100px;
+    min-height:90px;
     resize:vertical;
 }
 
-input[type=number]{
-    font-variant-numeric:tabular-nums;
+input[type=color]{
+    height:38px;
+    padding:3px;
 }
 
 .hidden{
     display:none!important;
 }
 
+header{
+    height:48px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:0 14px;
+    background:#1b1e22;
+    border-bottom:1px solid #353a41;
+}
+
+header h1{
+    margin:0;
+    font-size:15px;
+}
+
+#status{
+    color:#b6bec7;
+    font-size:12px;
+}
+
 #message{
     position:fixed;
+    top:58px;
     left:50%;
-    top:60px;
     transform:translateX(-50%);
-    z-index:20000;
+    z-index:10000;
     display:none;
     max-width:90vw;
-    padding:10px 17px;
+    padding:10px 16px;
     border-radius:7px;
-    background:#9e3d3d;
-    box-shadow:0 12px 40px #000c;
+    background:#983838;
+    box-shadow:0 10px 35px #000b;
     white-space:pre-wrap;
 }
 
 #message.ok{
-    background:#277448;
+    background:#287348;
 }
 
-header{
-    position:absolute;
-    left:0;
-    right:0;
-    top:0;
-    height:50px;
-    z-index:1000;
-    display:flex;
-    align-items:center;
-    gap:7px;
-    padding:0 9px;
-    background:#1a1e23;
-    border-bottom:1px solid #343a42;
-}
-
-header h1{
-    margin:0 8px 0 2px;
-    font-size:15px;
-    white-space:nowrap;
-}
-
-#projectName{
-    width:210px;
-}
-
-#status{
-    margin-left:auto;
-    color:#adb5be;
-    font-size:12px;
-    white-space:nowrap;
-}
+/* HOME */
 
 #home{
-    position:absolute;
-    inset:50px 0 0;
+    height:calc(100vh - 48px);
     display:flex;
     justify-content:center;
     align-items:center;
     padding:20px;
+    background:#111317;
 }
 
 .home-card{
@@ -476,30 +475,27 @@ header h1{
     max-height:90vh;
     overflow:auto;
     padding:25px;
-    background:var(--panel);
+    background:#1b1e23;
     border:1px solid var(--border);
     border-radius:10px;
+    box-shadow:0 15px 50px #0007;
 }
 
 .home-card h2{
     margin:0 0 8px;
 }
 
-.help{
+.home-card p{
     color:var(--muted);
-    font-size:12px;
-    line-height:1.65;
+    font-size:13px;
+    line-height:1.6;
 }
 
 .home-actions{
     display:flex;
     flex-wrap:wrap;
-    gap:7px;
+    gap:8px;
     margin-top:15px;
-}
-
-.project-list{
-    margin-top:20px;
 }
 
 .project{
@@ -507,10 +503,10 @@ header h1{
     justify-content:space-between;
     align-items:center;
     gap:10px;
-    padding:10px;
+    padding:11px;
     margin:7px 0;
-    border:1px solid #414952;
-    border-radius:6px;
+    border:1px solid #414750;
+    border-radius:7px;
 }
 
 .project-info{
@@ -519,33 +515,95 @@ header h1{
 
 .project-name{
     font-weight:600;
-    overflow:hidden;
-    white-space:nowrap;
-    text-overflow:ellipsis;
 }
 
 .project-meta{
-    margin-top:3px;
-    color:#8d96a0;
+    color:#929aa4;
     font-size:11px;
+    margin-top:3px;
 }
 
 .project-actions{
     display:flex;
     gap:5px;
-    flex-shrink:0;
 }
 
-#editor{
-    position:absolute;
-    inset:50px 0 0;
+/* RECORDER */
+
+#recorder{
+    position:fixed;
+    inset:48px 0 0;
+    z-index:100;
     display:none;
     flex-direction:column;
-    background:#08090b;
+    background:#000;
 }
 
-#videoArea{
-    position:relative;
+#previewWrap{
+    flex:1;
+    min-height:0;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+}
+
+#preview{
+    max-width:100%;
+    max-height:100%;
+}
+
+#recordToolbar{
+    min-height:58px;
+    display:flex;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:8px;
+    padding:8px 12px;
+    background:#1a1d21;
+    border-top:1px solid #33383f;
+}
+
+/* EDITOR */
+
+#editor{
+    position:fixed;
+    inset:0;
+    z-index:200;
+    display:none;
+    flex-direction:column;
+    background:#111;
+}
+
+.editor-top{
+    min-height:48px;
+    flex-shrink:0;
+    display:flex;
+    align-items:center;
+    gap:7px;
+    padding:6px 10px;
+    background:#1b1e22;
+    border-bottom:1px solid #363b42;
+}
+
+#editorProjectName{
+    width:220px;
+    font-weight:600;
+}
+
+#editorStatus{
+    color:#aeb6bf;
+    font-size:12px;
+    margin-left:auto;
+}
+
+.editor-main{
+    flex:1;
+    min-height:0;
+    display:flex;
+    flex-direction:column;
+}
+
+.video-area{
     flex:1;
     min-height:0;
     display:flex;
@@ -557,9 +615,9 @@ header h1{
 
 #videoStage{
     position:relative;
-    flex:none;
     background:#000;
-    box-shadow:0 0 0 1px #111;
+    line-height:0;
+    flex:none;
 }
 
 #recordedVideo{
@@ -569,9 +627,16 @@ header h1{
     object-fit:fill;
 }
 
+#overlay{
+    position:absolute;
+    inset:0;
+    pointer-events:none;
+}
+
 #objects{
     position:absolute;
     inset:0;
+    pointer-events:none;
 }
 
 #connectors{
@@ -585,9 +650,12 @@ header h1{
 
 .edit-object{
     position:absolute;
+    pointer-events:auto;
+    cursor:move;
     user-select:none;
     touch-action:none;
-    cursor:move;
+    line-height:normal;
+    overflow:visible;
 }
 
 .edit-object.selected{
@@ -596,22 +664,18 @@ header h1{
 }
 
 .edit-object.multi-selected{
-    outline:2px dashed #61c6ff;
+    outline:2px dashed #ffd447;
     outline-offset:3px;
-}
-
-.edit-object.connect-source{
-    outline:3px solid var(--yellow);
-    outline-offset:4px;
 }
 
 .edit-object.comment{
     display:flex;
     align-items:center;
+    justify-content:flex-start;
     padding:5px 8px;
-    overflow:hidden;
     white-space:pre-wrap;
     word-break:break-word;
+    overflow:hidden;
 }
 
 .edit-object.box{
@@ -619,16 +683,17 @@ header h1{
 }
 
 .edit-object.skip{
-    background:#d7822524;
+    border-style:dashed!important;
+    background:#e38b2818;
 }
 
 .skip-label{
     position:absolute;
-    left:5px;
-    top:5px;
+    left:4px;
+    top:4px;
     padding:2px 6px;
     color:#fff;
-    background:#a96218;
+    background:#c87518;
     border-radius:4px;
     font-size:11px;
     pointer-events:none;
@@ -636,101 +701,92 @@ header h1{
 
 .resize-handle{
     position:absolute;
-    right:-8px;
-    bottom:-8px;
-    width:16px;
-    height:16px;
+    right:-7px;
+    bottom:-7px;
+    width:14px;
+    height:14px;
     border-radius:50%;
-    border:1px solid #222;
     background:#fff;
+    border:1px solid #222;
     cursor:nwse-resize;
     display:none;
-    z-index:30;
 }
 
-.edit-object.selected .resize-handle,
-.edit-object.multi-selected .resize-handle{
+.edit-object.selected .resize-handle{
     display:block;
 }
 
 .connection-point{
     position:absolute;
-    width:13px;
-    height:13px;
-    margin:-6.5px;
+    width:14px;
+    height:14px;
+    margin:-7px;
     border:2px solid #fff;
     background:#247bd3;
     border-radius:50%;
     display:none;
-    z-index:50;
-    pointer-events:none;
+    z-index:20;
+    cursor:crosshair;
 }
 
 .edit-object.selected .connection-point,
-.edit-object.multi-selected .connection-point,
-.edit-object.connect-source .connection-point{
+.edit-object.multi-selected .connection-point{
     display:block;
 }
 
-.connection-point.p1{left:0;top:50%}
-.connection-point.p2{left:50%;top:0}
-.connection-point.p3{right:0;top:50%}
-.connection-point.p4{left:50%;bottom:0}
+.cp-n{left:50%;top:0}
+.cp-ne{left:100%;top:0}
+.cp-e{left:100%;top:50%}
+.cp-se{left:100%;top:100%}
+.cp-s{left:50%;top:100%}
+.cp-sw{left:0;top:100%}
+.cp-w{left:0;top:50%}
+.cp-nw{left:0;top:0}
 
 .connector{
     fill:none;
-    stroke-width:1.5;
     pointer-events:none;
 }
 
 .connector-hit{
     fill:none;
     stroke:transparent;
-    stroke-width:15;
+    stroke-width:16;
     pointer-events:stroke;
     cursor:pointer;
 }
 
 .connector.selected{
-    stroke:var(--yellow)!important;
-    stroke-width:2.5!important;
+    filter:drop-shadow(0 0 4px #ffd447);
 }
+
+/* TIMELINE */
 
 #timeline{
-    flex:none;
-    height:235px;
-    padding:8px 12px 10px;
-    background:#191d22;
-    border-top:1px solid #383e46;
-    overflow:hidden;
+    height:250px;
+    flex-shrink:0;
+    background:#191c20;
+    border-top:1px solid #363b42;
+    padding:8px 12px;
+    overflow:auto;
 }
 
-.timeline-head{
-    display:flex;
-    align-items:center;
-    gap:8px;
-    height:31px;
-}
-
-#timeReadout{
-    width:150px;
-    flex:none;
-    font-size:12px;
-    font-variant-numeric:tabular-nums;
+.seek-wrap{
+    position:relative;
+    padding:3px 0;
 }
 
 #seek{
-    flex:1;
-    min-width:0;
+    display:block;
+    width:100%;
+    margin:0;
 }
 
 .timeline-scale{
     position:relative;
-    height:20px;
-    margin-left:86px;
-    margin-right:0;
-    color:#89929d;
-    font-size:9px;
+    height:22px;
+    color:#8f969f;
+    font-size:10px;
 }
 
 .timeline-scale span{
@@ -741,169 +797,142 @@ header h1{
 
 .timeline-row{
     display:grid;
-    grid-template-columns:78px 1fr;
-    gap:8px;
-    margin-top:5px;
+    grid-template-columns:70px 1fr;
+    gap:7px;
+    margin-top:8px;
     align-items:center;
-}
-
-.timeline-name{
-    color:#c8ced5;
     font-size:11px;
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
+    color:#b0b7c0;
 }
 
 .track{
     position:relative;
-    height:31px;
-    border:1px solid #3b424a;
-    background:#272c32;
+    height:32px;
+    background:#292d33;
     border-radius:4px;
+    border:1px solid #3c4249;
+    overflow:visible;
 }
 
 .track-item{
     position:absolute;
-    top:3px;
-    height:23px;
-    min-width:12px;
+    top:4px;
+    height:22px;
+    min-width:7px;
     border-radius:3px;
-    cursor:grab;
-    user-select:none;
-    touch-action:none;
+    cursor:pointer;
 }
 
-.track-item:active{
-    cursor:grabbing;
+.track-item.comment{
+    background:#42a5f5;
 }
 
-.track-item.comment{background:#348fd1}
-.track-item.box{background:#c84a4a}
-.track-item.skip{background:#c87920}
-.track-item.connection{background:#8755b7}
+.track-item.box{
+    background:#ef5350;
+}
+
+.track-item.skip{
+    background:#e38b28;
+}
+
+.track-item.connection{
+    background:#8e68d6;
+}
 
 .track-item.selected{
-    box-shadow:0 0 0 2px #fff;
+    outline:2px solid #fff;
+    outline-offset:1px;
 }
 
-.track-time{
+.track-handle{
     position:absolute;
-    inset:0;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    padding:0 17px;
-    pointer-events:none;
-    color:#fff;
-    font-size:9px;
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
-}
-
-.timeline-handle{
-    position:absolute;
-    top:0;
-    width:12px;
-    height:100%;
+    top:-2px;
+    bottom:-2px;
+    width:9px;
     z-index:5;
     cursor:ew-resize;
 }
 
-.timeline-handle.left{left:-6px}
-.timeline-handle.right{right:-6px}
+.track-handle.left{
+    left:-4px;
+}
 
-.timeline-handle::after{
-    content:"";
+.track-handle.right{
+    right:-4px;
+}
+
+.track-time,
+.track-end-time{
     position:absolute;
-    left:4px;
+    top:-16px;
+    font-size:9px;
+    color:#dfe4e9;
+    white-space:nowrap;
+    pointer-events:none;
+}
+
+.track-time{
+    left:0;
+}
+
+.track-end-time{
+    right:0;
+}
+
+.track-name{
+    position:absolute;
+    left:5px;
+    right:5px;
     top:3px;
-    bottom:3px;
-    width:4px;
-    background:#fff;
-    border-radius:2px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    color:#fff;
+    font-size:9px;
+    pointer-events:none;
 }
 
-.modal-backdrop{
-    position:fixed;
-    inset:0;
-    z-index:15000;
-    display:none;
-    align-items:center;
+.timeline-help{
+    color:#777f89;
+    font-size:10px;
+    margin:9px 0 0 77px;
+}
+
+/* FOOTER */
+
+#editorFooter{
+    min-height:46px;
+    display:flex;
     justify-content:center;
-    padding:15px;
-    background:#000b;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:7px;
+    padding:6px 10px;
+    background:#1b1e22;
+    border-top:1px solid #383d44;
 }
 
-.modal{
-    width:min(680px,96vw);
-    max-height:92vh;
-    overflow:auto;
-    padding:18px;
-    background:#20252b;
-    border:1px solid #565d66;
-    border-radius:9px;
-    box-shadow:0 20px 70px #000c;
-}
-
-.modal h2{
-    margin:0 0 13px;
-    font-size:17px;
-}
-
-.grid2{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:0 10px;
-}
-
-.field{
-    display:block;
-    margin:8px 0;
-    color:#c6cdd5;
+.connection-status{
+    padding:6px 10px;
+    border-radius:5px;
+    background:#15181c;
+    border:1px solid #414750;
+    color:#d9dee4;
     font-size:12px;
 }
 
-.full{
-    grid-column:1/-1;
-}
-
-.modal-footer{
-    display:flex;
-    justify-content:flex-end;
-    gap:7px;
-    margin-top:14px;
-}
-
-.palette{
-    display:grid;
-    grid-template-columns:repeat(6,1fr);
-    gap:6px;
-    margin-top:5px;
-}
-
-.palette button{
-    height:30px;
-    padding:0;
-    border:2px solid #555;
-}
-
-.palette button.active{
-    border-color:#fff;
-    box-shadow:0 0 0 2px #267bd3;
-}
+/* CONTEXT MENU */
 
 #contextMenu{
     position:fixed;
-    z-index:12000;
+    z-index:7000;
     display:none;
-    width:255px;
+    width:270px;
     padding:5px;
-    background:#292e34;
-    border:1px solid #59606a;
+    border:1px solid #555b63;
     border-radius:7px;
-    box-shadow:0 15px 45px #000d;
+    background:#292d33;
+    box-shadow:0 12px 40px #000c;
 }
 
 #contextMenu button{
@@ -915,79 +944,104 @@ header h1{
 }
 
 #contextMenu button:hover{
-    background:#40464e;
+    background:#3c424a;
 }
 
 .context-separator{
     height:1px;
     margin:5px 0;
-    background:#454b53;
+    background:#464c54;
 }
 
-#dropHint{
-    position:absolute;
-    left:50%;
-    top:50%;
-    transform:translate(-50%,-50%);
-    z-index:5;
-    padding:12px 18px;
-    color:#fff;
-    background:#000a;
-    border:1px solid #555;
-    border-radius:7px;
-    pointer-events:none;
-}
+/* MODAL */
 
-#loading{
-    position:absolute;
+.modal-backdrop{
+    position:fixed;
     inset:0;
-    z-index:100;
+    z-index:8000;
     display:none;
     align-items:center;
     justify-content:center;
-    background:#000b;
-    color:#fff;
-    font-size:14px;
+    padding:20px;
+    background:#000a;
 }
 
-#connectionHint{
-    position:absolute;
-    left:10px;
-    top:10px;
-    z-index:20;
-    display:none;
-    padding:7px 10px;
-    background:#7c5c00dd;
-    border:1px solid #e6c54c;
+.modal{
+    width:min(700px,96vw);
+    max-height:92vh;
+    overflow:auto;
+    padding:17px;
+    background:#20242a;
+    border:1px solid #555b64;
+    border-radius:9px;
+    box-shadow:0 20px 70px #000c;
+}
+
+.modal h2{
+    margin:0 0 12px;
+    font-size:16px;
+}
+
+.modal-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:0 9px;
+}
+
+.full{
+    grid-column:1/-1;
+}
+
+.field{
+    display:block;
+    margin:7px 0;
+    color:#c5cad0;
+    font-size:12px;
+}
+
+.modal-footer{
+    display:flex;
+    justify-content:flex-end;
+    gap:7px;
+    margin-top:13px;
+}
+
+.color-grid{
+    display:grid;
+    grid-template-columns:repeat(6,32px);
+    gap:6px;
+    margin-top:6px;
+}
+
+.color-swatch{
+    width:32px;
+    height:32px;
+    padding:0;
     border-radius:5px;
-    font-size:11px;
-    pointer-events:none;
+    border:2px solid #666;
+}
+
+.help{
+    color:#999fa8;
+    font-size:12px;
+    line-height:1.55;
 }
 
 @media(max-width:800px){
-    header h1{
-        display:none;
-    }
-
-    #projectName{
-        width:140px;
-    }
-
-    header button{
-        padding:6px 7px;
-        font-size:11px;
-    }
-
     #timeline{
-        height:245px;
+        height:230px;
     }
 
-    .grid2{
-        grid-template-columns:1fr;
+    .editor-top{
+        overflow-x:auto;
     }
 
-    .full{
-        grid-column:auto;
+    #editorProjectName{
+        width:150px;
+    }
+
+    #editorStatus{
+        min-width:120px;
     }
 }
 </style>
@@ -995,344 +1049,553 @@ header h1{
 
 <body>
 
-<div id="message"></div>
-
 <header>
-    <h1>動画上直接編集</h1>
-
-    <input
-        id="projectName"
-        type="text"
-        maxlength="120"
-        placeholder="プロジェクト名"
-        disabled
-    >
-
-    <button id="newVideoBtn">動画を読み込む</button>
-    <button id="openProjectBtn">保存を開く</button>
-    <button id="saveServerBtn" class="success" disabled>保存</button>
-    <button id="saveLocalBtn" disabled>ローカル保存</button>
-    <button id="exportProjectBtn" disabled>編集データ</button>
-    <button id="exportVideoBtn" disabled>動画を書き出す</button>
-    <button id="backBtn">戻る</button>
-
-    <span id="status">待機中</span>
+    <h1>動画上直接編集ツール</h1>
+    <div id="status">待機中</div>
 </header>
+
+<div id="message"></div>
 
 <section id="home">
     <div class="home-card">
-        <h2>動画上直接編集ツール</h2>
+        <h2>動画を編集</h2>
 
-        <p class="help">
-            動画を読み込んだ後、動画画面内で右クリックすると要素を追加できます。
-            要素の上で右クリックすると編集・書式変更・削除ができます。
-        </p>
-
-        <p class="help">
-            Shiftキーを押しながら2つの要素をクリックして選択し、
-            右クリック →「選択した2要素を接続」で接続できます。
+        <p>
+            動画を読み込んでメタデータの取得が完了してから編集画面を開きます。
+            要素は動画上で直接追加・移動・リサイズ・編集できます。
         </p>
 
         <div class="home-actions">
-            <button id="homeVideoBtn" class="primary">
-                動画を読み込んで編集開始
+            <button id="newVideoBtn" class="primary">
+                動画ファイルを読み込む
             </button>
 
-            <button id="homeOpenBtn">
-                保存済みプロジェクトを開く
+            <button id="recordScreenBtn">
+                画面を録画
             </button>
 
-            <button id="homeImportBtn">
-                編集データを読込
+            <button id="manageBtn">
+                保存データ管理
             </button>
         </div>
 
-        <div class="project-list">
-            <h3>サーバー保存</h3>
-            <div id="projectList">
-                読み込み中...
-            </div>
-        </div>
+        <input
+            id="videoFile"
+            type="file"
+            accept="video/*"
+            class="hidden"
+        >
+
+        <div id="projectList"></div>
     </div>
+</section>
+
+<section id="recorder">
+
+    <div id="previewWrap">
+        <video
+            id="preview"
+            autoplay
+            muted
+            playsinline
+        ></video>
+    </div>
+
+    <div id="recordToolbar">
+        <label>
+            <input id="systemAudio" type="checkbox">
+            画面音声
+        </label>
+
+        <label>
+            <input id="microphone" type="checkbox">
+            マイク
+        </label>
+
+        <span id="timer">00:00:00</span>
+
+        <button id="startRecord" class="primary">
+            録画開始
+        </button>
+
+        <button id="pauseRecord" disabled>
+            一時停止
+        </button>
+
+        <button id="stopRecord" class="danger" disabled>
+            停止
+        </button>
+
+        <button id="recordCancel">
+            戻る
+        </button>
+    </div>
+
 </section>
 
 <section id="editor">
 
-    <div id="videoArea">
+    <div class="editor-top">
 
-        <div id="videoStage">
+        <button id="backHome">
+            閉じる
+        </button>
 
-            <video
-                id="recordedVideo"
-                preload="metadata"
-                playsinline
-                crossorigin="anonymous"
-            ></video>
+        <input
+            id="editorProjectName"
+            maxlength="120"
+            placeholder="プロジェクト名"
+        >
 
-            <svg id="connectors"></svg>
+        <button id="playVideo">
+            ▶ 再生
+        </button>
 
-            <div id="objects"></div>
+        <button id="pauseVideo">
+            ■ 停止
+        </button>
 
-            <div id="connectionHint">
-                Shift+クリックで2要素を選択してください。
-            </div>
+        <button id="saveServer" class="success">
+            保存
+        </button>
 
-            <div id="dropHint">
-                動画読み込み中...
+        <button id="saveLocal">
+            ローカル保存
+        </button>
+
+        <button id="exportJson">
+            JSON書き出し
+        </button>
+
+        <button id="importJson">
+            JSON読み込み
+        </button>
+
+        <input
+            id="jsonFile"
+            type="file"
+            accept=".json,application/json"
+            class="hidden"
+        >
+
+        <span id="editorStatus"></span>
+    </div>
+
+    <div class="editor-main">
+
+        <div class="video-area" id="videoArea">
+
+            <div id="videoStage">
+
+                <video
+                    id="recordedVideo"
+                    playsinline
+                    preload="metadata"
+                ></video>
+
+                <div id="overlay">
+                    <svg id="connectors"></svg>
+                    <div id="objects"></div>
+                </div>
+
             </div>
 
         </div>
 
-        <div id="loading">
-            読み込み中...
-        </div>
     </div>
 
     <div id="timeline">
 
-        <div class="timeline-head">
-
-            <span id="timeReadout">
-                00:00.000 / 00:00.000
-            </span>
-
+        <div class="seek-wrap">
             <input
                 id="seek"
                 type="range"
                 min="0"
-                max="1"
-                step="0.001"
+                max="0"
                 value="0"
+                step=".01"
                 disabled
             >
-
-            <button id="playBtn" disabled>▶</button>
         </div>
 
         <div id="timelineScale" class="timeline-scale"></div>
 
-        <div id="timelineRows"></div>
+        <div class="timeline-row">
+            <span>コメント</span>
+            <div id="commentTrack" class="track"></div>
+        </div>
+
+        <div class="timeline-row">
+            <span>強調枠</span>
+            <div id="boxTrack" class="track"></div>
+        </div>
+
+        <div class="timeline-row">
+            <span>スキップ</span>
+            <div id="skipTrack" class="track"></div>
+        </div>
+
+        <div class="timeline-row">
+            <span>接続線</span>
+            <div id="connectionTrack" class="track"></div>
+        </div>
+
+        <div class="timeline-help">
+            バー左右端をドラッグすると開始・終了時刻を変更できます。
+            バーをクリックするとその時刻へ移動します。
+        </div>
     </div>
+
+    <div id="editorFooter">
+
+        <span id="timeReadout">
+            00:00.00 / 00:00.00
+        </span>
+
+        <span id="connectionStatus" class="connection-status">
+            通常操作
+        </span>
+
+        <button id="clearSelection">
+            選択解除
+        </button>
+
+        <button id="deleteSelected" class="danger">
+            選択削除
+        </button>
+
+    </div>
+
 </section>
 
-<input
-    id="videoFile"
-    type="file"
-    accept="video/*"
-    class="hidden"
->
-
-<input
-    id="projectFile"
-    type="file"
-    accept=".json,application/json"
-    class="hidden"
->
+<!-- コンテキストメニュー -->
 
 <div id="contextMenu">
 
-    <button id="ctxAddText">＋ テキスト</button>
-    <button id="ctxAddBox">＋ 強調枠</button>
-    <button id="ctxAddSkip">＋ スキップ</button>
+    <button id="ctxAddComment">
+        ＋テキスト
+    </button>
+
+    <button id="ctxAddBox">
+        ＋強調枠
+    </button>
+
+    <button id="ctxAddSkip">
+        ＋スキップ
+    </button>
 
     <div class="context-separator"></div>
 
-    <button id="ctxEdit">編集</button>
-    <button id="ctxStyle">書式変更</button>
-    <button id="ctxDelete">削除</button>
+    <button id="ctxEdit">
+        編集・書式変更
+    </button>
 
-    <div class="context-separator"></div>
+    <button id="ctxDuplicate">
+        複製
+    </button>
+
+    <button id="ctxDelete" class="danger">
+        削除
+    </button>
 
     <button id="ctxConnect">
         選択した2要素を接続
     </button>
 
-    <button id="ctxDeleteConnection">
-        選択中の接続を削除
+    <button id="ctxConnectionEdit">
+        接続線を編集
     </button>
+
+    <button id="ctxConnectionDelete" class="danger">
+        接続線を削除
+    </button>
+
 </div>
 
-<div id="elementModal" class="modal-backdrop">
+<!-- 要素設定 -->
+
+<div id="objectModal" class="modal-backdrop">
 
     <div class="modal">
 
-        <h2 id="elementModalTitle">要素編集</h2>
+        <h2 id="objectModalTitle">
+            要素設定
+        </h2>
 
-        <div class="grid2">
+        <div class="modal-grid">
 
-            <label class="field">
-                種類
-                <select id="elementType">
-                    <option value="comment">テキスト</option>
-                    <option value="box">強調枠</option>
-                    <option value="skip">スキップ</option>
-                </select>
-            </label>
-
-            <label class="field">
-                名前
-                <input id="elementName" maxlength="80">
-            </label>
-
-            <label class="field full">
+            <label id="mTextField" class="field full">
                 テキスト
-                <textarea id="elementText"></textarea>
+                <textarea id="mText"></textarea>
             </label>
 
             <label class="field">
                 開始秒
-                <input id="elementStart" type="number" min="0" step="0.001">
+                <input
+                    id="mStart"
+                    type="number"
+                    min="0"
+                    step=".01"
+                >
             </label>
 
             <label class="field">
                 終了秒
-                <input id="elementEnd" type="number" min="0" step="0.001">
+                <input
+                    id="mEnd"
+                    type="number"
+                    min="0"
+                    step=".01"
+                >
             </label>
 
             <label class="field">
-                X (%)
-                <input id="elementX" type="number" min="0" max="100" step="0.1">
+                X %
+                <input
+                    id="mX"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step=".1"
+                >
             </label>
 
             <label class="field">
-                Y (%)
-                <input id="elementY" type="number" min="0" max="100" step="0.1">
+                Y %
+                <input
+                    id="mY"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step=".1"
+                >
             </label>
 
             <label class="field">
-                幅 (%)
-                <input id="elementW" type="number" min="1" max="100" step="0.1">
+                幅 %
+                <input
+                    id="mW"
+                    type="number"
+                    min=".5"
+                    max="100"
+                    step=".1"
+                >
             </label>
 
             <label class="field">
-                高さ (%)
-                <input id="elementH" type="number" min="1" max="100" step="0.1">
+                高さ %
+                <input
+                    id="mH"
+                    type="number"
+                    min=".5"
+                    max="100"
+                    step=".1"
+                >
             </label>
 
             <label class="field">
-                フォントサイズ
-                <input id="elementFontSize" type="number" min="8" max="200" step="1">
+                文字サイズ
+                <input
+                    id="mFontSize"
+                    type="number"
+                    min="6"
+                    max="200"
+                    step="1"
+                >
             </label>
 
             <label class="field">
-                線幅
-                <input id="elementBorderWidth" type="number" min="0" max="30" step="1">
-            </label>
-
-            <label class="field">
-                透明度
-                <input id="elementOpacity" type="number" min="0" max="1" step="0.05">
-            </label>
-
-            <label class="field">
-                文字色
-                <input id="elementTextColor" type="color">
-            </label>
-
-            <label class="field full">
-                枠線色
-                <div id="elementBorderPalette" class="palette"></div>
-            </label>
-
-            <label class="field">
-                枠線種類
-                <select id="elementBorderStyle">
-                    <option value="solid">実線</option>
-                    <option value="dashed">破線</option>
-                    <option value="dotted">点線</option>
+                文字太さ
+                <select id="mWeight">
+                    <option value="400">標準</option>
+                    <option value="500">中</option>
+                    <option value="600">太字</option>
+                    <option value="700">強調</option>
+                    <option value="800">極太</option>
                 </select>
             </label>
 
             <label class="field">
-                背景透明度
-                <input id="elementBgOpacity" type="number" min="0" max="1" step="0.05">
+                透明度 %
+                <input
+                    id="mOpacity"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                >
             </label>
+
+            <label class="field">
+                枠線幅
+                <input
+                    id="mBorderWidth"
+                    type="number"
+                    min="0"
+                    max="30"
+                    step="1"
+                >
+            </label>
+
+            <label class="field">
+                角丸
+                <input
+                    id="mRadius"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                >
+            </label>
+
+            <label class="field">
+                文字色
+                <input id="mColor" type="color">
+            </label>
+
+            <label class="field">
+                背景色
+                <input id="mBg" type="color">
+            </label>
+
+            <label class="field">
+                枠線色
+                <input id="mBorderColor" type="color">
+            </label>
+
+            <div class="field full">
+                12色パレット
+
+                <div id="colorGrid" class="color-grid"></div>
+            </div>
+
         </div>
 
         <div class="modal-footer">
-            <button id="elementCancel">キャンセル</button>
-            <button id="elementApply" class="primary">適用</button>
+            <button id="cancelObjectStyle">
+                キャンセル
+            </button>
+
+            <button
+                id="applyObjectStyle"
+                class="primary"
+            >
+                適用
+            </button>
         </div>
 
     </div>
 </div>
+
+<!-- 接続設定 -->
 
 <div id="connectionModal" class="modal-backdrop">
 
     <div class="modal">
 
-        <h2>接続設定</h2>
+        <h2>
+            接続線の設定
+        </h2>
 
-        <div class="grid2">
+        <div class="modal-grid">
+
+            <label class="field">
+                開始秒
+                <input
+                    id="cStart"
+                    type="number"
+                    min="0"
+                    step=".01"
+                >
+            </label>
+
+            <label class="field">
+                終了秒
+                <input
+                    id="cEnd"
+                    type="number"
+                    min="0"
+                    step=".01"
+                >
+            </label>
 
             <label class="field">
                 接続元
-                <input id="connectionFromName" disabled>
-            </label>
-
-            <label class="field">
-                接続先
-                <input id="connectionToName" disabled>
-            </label>
-
-            <label class="field">
-                接続元接点
-                <select id="connectionFromPoint">
-                    <option value="right">右</option>
-                    <option value="left">左</option>
-                    <option value="top">上</option>
-                    <option value="bottom">下</option>
+                <select id="cFromPoint">
+                    <option value="n">上</option>
+                    <option value="ne">右上</option>
+                    <option value="e">右</option>
+                    <option value="se">右下</option>
+                    <option value="s">下</option>
+                    <option value="sw">左下</option>
+                    <option value="w">左</option>
+                    <option value="nw">左上</option>
                 </select>
             </label>
 
             <label class="field">
-                接続先接点
-                <select id="connectionToPoint">
-                    <option value="left">左</option>
-                    <option value="right">右</option>
-                    <option value="top">上</option>
-                    <option value="bottom">下</option>
+                接続先
+                <select id="cToPoint">
+                    <option value="n">上</option>
+                    <option value="ne">右上</option>
+                    <option value="e">右</option>
+                    <option value="se">右下</option>
+                    <option value="s">下</option>
+                    <option value="sw">左下</option>
+                    <option value="w">左</option>
+                    <option value="nw">左上</option>
                 </select>
             </label>
 
             <label class="field">
                 線幅
-                <input id="connectionWidth" type="number" min="1" max="10" step="0.5">
+                <input
+                    id="cWidth"
+                    type="number"
+                    min="1"
+                    max="10"
+                    step=".5"
+                >
+            </label>
+
+            <label class="field">
+                色
+                <input id="cColor" type="color">
             </label>
 
             <label class="field">
                 線種
-                <select id="connectionStyle">
-                    <option value="solid">実線</option>
-                    <option value="dashed">破線</option>
-                    <option value="dotted">点線</option>
+                <select id="cDash">
+                    <option value="">実線</option>
+                    <option value="6 4">破線</option>
+                    <option value="2 4">点線</option>
                 </select>
             </label>
 
-            <label class="field full">
-                線色
-                <input id="connectionColor" type="color">
+            <label class="field">
+                曲がり
+                <input
+                    id="cCurve"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                >
             </label>
 
         </div>
 
         <div class="modal-footer">
-            <button id="connectionCancel">キャンセル</button>
-            <button id="connectionApply" class="primary">接続</button>
-        </div>
-    </div>
-</div>
+            <button id="cancelConnection">
+                キャンセル
+            </button>
 
-<div id="projectsModal" class="modal-backdrop">
-
-    <div class="modal">
-
-        <h2>保存済みプロジェクト</h2>
-
-        <div id="projectsModalList"></div>
-
-        <div class="modal-footer">
-            <button id="projectsClose">閉じる</button>
+            <button
+                id="applyConnection"
+                class="primary"
+            >
+                適用
+            </button>
         </div>
 
     </div>
@@ -1342,513 +1605,425 @@ header h1{
 'use strict';
 
 /* =========================================================
- * DOM
+ * 基本
  * ======================================================= */
 
 const $ = id => document.getElementById(id);
 
-const dom = {
-    home: $('home'),
-    editor: $('editor'),
-    videoArea: $('videoArea'),
-    stage: $('videoStage'),
-    video: $('recordedVideo'),
-    objects: $('objects'),
-    connectors: $('connectors'),
-    timelineRows: $('timelineRows'),
-    timelineScale: $('timelineScale'),
-    seek: $('seek'),
-    play: $('playBtn'),
-    readout: $('timeReadout'),
-    status: $('status'),
-    message: $('message'),
-    dropHint: $('dropHint'),
-    loading: $('loading'),
-    context: $('contextMenu'),
-    projectName: $('projectName'),
-    projectList: $('projectList'),
-    projectModalList: $('projectsModalList')
+const APP = {
+    version: <?= APP_VERSION ?>,
+    dbName: 'video_direct_editor_v10',
+    dbVersion: <?= DB_VERSION ?>
 };
 
-/* =========================================================
- * State
- * ======================================================= */
-
 const state = {
+    db: null,
     project: null,
-    videoFile: null,
+    videoBlob: null,
     videoUrl: '',
-    ready: false,
-    duration: 0,
-
-    selected: new Set(),
-    contextElementId: null,
-    contextConnectionId: null,
-    contextX: 50,
-    contextY: 50,
-
+    selected: null,
+    selectedType: null,
+    multiSelected: [],
+    contextTarget: null,
+    drag: null,
+    timelineDrag: null,
+    dirty: false,
     modalElementId: null,
     modalConnectionId: null,
-
-    pointer: null,
-    timelinePointer: null,
-
-    dirty: false,
-
-    db: null,
-    dbReady: false
+    pendingProject: null,
+    messageTimer: null,
+    recordStream: null,
+    recorder: null,
+    recordChunks: [],
+    recordTimer: null,
+    recordStartedAt: 0
 };
 
 const COLORS = [
     '#ffffff',
-    '#000000',
-    '#ff3b30',
-    '#ff9500',
-    '#ffcc00',
-    '#34c759',
-    '#00c7be',
-    '#32ade6',
-    '#007aff',
-    '#5856d6',
-    '#af52de',
-    '#ff2d55'
+    '#ff4d4d',
+    '#ff8a00',
+    '#ffd43b',
+    '#4cd964',
+    '#20c997',
+    '#00bcd4',
+    '#4dabf7',
+    '#5c7cfa',
+    '#845ef7',
+    '#be4bdb',
+    '#f06595'
 ];
 
 /* =========================================================
- * Utilities
+ * Utility
  * ======================================================= */
 
-function uid(prefix = 'id')
-{
-    if (window.crypto && crypto.randomUUID) {
-        return prefix + '-' + crypto.randomUUID();
-    }
-
-    return prefix + '-' +
-        Date.now().toString(36) + '-' +
-        Math.random().toString(36).slice(2);
+function clone(value){
+    return JSON.parse(JSON.stringify(value));
 }
 
-function clamp(value, min, max)
-{
-    return Math.max(min, Math.min(max, value));
+function uid(prefix = 'id'){
+    return prefix +
+        '-' +
+        Date.now().toString(36) +
+        '-' +
+        Math.random().toString(36).slice(2,10);
 }
 
-function num(value, fallback = 0)
-{
+function number(value,fallback = 0){
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
 }
 
-function formatTime(seconds)
-{
-    seconds = Math.max(0, num(seconds));
+function clamp(value,min,max){
+    if (max < min) {
+        return min;
+    }
 
-    const min = Math.floor(seconds / 60);
-    const sec = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 1000);
-
-    return (
-        String(min).padStart(2, '0') + ':' +
-        String(sec).padStart(2, '0') + '.' +
-        String(ms).padStart(3, '0')
+    return Math.min(
+        max,
+        Math.max(min,value)
     );
 }
 
-function showMessage(message, ok = false)
-{
-    dom.message.textContent = message;
-    dom.message.className = ok ? 'ok' : '';
-    dom.message.style.display = 'block';
+function formatTime(seconds){
+    const n = Math.max(
+        0,
+        number(seconds)
+    );
 
-    clearTimeout(showMessage.timer);
+    const min = Math.floor(n / 60);
+    const sec = n - min * 60;
 
-    showMessage.timer = setTimeout(() => {
-        dom.message.style.display = 'none';
-    }, 3500);
+    return String(min).padStart(2,'0') +
+        ':' +
+        sec.toFixed(2).padStart(5,'0');
 }
 
-function setStatus(message)
-{
-    dom.status.textContent = message;
+function nowISO(){
+    return new Date().toISOString();
 }
 
-function markDirty()
-{
-    if (!state.project) return;
-
-    state.dirty = true;
-    setStatus('未保存');
-}
-
-function deepClone(value)
-{
-    return JSON.parse(JSON.stringify(value));
-}
-
-function safeCapturePointer(element, event)
-{
-    if (!element || !event) return;
+function duration(){
+    const d = Number(
+        $('recordedVideo')?.duration
+    );
 
     if (
-        typeof element.setPointerCapture !== 'function' ||
-        typeof event.pointerId !== 'number'
+        Number.isFinite(d) &&
+        d > 0
     ) {
-        return;
+        return d;
     }
 
-    try {
-        if (!element.hasPointerCapture ||
-            !element.hasPointerCapture(event.pointerId)) {
-            element.setPointerCapture(event.pointerId);
-        }
-    } catch (_) {
-        /* PointerCaptureは補助機能なので失敗しても操作を止めない */
+    return number(
+        state.project?.duration,
+        0
+    );
+}
+
+function currentTime(){
+    return number(
+        $('recordedVideo')?.currentTime,
+        0
+    );
+}
+
+function setStatus(text){
+    $('status').textContent = text;
+}
+
+function setEditorStatus(text){
+    $('editorStatus').textContent = text;
+}
+
+function showMessage(text,ok = false){
+    const box = $('message');
+
+    box.textContent = text;
+    box.classList.toggle('ok',ok);
+    box.style.display = 'block';
+
+    clearTimeout(
+        state.messageTimer
+    );
+
+    state.messageTimer =
+        setTimeout(
+            () => {
+                box.style.display = 'none';
+            },
+            3500
+        );
+}
+
+function markDirty(){
+    state.dirty = true;
+
+    if (state.project) {
+        setEditorStatus('未保存の変更あり');
     }
 }
 
-function safeReleasePointer(element, event)
-{
-    if (!element || !event) return;
-
-    try {
-        if (
-            typeof element.releasePointerCapture === 'function' &&
-            typeof element.hasPointerCapture === 'function' &&
-            element.hasPointerCapture(event.pointerId)
-        ) {
-            element.releasePointerCapture(event.pointerId);
-        }
-    } catch (_) {}
+function elementById(id){
+    return state.project?.elements?.find(
+        e => e.id === id
+    ) || null;
 }
 
-function escapeHtml(value)
-{
-    return String(value)
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#039;');
+function connectionById(id){
+    return state.project?.connections?.find(
+        c => c.id === id
+    ) || null;
+}
+
+function visible(item,time){
+    return (
+        time >= number(item.start) &&
+        time < number(item.end)
+    );
 }
 
 /* =========================================================
  * Project
  * ======================================================= */
 
-function emptyProject()
-{
+function createEmptyProject(name,videoName){
     return {
-        version: <?= APP_VERSION ?>,
-        projectId: uid('project'),
-        name: '',
-        videoName: '',
-        videoType: '',
-        videoSize: 0,
-        duration: 0,
-        createdAt: new Date().toISOString(),
-        savedAt: '',
-        elements: [],
-        connections: []
+        version:APP.version,
+        projectId:uid('project'),
+        name:name || '無題プロジェクト',
+        videoName:videoName || '',
+        videoKey:'',
+        savedAt:'',
+        duration:0,
+        elements:[],
+        connections:[]
     };
 }
 
-function normalizeProject(project)
-{
-    const p = deepClone(project || emptyProject());
+function normalizeProject(project){
+    const p = clone(project || {});
 
-    if (!p.projectId) {
-        p.projectId = uid('project');
-    }
+    p.version = APP.version;
+    p.projectId =
+        String(
+            p.projectId ||
+            uid('project')
+        );
 
-    if (!Array.isArray(p.elements)) {
-        p.elements = [];
-    }
+    p.name =
+        String(
+            p.name ||
+            '無題プロジェクト'
+        );
 
-    if (!Array.isArray(p.connections)) {
-        p.connections = [];
-    }
+    p.videoName =
+        String(
+            p.videoName ||
+            ''
+        );
 
-    p.version = <?= APP_VERSION ?>;
+    p.videoKey =
+        String(
+            p.videoKey ||
+            ''
+        );
 
-    p.elements = p.elements.map(el => ({
-        id: el.id || uid('el'),
-        type: ['comment', 'box', 'skip'].includes(el.type)
-            ? el.type
-            : 'comment',
-        name: String(el.name || ''),
-        text: String(el.text || ''),
-        x: clamp(num(el.x, 30), 0, 100),
-        y: clamp(num(el.y, 30), 0, 100),
-        w: clamp(num(el.w, 25), 1, 100),
-        h: clamp(num(el.h, 15), 1, 100),
-        start: Math.max(0, num(el.start, 0)),
-        end: Math.max(0.01, num(el.end, 5)),
-        fontSize: clamp(num(el.fontSize, 28), 8, 200),
-        borderWidth: clamp(num(el.borderWidth, 2), 0, 30),
-        borderColor: el.borderColor || '#ff3b30',
-        borderStyle: el.borderStyle || 'solid',
-        textColor: el.textColor || '#ffffff',
-        opacity: clamp(num(el.opacity, 1), 0, 1),
-        bgOpacity: clamp(num(el.bgOpacity, 0), 0, 1)
-    }));
+    p.duration =
+        Math.max(
+            0,
+            number(p.duration)
+        );
 
-    p.connections = p.connections.filter(c =>
-        p.elements.some(e => e.id === c.from) &&
-        p.elements.some(e => e.id === c.to)
-    ).map(c => ({
-        id: c.id || uid('conn'),
-        from: c.from,
-        to: c.to,
-        fromPoint: c.fromPoint || 'right',
-        toPoint: c.toPoint || 'left',
-        color: c.color || '#ff3b30',
-        width: clamp(num(c.width, 1.5), 1, 10),
-        style: c.style || 'solid'
-    }));
+    p.elements =
+        Array.isArray(p.elements)
+            ? p.elements
+            : [];
+
+    p.connections =
+        Array.isArray(p.connections)
+            ? p.connections
+            : [];
+
+    p.elements =
+        p.elements.map(e => ({
+            id:String(e.id || uid('element')),
+            type:
+                ['comment','box','skip']
+                    .includes(e.type)
+                    ? e.type
+                    : 'comment',
+            text:String(e.text || ''),
+            x:number(e.x,10),
+            y:number(e.y,10),
+            w:number(e.w,25),
+            h:number(e.h,12),
+            start:number(e.start,0),
+            end:number(e.end,5),
+            style:{
+                color:e.style?.color || '#ffffff',
+                background:e.style?.background || '#000000',
+                borderColor:e.style?.borderColor || '#ffffff',
+                borderWidth:number(
+                    e.style?.borderWidth,
+                    e.type === 'box' ? 3 : 0
+                ),
+                radius:number(
+                    e.style?.radius,
+                    4
+                ),
+                fontSize:number(
+                    e.style?.fontSize,
+                    24
+                ),
+                fontWeight:number(
+                    e.style?.fontWeight,
+                    600
+                ),
+                opacity:number(
+                    e.style?.opacity,
+                    100
+                )
+            }
+        }));
+
+    p.connections =
+        p.connections.map(c => ({
+            id:String(c.id || uid('connection')),
+            from:String(c.from || ''),
+            to:String(c.to || ''),
+            fromPoint:c.fromPoint || 'e',
+            toPoint:c.toPoint || 'w',
+            start:number(c.start,0),
+            end:number(c.end,5),
+            color:c.color || '',
+            width:number(c.width,1.5),
+            dash:c.dash || '',
+            curve:number(c.curve,35)
+        }));
+
+    const d = p.duration;
+
+    p.elements.forEach(e => {
+        e.x = clamp(e.x,0,99);
+        e.y = clamp(e.y,0,99);
+        e.w = clamp(e.w,.5,100-e.x);
+        e.h = clamp(e.h,.5,100-e.y);
+
+        e.start =
+            clamp(
+                e.start,
+                0,
+                d || Number.MAX_SAFE_INTEGER
+            );
+
+        e.end =
+            clamp(
+                Math.max(e.start,e.end),
+                e.start,
+                d || Number.MAX_SAFE_INTEGER
+            );
+    });
+
+    p.connections =
+        p.connections.filter(
+            c =>
+                p.elements.some(e => e.id === c.from) &&
+                p.elements.some(e => e.id === c.to)
+        );
+
+    p.connections.forEach(c => {
+        c.start =
+            clamp(
+                c.start,
+                0,
+                d || Number.MAX_SAFE_INTEGER
+            );
+
+        c.end =
+            clamp(
+                Math.max(c.start,c.end),
+                c.start,
+                d || Number.MAX_SAFE_INTEGER
+            );
+    });
 
     return p;
-}
-
-function getElement(id)
-{
-    if (!state.project) return null;
-
-    return state.project.elements.find(el => el.id === id) || null;
-}
-
-function getConnection(id)
-{
-    if (!state.project) return null;
-
-    return state.project.connections.find(
-        connection => connection.id === id
-    ) || null;
-}
-
-function createElement(type, x, y)
-{
-    const duration = state.duration || 60;
-
-    const defaults = {
-        comment: {
-            name: 'テキスト',
-            text: 'ここを右クリックして編集',
-            w: 30,
-            h: 13,
-            borderColor: '#ffffff',
-            borderWidth: 2,
-            bgOpacity: 0.35
-        },
-        box: {
-            name: '強調枠',
-            text: '',
-            w: 35,
-            h: 25,
-            borderColor: '#ff3b30',
-            borderWidth: 3,
-            bgOpacity: 0
-        },
-        skip: {
-            name: 'スキップ',
-            text: 'SKIP',
-            w: 28,
-            h: 15,
-            borderColor: '#ff9500',
-            borderWidth: 2,
-            bgOpacity: 0.18
-        }
-    }[type];
-
-    return {
-        id: uid('el'),
-        type,
-        name: defaults.name,
-        text: defaults.text,
-        x: clamp(x, 0, 100 - defaults.w),
-        y: clamp(y, 0, 100 - defaults.h),
-        w: defaults.w,
-        h: defaults.h,
-        start: clamp(state.duration ? dom.video.currentTime : 0, 0, duration),
-        end: clamp(
-            (state.duration ? dom.video.currentTime : 0) + 5,
-            0.01,
-            duration
-        ),
-        fontSize: 28,
-        borderWidth: defaults.borderWidth,
-        borderColor: defaults.borderColor,
-        borderStyle: type === 'skip' ? 'dashed' : 'solid',
-        textColor: '#ffffff',
-        opacity: 1,
-        bgOpacity: defaults.bgOpacity
-    };
-}
-
-/* =========================================================
- * Video
- * ======================================================= */
-
-function resetVideo()
-{
-    if (state.videoUrl) {
-        URL.revokeObjectURL(state.videoUrl);
-        state.videoUrl = '';
-    }
-
-    state.videoFile = null;
-    state.ready = false;
-    state.duration = 0;
-
-    dom.video.removeAttribute('src');
-    dom.video.load();
-
-    dom.seek.disabled = true;
-    dom.play.disabled = true;
-    dom.dropHint.textContent = '動画を読み込んでください';
-    dom.dropHint.style.display = 'block';
-}
-
-async function loadVideoFile(file)
-{
-    if (!file) return;
-
-    if (!file.type.startsWith('video/')) {
-        showMessage('動画ファイルを選択してください。');
-        return;
-    }
-
-    state.ready = false;
-    state.videoFile = file;
-
-    dom.loading.style.display = 'flex';
-    dom.dropHint.style.display = 'none';
-
-    if (state.videoUrl) {
-        URL.revokeObjectURL(state.videoUrl);
-    }
-
-    state.videoUrl = URL.createObjectURL(file);
-
-    dom.video.src = state.videoUrl;
-    dom.video.load();
-
-    try {
-        await new Promise((resolve, reject) => {
-            const onLoaded = () => {
-                cleanup();
-                resolve();
-            };
-
-            const onError = () => {
-                cleanup();
-                reject(new Error('動画を読み込めませんでした。'));
-            };
-
-            const cleanup = () => {
-                dom.video.removeEventListener('loadedmetadata', onLoaded);
-                dom.video.removeEventListener('error', onError);
-            };
-
-            dom.video.addEventListener('loadedmetadata', onLoaded, {
-                once: true
-            });
-
-            dom.video.addEventListener('error', onError, {
-                once: true
-            });
-        });
-
-        if (!Number.isFinite(dom.video.duration) ||
-            dom.video.duration <= 0) {
-            throw new Error('動画の長さを取得できませんでした。');
-        }
-
-        state.duration = dom.video.duration;
-        state.ready = true;
-
-        if (!state.project) {
-            state.project = emptyProject();
-        }
-
-        state.project.videoName = file.name;
-        state.project.videoType = file.type;
-        state.project.videoSize = file.size;
-        state.project.duration = state.duration;
-
-        if (!state.project.name) {
-            state.project.name =
-                file.name.replace(/\.[^.]+$/, '');
-        }
-
-        dom.projectName.value = state.project.name;
-
-        dom.seek.min = '0';
-        dom.seek.max = String(state.duration);
-        dom.seek.step = '0.001';
-        dom.seek.value = '0';
-        dom.seek.disabled = false;
-        dom.play.disabled = false;
-
-        dom.dropHint.style.display = 'none';
-        setStatus('編集可能');
-        markDirty();
-
-        renderAll();
-        await saveVideoToIndexedDB(file);
-
-        showMessage(
-            '動画の読み込みが完了しました。編集できます。',
-            true
-        );
-    } catch (error) {
-        state.ready = false;
-        dom.dropHint.textContent = '動画を読み込めませんでした';
-        dom.dropHint.style.display = 'block';
-
-        showMessage(error.message || '動画読み込みエラー');
-    } finally {
-        dom.loading.style.display = 'none';
-    }
 }
 
 /* =========================================================
  * IndexedDB
  * ======================================================= */
 
-const DB_NAME = 'DirectVideoEditorDB';
-const DB_VERSION = 2;
-
-function openDB()
-{
-    if (state.dbReady && state.db) {
-        return Promise.resolve(state.db);
-    }
-
-    return new Promise((resolve, reject) => {
-
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
+function openDB(){
+    return new Promise((resolve,reject)=>{
+        const request =
+            indexedDB.open(
+                APP.dbName,
+                APP.dbVersion
+            );
 
         request.onupgradeneeded = event => {
-            const db = event.target.result;
+            const db = request.result;
 
-            if (!db.objectStoreNames.contains('videos')) {
-                db.createObjectStore('videos', {
-                    keyPath: 'id'
-                });
+            if (
+                db.objectStoreNames.contains('videos')
+            ) {
+                const existing =
+                    event.target.transaction.objectStore(
+                        'videos'
+                    );
+
+                if (
+                    existing.keyPath !== 'key'
+                ) {
+                    db.deleteObjectStore('videos');
+                }
             }
 
-            if (!db.objectStoreNames.contains('projects')) {
-                db.createObjectStore('projects', {
-                    keyPath: 'id'
-                });
+            if (
+                db.objectStoreNames.contains('projects')
+            ) {
+                const existing =
+                    event.target.transaction.objectStore(
+                        'projects'
+                    );
+
+                if (
+                    existing.keyPath !== 'projectId'
+                ) {
+                    db.deleteObjectStore('projects');
+                }
+            }
+
+            if (
+                !db.objectStoreNames.contains('projects')
+            ) {
+                db.createObjectStore(
+                    'projects',
+                    {keyPath:'projectId'}
+                );
+            }
+
+            if (
+                !db.objectStoreNames.contains('videos')
+            ) {
+                db.createObjectStore(
+                    'videos',
+                    {keyPath:'key'}
+                );
             }
         };
 
         request.onsuccess = () => {
             state.db = request.result;
-            state.dbReady = true;
-            resolve(request.result);
+
+            state.db.onversionchange = () => {
+                state.db.close();
+            };
+
+            resolve(state.db);
         };
 
         request.onerror = () => {
@@ -1860,113 +2035,2618 @@ function openDB()
     });
 }
 
-async function idbPut(storeName, data)
-{
-    const db = await openDB();
-
-    return new Promise((resolve, reject) => {
-
-        if (!data || !data.id) {
+function idbPut(store,value){
+    return new Promise((resolve,reject)=>{
+        if (!state.db) {
             reject(
                 new Error(
-                    'IndexedDB保存データにidがありません。'
+                    'IndexedDBが初期化されていません。'
                 )
             );
             return;
         }
 
-        const tx = db.transaction(storeName, 'readwrite');
-        const store = tx.objectStore(storeName);
+        const tx =
+            state.db.transaction(
+                store,
+                'readwrite'
+            );
 
-        let request;
+        tx.objectStore(store).put(value);
 
-        try {
-            request = store.put(data);
-        } catch (error) {
-            reject(error);
-            return;
-        }
+        tx.oncomplete =
+            () => resolve();
 
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () =>
-            reject(request.error || new Error('IndexedDB保存失敗'));
+        tx.onerror =
+            () => reject(
+                tx.error ||
+                new Error('IndexedDB保存エラー')
+            );
 
-        tx.onerror = () =>
-            reject(tx.error || new Error('IndexedDB transaction error'));
+        tx.onabort =
+            () => reject(
+                tx.error ||
+                new Error('IndexedDB保存が中断されました。')
+            );
     });
 }
 
-async function idbGet(storeName, id)
-{
-    const db = await openDB();
+function idbGet(store,key){
+    return new Promise((resolve,reject)=>{
+        const tx =
+            state.db.transaction(
+                store,
+                'readonly'
+            );
 
-    return new Promise((resolve, reject) => {
+        const request =
+            tx.objectStore(store).get(key);
 
-        const tx = db.transaction(storeName, 'readonly');
-        const request = tx.objectStore(storeName).get(id);
+        request.onsuccess =
+            () => resolve(
+                request.result || null
+            );
 
-        request.onsuccess = () => resolve(request.result || null);
-        request.onerror = () =>
-            reject(request.error || new Error('IndexedDB読込失敗'));
+        request.onerror =
+            () => reject(
+                request.error
+            );
     });
 }
 
-async function saveVideoToIndexedDB(file)
-{
-    if (!file) return;
+function idbGetAll(store){
+    return new Promise((resolve,reject)=>{
+        const tx =
+            state.db.transaction(
+                store,
+                'readonly'
+            );
 
-    try {
-        await idbPut('videos', {
-            id: state.project.projectId,
-            projectId: state.project.projectId,
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            file
-        });
-    } catch (error) {
-        console.warn('video IndexedDB save:', error);
-        showMessage(
-            '動画本体をブラウザ保存できませんでした。' +
-            '編集データ自体は保存できます。'
-        );
-    }
+        const request =
+            tx.objectStore(store).getAll();
+
+        request.onsuccess =
+            () => resolve(
+                request.result || []
+            );
+
+        request.onerror =
+            () => reject(
+                request.error
+            );
+    });
 }
 
-async function loadVideoFromIndexedDB(projectId)
-{
-    const item = await idbGet('videos', projectId);
+function idbDelete(store,key){
+    return new Promise((resolve,reject)=>{
+        const tx =
+            state.db.transaction(
+                store,
+                'readwrite'
+            );
 
-    if (!item || !item.file) {
-        throw new Error(
-            '保存された動画本体がブラウザにありません。' +
-            '元の動画を読み込んでください。'
-        );
-    }
+        tx.objectStore(store).delete(key);
 
-    await loadVideoFile(item.file);
+        tx.oncomplete =
+            () => resolve();
+
+        tx.onerror =
+            () => reject(tx.error);
+    });
 }
 
 /* =========================================================
- * Local project
+ * Video loading
  * ======================================================= */
 
-async function saveProjectToIndexedDB()
-{
-    if (!state.project) return;
+function chooseVideo(){
+    $('videoFile')?.click();
+}
 
-    await idbPut('projects', {
-        id: state.project.projectId,
-        projectId: state.project.projectId,
-        project: deepClone(state.project),
-        savedAt: new Date().toISOString()
+function validateVideoBlob(blob){
+    return new Promise((resolve,reject)=>{
+        const video =
+            document.createElement('video');
+
+        const url =
+            URL.createObjectURL(blob);
+
+        let done = false;
+
+        const cleanup = () => {
+            if (done) return;
+
+            done = true;
+
+            clearTimeout(timer);
+
+            URL.revokeObjectURL(url);
+
+            video.removeAttribute('src');
+            video.load();
+        };
+
+        const timer =
+            setTimeout(()=>{
+                cleanup();
+
+                reject(
+                    new Error(
+                        '動画の読み込みがタイムアウトしました。'
+                    )
+                );
+            },15000);
+
+        video.preload = 'metadata';
+        video.muted = true;
+        video.playsInline = true;
+
+        video.onloadedmetadata = () => {
+            const d =
+                Number(video.duration);
+
+            if (
+                !Number.isFinite(d) ||
+                d <= 0
+            ) {
+                cleanup();
+
+                reject(
+                    new Error(
+                        '動画の長さを取得できませんでした。'
+                    )
+                );
+
+                return;
+            }
+
+            const result = {
+                duration:d,
+                width:video.videoWidth,
+                height:video.videoHeight
+            };
+
+            cleanup();
+            resolve(result);
+        };
+
+        video.onerror = () => {
+            cleanup();
+
+            reject(
+                new Error(
+                    '動画ファイルをブラウザで再生できません。'
+                )
+            );
+        };
+
+        video.src = url;
+        video.load();
     });
 }
 
-function downloadBlob(blob, filename)
-{
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+async function saveVideoBlob(blob,name,type){
+    const key = uid('video');
+
+    await idbPut(
+        'videos',
+        {
+            key,
+            name,
+            type:type || blob.type || 'video/mp4',
+            size:blob.size,
+            savedAt:nowISO(),
+            blob
+        }
+    );
+
+    return key;
+}
+
+async function handleVideoFile(file){
+    if (!file) return;
+
+    if (
+        !file.type ||
+        !file.type.startsWith('video/')
+    ) {
+        showMessage(
+            '動画ファイルを選択してください。'
+        );
+        return;
+    }
+
+    try{
+        setStatus(
+            '動画を確認しています…'
+        );
+
+        /*
+         * 先に動画そのもののメタデータを取得する。
+         * IndexedDB保存は後。
+         */
+        const metadata =
+            await validateVideoBlob(file);
+
+        let project;
+
+        if (state.pendingProject) {
+            project =
+                normalizeProject(
+                    state.pendingProject
+                );
+
+            project.videoName =
+                file.name;
+
+            state.pendingProject =
+                null;
+        } else {
+            project =
+                createEmptyProject(
+                    file.name.replace(
+                        /\.[^.]+$/,
+                        ''
+                    ),
+                    file.name
+                );
+        }
+
+        project.duration =
+            metadata.duration;
+
+        /*
+         * ここで編集画面を開ける。
+         * IDB保存失敗を編集開始の条件にしない。
+         */
+        await openEditor(
+            project,
+            file,
+            metadata
+        );
+
+        /*
+         * 動画本体の永続化は編集開始後に行う。
+         */
+        try{
+            const key =
+                await saveVideoBlob(
+                    file,
+                    file.name,
+                    file.type
+                );
+
+            state.project.videoKey =
+                key;
+
+            markDirty();
+
+            setEditorStatus(
+                '編集可能 / 動画本体保存済み'
+            );
+        }catch(saveError){
+            console.error(saveError);
+
+            setEditorStatus(
+                '編集可能 / 動画本体は一時使用中'
+            );
+
+            showMessage(
+                '編集は開始できますが、動画本体のローカル保存に失敗しました。' +
+                '\nブラウザのストレージ容量やIndexedDBを確認してください。'
+            );
+        }
+
+        showMessage(
+            '動画の読み込みが完了しました。編集できます。',
+            true
+        );
+
+    }catch(error){
+        console.error(error);
+
+        state.pendingProject = null;
+
+        showMessage(
+            '動画を読み込めませんでした：' +
+            error.message
+        );
+
+        setStatus(
+            '読み込み失敗'
+        );
+    }
+}
+
+/* =========================================================
+ * Editor
+ * ======================================================= */
+
+async function openEditor(project,blob,metadata = null){
+    if (!blob && project.videoKey) {
+        const record =
+            await idbGet(
+                'videos',
+                project.videoKey
+            );
+
+        if (record?.blob) {
+            blob = record.blob;
+        }
+    }
+
+    if (!blob) {
+        throw new Error(
+            '編集対象の動画本体が見つかりません。'
+        );
+    }
+
+    if (!metadata) {
+        metadata =
+            await validateVideoBlob(blob);
+    }
+
+    if (
+        !Number.isFinite(metadata.duration) ||
+        metadata.duration <= 0
+    ) {
+        throw new Error(
+            '動画の長さを取得できませんでした。'
+        );
+    }
+
+    state.project =
+        normalizeProject(project);
+
+    state.project.duration =
+        metadata.duration;
+
+    state.videoBlob =
+        blob;
+
+    if (state.videoUrl) {
+        URL.revokeObjectURL(
+            state.videoUrl
+        );
+    }
+
+    state.videoUrl =
+        URL.createObjectURL(blob);
+
+    const video =
+        $('recordedVideo');
+
+    video.pause();
+
+    video.src =
+        state.videoUrl;
+
+    video.load();
+
+    state.selected = null;
+    state.selectedType = null;
+    state.multiSelected = [];
+    state.drag = null;
+    state.timelineDrag = null;
+    state.dirty = false;
+
+    $('editorProjectName').value =
+        state.project.name;
+
+    $('seek').min = '0';
+    $('seek').max =
+        String(metadata.duration);
+    $('seek').step = '.01';
+    $('seek').value = '0';
+    $('seek').disabled = false;
+
+    state.project.elements.forEach(e=>{
+        e.start =
+            clamp(
+                e.start,
+                0,
+                metadata.duration
+            );
+
+        e.end =
+            clamp(
+                Math.max(e.start,e.end),
+                e.start,
+                metadata.duration
+            );
+    });
+
+    state.project.connections.forEach(c=>{
+        c.start =
+            clamp(
+                c.start,
+                0,
+                metadata.duration
+            );
+
+        c.end =
+            clamp(
+                Math.max(c.start,c.end),
+                c.start,
+                metadata.duration
+            );
+    });
+
+    $('home').style.display = 'none';
+    $('recorder').style.display = 'none';
+    $('editor').style.display = 'flex';
+
+    setStatus('編集可能');
+
+    setEditorStatus(
+        '編集可能'
+    );
+
+    updateStageSize();
+    renderAll();
+}
+
+/* =========================================================
+ * Stage
+ * ======================================================= */
+
+function updateStageSize(){
+    const video =
+        $('recordedVideo');
+
+    const area =
+        $('videoArea');
+
+    const stage =
+        $('videoStage');
+
+    if (
+        !video ||
+        !area ||
+        !stage ||
+        !video.videoWidth ||
+        !video.videoHeight
+    ) {
+        return;
+    }
+
+    const ratio =
+        video.videoWidth /
+        video.videoHeight;
+
+    const maxW =
+        Math.max(
+            100,
+            area.clientWidth - 20
+        );
+
+    const maxH =
+        Math.max(
+            100,
+            area.clientHeight - 20
+        );
+
+    let w =
+        maxW;
+
+    let h =
+        w / ratio;
+
+    if (h > maxH) {
+        h = maxH;
+        w = h * ratio;
+    }
+
+    stage.style.width =
+        `${Math.floor(w)}px`;
+
+    stage.style.height =
+        `${Math.floor(h)}px`;
+}
+
+/* =========================================================
+ * Selection
+ * ======================================================= */
+
+function selectNone(){
+    state.selected = null;
+    state.selectedType = null;
+    state.multiSelected = [];
+
+    renderAll();
+}
+
+function selectElement(id,shift = false){
+    const element =
+        elementById(id);
+
+    if (!element) return;
+
+    if (shift) {
+        if (
+            state.multiSelected.includes(id)
+        ) {
+            state.multiSelected =
+                state.multiSelected.filter(
+                    x => x !== id
+                );
+        } else if (
+            state.multiSelected.length < 2
+        ) {
+            state.multiSelected.push(id);
+        } else {
+            state.multiSelected =
+                [
+                    state.multiSelected[1],
+                    id
+                ];
+        }
+
+        state.selected =
+            id;
+
+        state.selectedType =
+            'element';
+
+        renderAll();
+        updateConnectionStatus();
+        return;
+    }
+
+    state.multiSelected = [id];
+    state.selected = id;
+    state.selectedType = 'element';
+
+    renderAll();
+}
+
+function selectConnection(id){
+    if (!connectionById(id)) return;
+
+    state.selected = id;
+    state.selectedType = 'connection';
+    state.multiSelected = [];
+
+    renderAll();
+}
+
+/* =========================================================
+ * Add element
+ * ======================================================= */
+
+function addElement(type,x = null,y = null){
+    const d =
+        duration();
+
+    if (!d) {
+        showMessage(
+            '動画の読み込みが完了していません。'
+        );
+        return;
+    }
+
+    const element = {
+        id:uid('element'),
+        type,
+        text:
+            type === 'comment'
+                ? 'テキスト'
+                : type === 'skip'
+                    ? 'スキップ'
+                    : '',
+        x:
+            x === null
+                ? 10
+                : clamp(x,0,80),
+        y:
+            y === null
+                ? 10
+                : clamp(y,0,80),
+        w:
+            type === 'box'
+                ? 35
+                : 25,
+        h:
+            type === 'box'
+                ? 25
+                : 12,
+        start:
+            clamp(
+                currentTime(),
+                0,
+                d
+            ),
+        end:
+            clamp(
+                currentTime() + 5,
+                0,
+                d
+            ),
+        style:{
+            color:
+                type === 'box'
+                    ? '#ff4d4d'
+                    : type === 'skip'
+                        ? '#e38b28'
+                        : '#ffffff',
+            background:
+                type === 'comment'
+                    ? '#000000'
+                    : 'transparent',
+            borderColor:
+                type === 'box'
+                    ? '#ff4d4d'
+                    : type === 'skip'
+                        ? '#e38b28'
+                        : '#ffffff',
+            borderWidth:
+                type === 'box'
+                    ? 3
+                    : type === 'skip'
+                        ? 2
+                        : 0,
+            radius:4,
+            fontSize:24,
+            fontWeight:600,
+            opacity:100
+        }
+    };
+
+    state.project.elements.push(
+        element
+    );
+
+    selectElement(
+        element.id
+    );
+
+    markDirty();
+    renderAll();
+
+    showMessage(
+        '要素を追加しました。',
+        true
+    );
+}
+
+/* =========================================================
+ * Render objects
+ * ======================================================= */
+
+const POINTS = [
+    'n',
+    'ne',
+    'e',
+    'se',
+    's',
+    'sw',
+    'w',
+    'nw'
+];
+
+function renderObjects(){
+    const container =
+        $('objects');
+
+    container.innerHTML = '';
+
+    if (!state.project) {
+        return;
+    }
+
+    const time =
+        currentTime();
+
+    state.project.elements.forEach(element=>{
+        if (!visible(element,time)) {
+            return;
+        }
+
+        const object =
+            document.createElement('div');
+
+        object.className =
+            'edit-object ' +
+            element.type;
+
+        if (
+            state.selected === element.id &&
+            state.selectedType === 'element'
+        ) {
+            object.classList.add('selected');
+        }
+
+        if (
+            state.multiSelected.includes(
+                element.id
+            )
+        ) {
+            object.classList.add(
+                'multi-selected'
+            );
+        }
+
+        object.dataset.id =
+            element.id;
+
+        object.style.left =
+            `${element.x}%`;
+
+        object.style.top =
+            `${element.y}%`;
+
+        object.style.width =
+            `${element.w}%`;
+
+        object.style.height =
+            `${element.h}%`;
+
+        const s =
+            element.style || {};
+
+        object.style.color =
+            s.color || '#fff';
+
+        object.style.background =
+            element.type === 'comment'
+                ? (
+                    s.background === 'transparent'
+                        ? 'transparent'
+                        : hexToRgba(
+                            s.background || '#000000',
+                            number(
+                                s.opacity,
+                                100
+                            ) / 100
+                        )
+                )
+                : 'transparent';
+
+        object.style.border =
+            `${number(s.borderWidth,0)}px solid ${s.borderColor || '#fff'}`;
+
+        object.style.borderRadius =
+            `${number(s.radius,4)}px`;
+
+        object.style.fontSize =
+            `${number(s.fontSize,24)}px`;
+
+        object.style.fontWeight =
+            String(
+                number(
+                    s.fontWeight,
+                    600
+                )
+            );
+
+        if (
+            element.type === 'comment'
+        ) {
+            object.textContent =
+                element.text ||
+                'テキスト';
+        }
+
+        if (
+            element.type === 'skip'
+        ) {
+            const label =
+                document.createElement('div');
+
+            label.className =
+                'skip-label';
+
+            label.textContent =
+                'SKIP';
+
+            object.appendChild(
+                label
+            );
+        }
+
+        if (
+            element.type === 'box'
+        ) {
+            object.style.background =
+                'transparent';
+        }
+
+        const resize =
+            document.createElement('div');
+
+        resize.className =
+            'resize-handle';
+
+        object.appendChild(
+            resize
+        );
+
+        POINTS.forEach(point=>{
+            const cp =
+                document.createElement('div');
+
+            cp.className =
+                `connection-point cp-${point}`;
+
+            cp.dataset.point =
+                point;
+
+            object.appendChild(cp);
+        });
+
+        container.appendChild(
+            object
+        );
+    });
+}
+
+function hexToRgba(hex,alpha){
+    const value =
+        String(hex || '')
+            .replace('#','');
+
+    if (
+        !/^[0-9a-f]{6}$/i.test(value)
+    ) {
+        return hex;
+    }
+
+    const r =
+        parseInt(
+            value.slice(0,2),
+            16
+        );
+
+    const g =
+        parseInt(
+            value.slice(2,4),
+            16
+        );
+
+    const b =
+        parseInt(
+            value.slice(4,6),
+            16
+        );
+
+    return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/* =========================================================
+ * Connection
+ * ======================================================= */
+
+function pointPosition(element,point){
+    const x =
+        element.x;
+
+    const y =
+        element.y;
+
+    const w =
+        element.w;
+
+    const h =
+        element.h;
+
+    switch(point){
+        case 'n':
+            return {
+                x:x+w/2,
+                y
+            };
+
+        case 'ne':
+            return {
+                x:x+w,
+                y
+            };
+
+        case 'e':
+            return {
+                x:x+w,
+                y:y+h/2
+            };
+
+        case 'se':
+            return {
+                x:x+w,
+                y:y+h
+            };
+
+        case 's':
+            return {
+                x:x+w/2,
+                y:y+h
+            };
+
+        case 'sw':
+            return {
+                x,
+                y:y+h
+            };
+
+        case 'w':
+            return {
+                x,
+                y:y+h/2
+            };
+
+        case 'nw':
+            return {
+                x,
+                y
+            };
+
+        default:
+            return {
+                x:x+w,
+                y:y+h/2
+            };
+    }
+}
+
+function buildConnectionPath(a,b,curve){
+    const sx =
+        a.x /
+        100 *
+        $('videoStage').clientWidth;
+
+    const sy =
+        a.y /
+        100 *
+        $('videoStage').clientHeight;
+
+    const ex =
+        b.x /
+        100 *
+        $('videoStage').clientWidth;
+
+    const ey =
+        b.y /
+        100 *
+        $('videoStage').clientHeight;
+
+    const dx =
+        ex - sx;
+
+    const dy =
+        ey - sy;
+
+    const bend =
+        Math.max(
+            10,
+            Math.min(
+                250,
+                Math.abs(dx) *
+                number(curve,35) /
+                100
+            )
+        );
+
+    return `
+        M ${sx} ${sy}
+        C
+        ${sx + (dx >= 0 ? bend : -bend)}
+        ${sy},
+        ${ex - (dx >= 0 ? bend : -bend)}
+        ${ey},
+        ${ex} ${ey}
+    `;
+}
+
+function renderConnections(){
+    const svg =
+        $('connectors');
+
+    svg.innerHTML = '';
+
+    if (!state.project) {
+        return;
+    }
+
+    const time =
+        currentTime();
+
+    state.project.connections.forEach(c=>{
+        if (!visible(c,time)) {
+            return;
+        }
+
+        const from =
+            elementById(c.from);
+
+        const to =
+            elementById(c.to);
+
+        if (!from || !to) {
+            return;
+        }
+
+        const p1 =
+            pointPosition(
+                from,
+                c.fromPoint
+            );
+
+        const p2 =
+            pointPosition(
+                to,
+                c.toPoint
+            );
+
+        const path =
+            document.createElementNS(
+                'http://www.w3.org/2000/svg',
+                'path'
+            );
+
+        path.setAttribute(
+            'd',
+            buildConnectionPath(
+                p1,
+                p2,
+                c.curve
+            )
+        );
+
+        path.setAttribute(
+            'stroke',
+            c.color ||
+            from.style?.borderColor ||
+            '#ffffff'
+        );
+
+        path.setAttribute(
+            'stroke-width',
+            String(
+                number(
+                    c.width,
+                    1.5
+                )
+            )
+        );
+
+        path.setAttribute(
+            'class',
+            'connector' +
+            (
+                state.selected === c.id &&
+                state.selectedType === 'connection'
+                    ? ' selected'
+                    : ''
+            )
+        );
+
+        if (c.dash) {
+            path.setAttribute(
+                'stroke-dasharray',
+                c.dash
+            );
+        }
+
+        svg.appendChild(path);
+
+        const hit =
+            path.cloneNode();
+
+        hit.setAttribute(
+            'class',
+            'connector-hit'
+        );
+
+        hit.addEventListener(
+            'click',
+            event=>{
+                event.stopPropagation();
+
+                selectConnection(
+                    c.id
+                );
+            }
+        );
+
+        svg.appendChild(hit);
+    });
+}
+
+/* =========================================================
+ * Timeline
+ * ======================================================= */
+
+function renderTimelineScale(){
+    const scale =
+        $('timelineScale');
+
+    scale.innerHTML = '';
+
+    const d =
+        duration();
+
+    if (!d) {
+        return;
+    }
+
+    const count =
+        Math.min(
+            20,
+            Math.max(
+                2,
+                Math.ceil(d / 5)
+            )
+        );
+
+    for(let i=0;i<=count;i++){
+        const span =
+            document.createElement('span');
+
+        const time =
+            d * i / count;
+
+        span.textContent =
+            formatTime(time);
+
+        span.style.left =
+            `${i / count * 100}%`;
+
+        scale.appendChild(span);
+    }
+}
+
+function renderTrack(type,trackId){
+    const track =
+        $(trackId);
+
+    track.innerHTML = '';
+
+    if (!state.project) {
+        return;
+    }
+
+    const d =
+        duration();
+
+    if (!d) {
+        return;
+    }
+
+    let items = [];
+
+    if (type === 'connection') {
+        items =
+            state.project.connections;
+    } else {
+        items =
+            state.project.elements.filter(
+                e => e.type === type
+            );
+    }
+
+    items.forEach(item=>{
+        const start =
+            clamp(
+                number(item.start),
+                0,
+                d
+            );
+
+        const end =
+            clamp(
+                Math.max(
+                    start,
+                    number(item.end)
+                ),
+                start,
+                d
+            );
+
+        const bar =
+            document.createElement('div');
+
+        bar.className =
+            `track-item ${type}`;
+
+        if (
+            state.selected === item.id &&
+            state.selectedType ===
+                (
+                    type === 'connection'
+                        ? 'connection'
+                        : 'element'
+                )
+        ) {
+            bar.classList.add(
+                'selected'
+            );
+        }
+
+        bar.style.left =
+            `${start / d * 100}%`;
+
+        bar.style.width =
+            `${Math.max(
+                .2,
+                (end-start) / d * 100
+            )}%`;
+
+        bar.dataset.id =
+            item.id;
+
+        const startLabel =
+            document.createElement('span');
+
+        startLabel.className =
+            'track-time';
+
+        startLabel.textContent =
+            formatTime(start);
+
+        const endLabel =
+            document.createElement('span');
+
+        endLabel.className =
+            'track-end-time';
+
+        endLabel.textContent =
+            formatTime(end);
+
+        const name =
+            document.createElement('span');
+
+        name.className =
+            'track-name';
+
+        name.textContent =
+            type === 'connection'
+                ? '接続線'
+                : type === 'comment'
+                    ? (
+                        item.text ||
+                        'テキスト'
+                    )
+                    : type === 'box'
+                        ? '強調枠'
+                        : 'スキップ';
+
+        const leftHandle =
+            document.createElement('div');
+
+        leftHandle.className =
+            'track-handle left';
+
+        const rightHandle =
+            document.createElement('div');
+
+        rightHandle.className =
+            'track-handle right';
+
+        bar.appendChild(
+            startLabel
+        );
+
+        bar.appendChild(
+            endLabel
+        );
+
+        bar.appendChild(
+            name
+        );
+
+        bar.appendChild(
+            leftHandle
+        );
+
+        bar.appendChild(
+            rightHandle
+        );
+
+        bar.addEventListener(
+            'click',
+            event=>{
+                if (
+                    event.target.closest(
+                        '.track-handle'
+                    )
+                ) {
+                    return;
+                }
+
+                event.stopPropagation();
+
+                if (
+                    type === 'connection'
+                ) {
+                    selectConnection(
+                        item.id
+                    );
+                } else {
+                    selectElement(
+                        item.id
+                    );
+                }
+
+                $('recordedVideo').currentTime =
+                    start;
+            }
+        );
+
+        bar.addEventListener(
+            'dblclick',
+            event=>{
+                event.stopPropagation();
+
+                if (
+                    type === 'connection'
+                ) {
+                    openConnectionModal(
+                        item.id
+                    );
+                } else {
+                    openObjectModal(
+                        item.id
+                    );
+                }
+            }
+        );
+
+        leftHandle.addEventListener(
+            'pointerdown',
+            event=>{
+                beginTimelineDrag(
+                    event,
+                    item,
+                    'start'
+                );
+            }
+        );
+
+        rightHandle.addEventListener(
+            'pointerdown',
+            event=>{
+                beginTimelineDrag(
+                    event,
+                    item,
+                    'end'
+                );
+            }
+        );
+
+        track.appendChild(bar);
+    });
+}
+
+function renderTimeline(){
+    renderTimelineScale();
+
+    renderTrack(
+        'comment',
+        'commentTrack'
+    );
+
+    renderTrack(
+        'box',
+        'boxTrack'
+    );
+
+    renderTrack(
+        'skip',
+        'skipTrack'
+    );
+
+    renderTrack(
+        'connection',
+        'connectionTrack'
+    );
+}
+
+function beginTimelineDrag(event,item,edge){
+    event.preventDefault();
+    event.stopPropagation();
+
+    const track =
+        event.currentTarget.parentElement
+            .parentElement;
+
+    const rect =
+        track.getBoundingClientRect();
+
+    state.timelineDrag = {
+        item,
+        edge,
+        left:rect.left,
+        width:rect.width
+    };
+
+    window.addEventListener(
+        'pointermove',
+        moveTimelineDrag
+    );
+
+    window.addEventListener(
+        'pointerup',
+        endTimelineDrag,
+        {once:true}
+    );
+}
+
+function moveTimelineDrag(event){
+    const drag =
+        state.timelineDrag;
+
+    if (!drag) return;
+
+    const d =
+        duration();
+
+    if (!d) return;
+
+    const ratio =
+        clamp(
+            (event.clientX -
+                drag.left) /
+            drag.width,
+            0,
+            1
+        );
+
+    const time =
+        ratio * d;
+
+    if (drag.edge === 'start') {
+        drag.item.start =
+            clamp(
+                time,
+                0,
+                drag.item.end - .05
+            );
+    } else {
+        drag.item.end =
+            clamp(
+                time,
+                drag.item.start + .05,
+                d
+            );
+    }
+
+    markDirty();
+    renderAll();
+}
+
+function endTimelineDrag(){
+    state.timelineDrag = null;
+
+    window.removeEventListener(
+        'pointermove',
+        moveTimelineDrag
+    );
+}
+
+/* =========================================================
+ * Time / skip
+ * ======================================================= */
+
+function updateTimeReadout(){
+    const video =
+        $('recordedVideo');
+
+    if (!video) return;
+
+    const d =
+        duration();
+
+    $('timeReadout').textContent =
+        formatTime(video.currentTime) +
+        ' / ' +
+        formatTime(d);
+
+    if (d > 0) {
+        $('seek').max =
+            String(d);
+
+        $('seek').value =
+            String(
+                clamp(
+                    video.currentTime,
+                    0,
+                    d
+                )
+            );
+    }
+}
+
+function applySkip(){
+    const video =
+        $('recordedVideo');
+
+    if (
+        !video ||
+        video.seeking ||
+        video.paused
+    ) {
+        return;
+    }
+
+    const time =
+        video.currentTime;
+
+    const skip =
+        state.project?.elements?.find(
+            e =>
+                e.type === 'skip' &&
+                time >= e.start &&
+                time < e.end
+        );
+
+    if (skip) {
+        video.currentTime =
+            Math.min(
+                skip.end,
+                duration()
+            );
+    }
+}
+
+/* =========================================================
+ * Element pointer operation
+ * ======================================================= */
+
+function beginElementPointer(event){
+    const object =
+        event.target.closest(
+            '.edit-object'
+        );
+
+    if (!object) return;
+
+    const id =
+        object.dataset.id;
+
+    const element =
+        elementById(id);
+
+    if (!element) return;
+
+    if (
+        event.target.closest(
+            '.connection-point'
+        )
+    ) {
+        return;
+    }
+
+    const stage =
+        $('videoStage');
+
+    const rect =
+        stage.getBoundingClientRect();
+
+    const isResize =
+        !!event.target.closest(
+            '.resize-handle'
+        );
+
+    if (event.shiftKey) {
+        selectElement(
+            id,
+            true
+        );
+
+        return;
+    }
+
+    selectElement(id);
+
+    state.drag = {
+        id,
+        mode:
+            isResize
+                ? 'resize'
+                : 'move',
+        startX:event.clientX,
+        startY:event.clientY,
+        stageW:rect.width,
+        stageH:rect.height,
+        originalX:element.x,
+        originalY:element.y,
+        originalW:element.w,
+        originalH:element.h
+    };
+
+    event.preventDefault();
+}
+
+function moveElementPointer(event){
+    const drag =
+        state.drag;
+
+    if (!drag) return;
+
+    const element =
+        elementById(
+            drag.id
+        );
+
+    if (!element) {
+        state.drag = null;
+        return;
+    }
+
+    const dx =
+        event.clientX -
+        drag.startX;
+
+    const dy =
+        event.clientY -
+        drag.startY;
+
+    if (
+        drag.mode === 'move'
+    ) {
+        element.x =
+            clamp(
+                drag.originalX +
+                dx /
+                drag.stageW *
+                100,
+                0,
+                100-element.w
+            );
+
+        element.y =
+            clamp(
+                drag.originalY +
+                dy /
+                drag.stageH *
+                100,
+                0,
+                100-element.h
+            );
+    } else {
+        element.w =
+            clamp(
+                drag.originalW +
+                dx /
+                drag.stageW *
+                100,
+                .5,
+                100-element.x
+            );
+
+        element.h =
+            clamp(
+                drag.originalH +
+                dy /
+                drag.stageH *
+                100,
+                .5,
+                100-element.y
+            );
+    }
+
+    markDirty();
+    renderAll();
+}
+
+function endElementPointer(){
+    state.drag = null;
+}
+
+/* =========================================================
+ * Context menu
+ * ======================================================= */
+
+function hideContextMenu(){
+    $('contextMenu').style.display =
+        'none';
+}
+
+function showContextMenu(x,y){
+    const menu =
+        $('contextMenu');
+
+    menu.style.display =
+        'block';
+
+    requestAnimationFrame(()=>{
+        const rect =
+            menu.getBoundingClientRect();
+
+        menu.style.left =
+            Math.max(
+                5,
+                Math.min(
+                    x,
+                    window.innerWidth -
+                    rect.width -
+                    5
+                )
+            ) + 'px';
+
+        menu.style.top =
+            Math.max(
+                5,
+                Math.min(
+                    y,
+                    window.innerHeight -
+                    rect.height -
+                    5
+                )
+            ) + 'px';
+    });
+}
+
+function updateContextMenu(){
+    const target =
+        state.contextTarget;
+
+    const hasElement =
+        target?.type === 'element';
+
+    const hasConnection =
+        target?.type === 'connection';
+
+    $('ctxEdit').style.display =
+        hasElement
+            ? 'block'
+            : 'none';
+
+    $('ctxDuplicate').style.display =
+        hasElement
+            ? 'block'
+            : 'none';
+
+    $('ctxDelete').style.display =
+        hasElement
+            ? 'block'
+            : 'none';
+
+    $('ctxConnectionEdit').style.display =
+        hasConnection
+            ? 'block'
+            : 'none';
+
+    $('ctxConnectionDelete').style.display =
+        hasConnection
+            ? 'block'
+            : 'none';
+
+    $('ctxConnect').style.display =
+        state.multiSelected.length === 2
+            ? 'block'
+            : 'none';
+}
+
+/* =========================================================
+ * Duplicate / delete
+ * ======================================================= */
+
+function duplicateSelected(){
+    if (
+        state.selectedType !== 'element'
+    ) {
+        return;
+    }
+
+    const source =
+        elementById(
+            state.selected
+        );
+
+    if (!source) return;
+
+    const copy =
+        clone(source);
+
+    copy.id =
+        uid('element');
+
+    copy.x =
+        clamp(
+            copy.x + 3,
+            0,
+            100-copy.w
+        );
+
+    copy.y =
+        clamp(
+            copy.y + 3,
+            0,
+            100-copy.h
+        );
+
+    state.project.elements.push(
+        copy
+    );
+
+    selectElement(
+        copy.id
+    );
+
+    markDirty();
+    renderAll();
+}
+
+function deleteSelected(){
+    if (!state.selected) {
+        return;
+    }
+
+    if (
+        state.selectedType === 'element'
+    ) {
+        const id =
+            state.selected;
+
+        state.project.elements =
+            state.project.elements.filter(
+                e => e.id !== id
+            );
+
+        state.project.connections =
+            state.project.connections.filter(
+                c =>
+                    c.from !== id &&
+                    c.to !== id
+            );
+
+        state.multiSelected =
+            state.multiSelected.filter(
+                x => x !== id
+            );
+    }
+
+    if (
+        state.selectedType === 'connection'
+    ) {
+        state.project.connections =
+            state.project.connections.filter(
+                c => c.id !== state.selected
+            );
+    }
+
+    selectNone();
+    markDirty();
+    renderAll();
+
+    showMessage(
+        '削除しました。',
+        true
+    );
+}
+
+/* =========================================================
+ * Object modal
+ * ======================================================= */
+
+function normalizeColor(value,fallback){
+    const text =
+        String(value || '');
+
+    return /^#[0-9a-f]{6}$/i.test(text)
+        ? text
+        : fallback;
+}
+
+function buildColorPalette(){
+    const grid =
+        $('colorGrid');
+
+    grid.innerHTML = '';
+
+    COLORS.forEach(color=>{
+        const button =
+            document.createElement('button');
+
+        button.className =
+            'color-swatch';
+
+        button.style.background =
+            color;
+
+        button.title =
+            color;
+
+        button.addEventListener(
+            'click',
+            ()=>{
+                $('mColor').value =
+                    color;
+
+                $('mBorderColor').value =
+                    color;
+            }
+        );
+
+        grid.appendChild(
+            button
+        );
+    });
+}
+
+function openObjectModal(id){
+    const element =
+        elementById(
+            id ||
+            state.selected
+        );
+
+    if (!element) return;
+
+    state.modalElementId =
+        element.id;
+
+    state.selected =
+        element.id;
+
+    state.selectedType =
+        'element';
+
+    const s =
+        element.style || {};
+
+    $('objectModalTitle').textContent =
+        element.type === 'comment'
+            ? 'テキスト設定'
+            : element.type === 'box'
+                ? '強調枠設定'
+                : 'スキップ設定';
+
+    $('mText').value =
+        element.text || '';
+
+    $('mStart').value =
+        element.start;
+
+    $('mEnd').value =
+        element.end;
+
+    $('mColor').value =
+        normalizeColor(
+            s.color,
+            '#ffffff'
+        );
+
+    $('mBg').value =
+        normalizeColor(
+            s.background,
+            '#000000'
+        );
+
+    $('mBorderColor').value =
+        normalizeColor(
+            s.borderColor,
+            '#ffffff'
+        );
+
+    $('mFontSize').value =
+        number(
+            s.fontSize,
+            24
+        );
+
+    $('mOpacity').value =
+        number(
+            s.opacity,
+            100
+        );
+
+    $('mBorderWidth').value =
+        number(
+            s.borderWidth,
+            0
+        );
+
+    $('mRadius').value =
+        number(
+            s.radius,
+            4
+        );
+
+    $('mWeight').value =
+        String(
+            number(
+                s.fontWeight,
+                600
+            )
+        );
+
+    $('mX').value =
+        element.x;
+
+    $('mY').value =
+        element.y;
+
+    $('mW').value =
+        element.w;
+
+    $('mH').value =
+        element.h;
+
+    $('mTextField').style.display =
+        element.type === 'comment'
+            ? 'block'
+            : 'none';
+
+    $('objectModal').style.display =
+        'flex';
+}
+
+function applyObjectStyle(){
+    const element =
+        elementById(
+            state.modalElementId
+        );
+
+    if (!element) {
+        return;
+    }
+
+    const d =
+        duration();
+
+    const start =
+        clamp(
+            number(
+                $('mStart').value,
+                0
+            ),
+            0,
+            d
+        );
+
+    const end =
+        clamp(
+            number(
+                $('mEnd').value,
+                d
+            ),
+            start + .05,
+            d
+        );
+
+    element.start = start;
+    element.end = end;
+
+    element.x =
+        clamp(
+            number($('mX').value,10),
+            0,
+            99
+        );
+
+    element.y =
+        clamp(
+            number($('mY').value,10),
+            0,
+            99
+        );
+
+    element.w =
+        clamp(
+            number($('mW').value,25),
+            .5,
+            100-element.x
+        );
+
+    element.h =
+        clamp(
+            number($('mH').value,12),
+            .5,
+            100-element.y
+        );
+
+    if (element.type === 'comment') {
+        element.text =
+            $('mText').value;
+    }
+
+    element.style = {
+        color:
+            $('mColor').value,
+        background:
+            $('mBg').value,
+        borderColor:
+            $('mBorderColor').value,
+        borderWidth:
+            clamp(
+                number(
+                    $('mBorderWidth').value,
+                    0
+                ),
+                0,
+                30
+            ),
+        radius:
+            clamp(
+                number(
+                    $('mRadius').value,
+                    4
+                ),
+                0,
+                100
+            ),
+        fontSize:
+            clamp(
+                number(
+                    $('mFontSize').value,
+                    24
+                ),
+                6,
+                200
+            ),
+        fontWeight:
+            number(
+                $('mWeight').value,
+                600
+            ),
+        opacity:
+            clamp(
+                number(
+                    $('mOpacity').value,
+                    100
+                ),
+                0,
+                100
+            )
+    };
+
+    if (
+        element.type === 'skip'
+    ) {
+        element.style.borderColor =
+            $('mBorderColor').value;
+
+        element.style.borderWidth =
+            Math.max(
+                1,
+                element.style.borderWidth
+            );
+    }
+
+    if (
+        element.type === 'box'
+    ) {
+        element.style.background =
+            'transparent';
+    }
+
+    $('objectModal').style.display =
+        'none';
+
+    markDirty();
+    renderAll();
+
+    showMessage(
+        '要素の設定を変更しました。',
+        true
+    );
+}
+
+/* =========================================================
+ * Connection
+ * ======================================================= */
+
+function connectSelected(){
+    if (
+        state.multiSelected.length !== 2
+    ) {
+        showMessage(
+            'Shiftキーを押しながら2つの要素を選択してください。'
+        );
+        return;
+    }
+
+    const from =
+        elementById(
+            state.multiSelected[0]
+        );
+
+    const to =
+        elementById(
+            state.multiSelected[1]
+        );
+
+    if (!from || !to) {
+        return;
+    }
+
+    if (from.id === to.id) {
+        return;
+    }
+
+    const d =
+        duration();
+
+    const color =
+        from.style?.borderColor ||
+        '#ffffff';
+
+    const connection = {
+        id:uid('connection'),
+        from:from.id,
+        to:to.id,
+        fromPoint:'e',
+        toPoint:'w',
+        start:
+            clamp(
+                currentTime(),
+                0,
+                d
+            ),
+        end:
+            clamp(
+                currentTime()+5,
+                .05,
+                d
+            ),
+        color,
+        width:1.5,
+        dash:'',
+        curve:35
+    };
+
+    if (
+        connection.end <=
+        connection.start
+    ) {
+        connection.start =
+            Math.max(
+                0,
+                d - 1
+            );
+
+        connection.end =
+            d;
+    }
+
+    state.project.connections.push(
+        connection
+    );
+
+    state.selected =
+        connection.id;
+
+    state.selectedType =
+        'connection';
+
+    state.multiSelected = [];
+
+    markDirty();
+    renderAll();
+
+    showMessage(
+        '2つの要素を接続しました。',
+        true
+    );
+}
+
+function openConnectionModal(id){
+    const connection =
+        connectionById(
+            id ||
+            state.selected
+        );
+
+    if (!connection) {
+        return;
+    }
+
+    state.modalConnectionId =
+        connection.id;
+
+    $('cStart').value =
+        connection.start;
+
+    $('cEnd').value =
+        connection.end;
+
+    $('cFromPoint').value =
+        connection.fromPoint;
+
+    $('cToPoint').value =
+        connection.toPoint;
+
+    $('cWidth').value =
+        connection.width;
+
+    $('cColor').value =
+        normalizeColor(
+            connection.color,
+            '#ffffff'
+        );
+
+    $('cDash').value =
+        connection.dash || '';
+
+    $('cCurve').value =
+        connection.curve;
+
+    $('connectionModal').style.display =
+        'flex';
+}
+
+function applyConnection(){
+    const connection =
+        connectionById(
+            state.modalConnectionId
+        );
+
+    if (!connection) {
+        return;
+    }
+
+    const d =
+        duration();
+
+    connection.start =
+        clamp(
+            number(
+                $('cStart').value,
+                0
+            ),
+            0,
+            d
+        );
+
+    connection.end =
+        clamp(
+            number(
+                $('cEnd').value,
+                d
+            ),
+            connection.start + .05,
+            d
+        );
+
+    connection.fromPoint =
+        $('cFromPoint').value;
+
+    connection.toPoint =
+        $('cToPoint').value;
+
+    connection.width =
+        clamp(
+            number(
+                $('cWidth').value,
+                1.5
+            ),
+            1,
+            10
+        );
+
+    connection.color =
+        $('cColor').value;
+
+    connection.dash =
+        $('cDash').value;
+
+    connection.curve =
+        clamp(
+            number(
+                $('cCurve').value,
+                35
+            ),
+            0,
+            100
+        );
+
+    $('connectionModal').style.display =
+        'none';
+
+    markDirty();
+    renderAll();
+
+    showMessage(
+        '接続線を変更しました。',
+        true
+    );
+}
+
+function deleteConnection(id){
+    const target =
+        connectionById(id);
+
+    if (!target) return;
+
+    state.project.connections =
+        state.project.connections.filter(
+            c => c.id !== target.id
+        );
+
+    selectNone();
+    markDirty();
+    renderAll();
+}
+
+/* =========================================================
+ * Save
+ * ======================================================= */
+
+function projectForSave(){
+    if (!state.project) {
+        throw new Error(
+            '編集対象がありません。'
+        );
+    }
+
+    const project =
+        normalizeProject(
+            clone(
+                state.project
+            )
+        );
+
+    project.version =
+        APP.version;
+
+    project.name =
+        $('editorProjectName')
+            .value
+            .trim();
+
+    if (!project.name) {
+        throw new Error(
+            'プロジェクト名を入力してください。'
+        );
+    }
+
+    project.duration =
+        duration();
+
+    project.savedAt =
+        nowISO();
+
+    return project;
+}
+
+async function saveLocal(){
+    try{
+        const project =
+            projectForSave();
+
+        await idbPut(
+            'projects',
+            project
+        );
+
+        state.project =
+            normalizeProject(project);
+
+        state.dirty = false;
+
+        setEditorStatus(
+            'ローカル保存済み'
+        );
+
+        showMessage(
+            'ローカルに保存しました。',
+            true
+        );
+
+        renderProjectList();
+    }catch(error){
+        console.error(error);
+
+        showMessage(
+            'ローカル保存に失敗しました：' +
+            error.message
+        );
+    }
+}
+
+async function saveServer(){
+    try{
+        const project =
+            projectForSave();
+
+        const response =
+            await fetch(
+                '?api=save&_=' +
+                Date.now(),
+                {
+                    method:'POST',
+                    headers:{
+                        'Content-Type':
+                            'application/json'
+                    },
+                    cache:'no-store',
+                    body:
+                        JSON.stringify(
+                            project
+                        )
+                }
+            );
+
+        const result =
+            await response.json();
+
+        if (
+            !response.ok ||
+            !result.ok
+        ) {
+            if (result.limit) {
+                await idbPut(
+                    'projects',
+                    project
+                );
+
+                state.project =
+                    normalizeProject(
+                        project
+                    );
+
+                state.dirty = false;
+
+                setEditorStatus(
+                    '上限超過のためローカル保存済み'
+                );
+
+                showMessage(
+                    'サーバー保存上限に達したため、ローカルへ保存しました。',
+                    true
+                );
+
+                return;
+            }
+
+            throw new Error(
+                result.message ||
+                'サーバー保存に失敗しました。'
+            );
+        }
+
+        project.projectId =
+            result.projectId;
+
+        project.savedAt =
+            result.savedAt;
+
+        state.project =
+            normalizeProject(
+                project
+            );
+
+        state.dirty = false;
+
+        setEditorStatus(
+            'サーバー保存済み'
+        );
+
+        showMessage(
+            'サーバーに保存しました。',
+            true
+        );
+
+        renderProjectList();
+
+    }catch(error){
+        console.error(error);
+
+        showMessage(
+            'サーバー保存に失敗しました：' +
+            error.message
+        );
+    }
+}
+
+/* =========================================================
+ * Export / Import
+ * ======================================================= */
+
+function downloadText(filename,text,type){
+    const blob =
+        new Blob(
+            [text],
+            {type}
+        );
+
+    const url =
+        URL.createObjectURL(
+            blob
+        );
+
+    const a =
+        document.createElement('a');
 
     a.href = url;
     a.download = filename;
@@ -1975,2734 +4655,1486 @@ function downloadBlob(blob, filename)
     a.click();
     a.remove();
 
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function exportProjectFile()
-{
-    if (!state.project) return;
-
-    const data = deepClone(state.project);
-
-    const blob = new Blob(
-        [JSON.stringify(data, null, 2)],
-        {type:'application/json'}
+    setTimeout(
+        () => URL.revokeObjectURL(url),
+        1000
     );
-
-    const filename =
-        (state.project.name || 'project')
-        .replace(/[\\/:*?"<>|]/g, '_') +
-        '.json';
-
-    downloadBlob(blob, filename);
-    showMessage('編集データを書き出しました。', true);
 }
 
-async function importProjectFile(file)
-{
+function exportProject(){
+    try{
+        const project =
+            projectForSave();
+
+        downloadText(
+            (
+                project.name ||
+                'project'
+            ) +
+            '.json',
+            JSON.stringify(
+                project,
+                null,
+                2
+            ),
+            'application/json'
+        );
+
+        showMessage(
+            'プロジェクトJSONを書き出しました。',
+            true
+        );
+    }catch(error){
+        showMessage(
+            error.message
+        );
+    }
+}
+
+async function importProjectFile(file){
     if (!file) return;
 
-    try {
-        const text = await file.text();
-        const project = normalizeProject(JSON.parse(text));
+    try{
+        const text =
+            await file.text();
 
-        state.project = project;
-        state.duration = num(project.duration);
+        const project =
+            JSON.parse(text);
 
-        dom.projectName.value = project.name || '';
+        const normalized =
+            normalizeProject(
+                project
+            );
 
-        showEditor();
-
-        try {
-            await loadVideoFromIndexedDB(project.projectId);
-        } catch (_) {
-            showMessage(
-                '編集データは読み込みましたが、動画本体がありません。' +
-                '同じ動画を読み込んでください。'
+        if (
+            !normalized.videoName
+        ) {
+            throw new Error(
+                '動画情報がないプロジェクトです。'
             );
         }
 
-        renderAll();
-
-    } catch (error) {
-        showMessage(
-            '編集データを読み込めませんでした。\n' +
-            (error.message || '')
-        );
-    }
-}
-
-/* =========================================================
- * Server project
- * ======================================================= */
-
-async function api(url, options = {})
-{
-    const response = await fetch(url, {
-        cache: 'no-store',
-        ...options,
-        headers: {
-            'Cache-Control': 'no-cache',
-            ...(options.headers || {})
-        }
-    });
-
-    const data = await response.json().catch(() => null);
-
-    if (!response.ok || !data || data.ok === false) {
-        throw new Error(
-            data?.message ||
-            `サーバーエラー (${response.status})`
-        );
-    }
-
-    return data;
-}
-
-async function saveServer()
-{
-    if (!state.project) return;
-
-    const name = dom.projectName.value.trim();
-
-    if (!name) {
-        showMessage('プロジェクト名を入力してください。');
-        dom.projectName.focus();
-        return;
-    }
-
-    state.project.name = name;
-
-    try {
-        setStatus('保存中...');
-
-        await saveProjectToIndexedDB();
-
-        const result = await api('?api=save', {
-            method:'POST',
-            headers:{
-                'Content-Type':'application/json'
-            },
-            body:JSON.stringify(state.project)
-        });
-
-        state.project.projectId = result.projectId;
-        state.project.savedAt = result.savedAt;
-        state.dirty = false;
-
-        setStatus('保存済み');
-
-        showMessage('サーバーに保存しました。', true);
-
-        await refreshProjectList();
-
-    } catch (error) {
-
+        /*
+         * 動画本体はJSONに含めない。
+         * IndexedDBに存在すれば即開く。
+         * なければ動画選択へ進む。
+         */
         if (
-            /上限/.test(error.message) ||
-            error.message.includes('ローカル保存')
+            normalized.videoKey
         ) {
-            try {
-                await saveProjectToIndexedDB();
+            const record =
+                await idbGet(
+                    'videos',
+                    normalized.videoKey
+                );
 
-                state.dirty = false;
-
-                setStatus('ローカル保存');
+            if (record?.blob) {
+                await openEditor(
+                    normalized,
+                    record.blob
+                );
 
                 showMessage(
-                    'サーバー保存上限のためローカル保存しました。',
+                    'プロジェクトを読み込みました。',
                     true
                 );
 
-            } catch (localError) {
-                showMessage(
-                    'サーバー保存とローカル保存の両方に失敗しました。\n' +
-                    localError.message
-                );
-            }
-
-            return;
-        }
-
-        setStatus('保存失敗');
-        showMessage(error.message);
-    }
-}
-
-async function loadServerProject(id)
-{
-    try {
-        setStatus('読み込み中...');
-
-        const result = await api(
-            '?api=load&id=' + encodeURIComponent(id)
-        );
-
-        state.project = normalizeProject(result.project);
-        state.duration = num(state.project.duration);
-
-        dom.projectName.value = state.project.name || '';
-
-        showEditor();
-
-        try {
-            await loadVideoFromIndexedDB(state.project.projectId);
-        } catch (_) {
-            showMessage(
-                '編集データを読み込みました。' +
-                '動画本体を読み込むと編集を開始できます。'
-            );
-            renderAll();
-        }
-
-        state.dirty = false;
-
-    } catch (error) {
-        showMessage(error.message);
-    }
-}
-
-async function deleteServerProject(id)
-{
-    if (!confirm('このプロジェクトを削除しますか？')) {
-        return;
-    }
-
-    try {
-        await api('?api=delete', {
-            method:'POST',
-            headers:{
-                'Content-Type':'application/json'
-            },
-            body:JSON.stringify({
-                projectId:id
-            })
-        });
-
-        showMessage('削除しました。', true);
-        await refreshProjectList();
-
-    } catch (error) {
-        showMessage(error.message);
-    }
-}
-
-async function refreshProjectList()
-{
-    try {
-        const result = await api(
-            '?api=list&_=' + Date.now()
-        );
-
-        renderProjectList(
-            dom.projectList,
-            result.projects
-        );
-
-        renderProjectList(
-            dom.projectModalList,
-            result.projects
-        );
-
-    } catch (error) {
-        dom.projectList.textContent =
-            'サーバー保存を取得できませんでした。';
-    }
-}
-
-function renderProjectList(container, projects)
-{
-    if (!container) return;
-
-    container.innerHTML = '';
-
-    if (!projects.length) {
-        container.innerHTML =
-            '<div class="help">保存済みプロジェクトはありません。</div>';
-        return;
-    }
-
-    projects.forEach(project => {
-
-        const row = document.createElement('div');
-        row.className = 'project';
-
-        const info = document.createElement('div');
-        info.className = 'project-info';
-
-        const name = document.createElement('div');
-        name.className = 'project-name';
-        name.textContent = project.name || '名称未設定';
-
-        const meta = document.createElement('div');
-        meta.className = 'project-meta';
-
-        meta.textContent =
-            (project.videoName || '動画なし') +
-            ' / ' +
-            formatTime(project.duration || 0) +
-            ' / ' +
-            (project.savedAt || '');
-
-        info.append(name, meta);
-
-        const actions = document.createElement('div');
-        actions.className = 'project-actions';
-
-        const open = document.createElement('button');
-        open.textContent = '開く';
-        open.onclick = () => {
-            $('projectsModal').style.display = 'none';
-            loadServerProject(project.projectId);
-        };
-
-        const del = document.createElement('button');
-        del.textContent = '削除';
-        del.className = 'danger';
-        del.onclick = () => deleteServerProject(project.projectId);
-
-        actions.append(open, del);
-        row.append(info, actions);
-        container.append(row);
-    });
-}
-
-/* =========================================================
- * Editor state
- * ======================================================= */
-
-function showEditor()
-{
-    dom.home.style.display = 'none';
-    dom.editor.style.display = 'flex';
-
-    dom.projectName.disabled = false;
-    $('saveServerBtn').disabled = false;
-    $('saveLocalBtn').disabled = false;
-    $('exportProjectBtn').disabled = false;
-    $('exportVideoBtn').disabled = true;
-
-    updateEditorAvailability();
-}
-
-function showHome()
-{
-    dom.editor.style.display = 'none';
-    dom.home.style.display = 'flex';
-
-    hideContext();
-
-    state.selected.clear();
-    state.contextElementId = null;
-    state.contextConnectionId = null;
-
-    refreshProjectList();
-}
-
-function updateEditorAvailability()
-{
-    const enabled = !!state.ready;
-
-    dom.seek.disabled = !enabled;
-    dom.play.disabled = !enabled;
-
-    $('exportVideoBtn').disabled = !enabled;
-}
-
-function canEdit()
-{
-    if (!state.ready || !state.project || state.duration <= 0) {
-        showMessage(
-            '動画の読み込みが完了するまで編集できません。'
-        );
-        return false;
-    }
-
-    return true;
-}
-
-/* =========================================================
- * Rendering
- * ======================================================= */
-
-function elementVisible(el)
-{
-    if (!state.ready) return false;
-
-    const time = dom.video.currentTime;
-
-    return time >= el.start && time <= el.end;
-}
-
-function renderAll()
-{
-    if (!state.project) return;
-
-    renderStage();
-    renderConnections();
-    renderTimeline();
-    updateTime();
-}
-
-function renderStage()
-{
-    dom.objects.innerHTML = '';
-
-    if (!state.project) return;
-
-    state.project.elements.forEach(el => {
-
-        if (!elementVisible(el)) {
-            return;
-        }
-
-        const node = document.createElement('div');
-
-        node.className = 'edit-object ' + el.type;
-        node.dataset.id = el.id;
-
-        if (state.selected.has(el.id)) {
-            if (state.selected.size > 1) {
-                node.classList.add('multi-selected');
-            } else {
-                node.classList.add('selected');
-            }
-        }
-
-        node.style.left = el.x + '%';
-        node.style.top = el.y + '%';
-        node.style.width = el.w + '%';
-        node.style.height = el.h + '%';
-
-        node.style.opacity = el.opacity;
-        node.style.border =
-            `${el.borderWidth}px ${el.borderStyle} ${el.borderColor}`;
-
-        if (el.bgOpacity > 0) {
-            node.style.backgroundColor =
-                hexToRgba(el.borderColor, el.bgOpacity);
-        } else if (el.type === 'box') {
-            node.style.backgroundColor = 'transparent';
-        }
-
-        if (el.type === 'comment') {
-            node.style.color = el.textColor;
-            node.style.fontSize =
-                Math.max(8, el.fontSize) + 'px';
-
-            node.textContent = el.text;
-        }
-
-        if (el.type === 'box') {
-            node.style.backgroundColor =
-                hexToRgba(el.borderColor, el.bgOpacity);
-        }
-
-        if (el.type === 'skip') {
-            const label = document.createElement('div');
-
-            label.className = 'skip-label';
-            label.textContent = el.text || 'SKIP';
-
-            node.append(label);
-        }
-
-        [
-            ['p1','left'],
-            ['p2','top'],
-            ['p3','right'],
-            ['p4','bottom']
-        ].forEach(([cls, point]) => {
-
-            const pointNode =
-                document.createElement('div');
-
-            pointNode.className =
-                'connection-point ' + cls;
-
-            pointNode.dataset.point = point;
-
-            node.append(pointNode);
-        });
-
-        const handle =
-            document.createElement('div');
-
-        handle.className = 'resize-handle';
-
-        node.append(handle);
-
-        node.addEventListener(
-            'pointerdown',
-            event => beginElementPointer(event, el.id),
-            {passive:false}
-        );
-
-        node.addEventListener(
-            'dblclick',
-            event => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                if (canEdit()) {
-                    openElementModal(el.id);
-                }
-            }
-        );
-
-        node.addEventListener(
-            'contextmenu',
-            event => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                if (!state.selected.has(el.id)) {
-                    state.selected.clear();
-                    state.selected.add(el.id);
-                }
-
-                state.contextElementId = el.id;
-                state.contextConnectionId = null;
-
-                renderStage();
-
-                showContext(
-                    event.clientX,
-                    event.clientY
-                );
-            }
-        );
-
-        dom.objects.append(node);
-    });
-}
-
-function renderConnections()
-{
-    dom.connectors.innerHTML = '';
-
-    if (!state.project) return;
-
-    state.project.connections.forEach(connection => {
-
-        const from = getElement(connection.from);
-        const to = getElement(connection.to);
-
-        if (!from || !to) return;
-
-        if (!elementVisible(from) ||
-            !elementVisible(to)) {
-            return;
-        }
-
-        const a = pointPosition(
-            from,
-            connection.fromPoint
-        );
-
-        const b = pointPosition(
-            to,
-            connection.toPoint
-        );
-
-        const line = document.createElementNS(
-            'http://www.w3.org/2000/svg',
-            'line'
-        );
-
-        line.setAttribute('x1', a.x);
-        line.setAttribute('y1', a.y);
-        line.setAttribute('x2', b.x);
-        line.setAttribute('y2', b.y);
-
-        line.setAttribute(
-            'stroke',
-            connection.color
-        );
-
-        line.setAttribute(
-            'stroke-width',
-            connection.width
-        );
-
-        if (connection.style === 'dashed') {
-            line.setAttribute(
-                'stroke-dasharray',
-                '6 4'
-            );
-        }
-
-        if (connection.style === 'dotted') {
-            line.setAttribute(
-                'stroke-dasharray',
-                '2 4'
-            );
-        }
-
-        line.classList.add('connector');
-
-        if (
-            state.contextConnectionId === connection.id
-        ) {
-            line.classList.add('selected');
-        }
-
-        const hit = document.createElementNS(
-            'http://www.w3.org/2000/svg',
-            'line'
-        );
-
-        hit.setAttribute('x1', a.x);
-        hit.setAttribute('y1', a.y);
-        hit.setAttribute('x2', b.x);
-        hit.setAttribute('y2', b.y);
-
-        hit.classList.add('connector-hit');
-
-        hit.addEventListener(
-            'contextmenu',
-            event => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                state.contextConnectionId =
-                    connection.id;
-
-                state.contextElementId = null;
-
-                renderConnections();
-
-                showContext(
-                    event.clientX,
-                    event.clientY
-                );
-            }
-        );
-
-        dom.connectors.append(line, hit);
-    });
-}
-
-function pointPosition(el, point)
-{
-    const stageWidth = dom.stage.clientWidth;
-    const stageHeight = dom.stage.clientHeight;
-
-    const x = el.x / 100 * stageWidth;
-    const y = el.y / 100 * stageHeight;
-    const w = el.w / 100 * stageWidth;
-    const h = el.h / 100 * stageHeight;
-
-    switch (point) {
-        case 'left':
-            return {x, y:y + h / 2};
-
-        case 'top':
-            return {x:x + w / 2, y};
-
-        case 'bottom':
-            return {x:x + w / 2, y:y + h};
-
-        case 'right':
-        default:
-            return {x:x + w, y:y + h / 2};
-    }
-}
-
-function renderTimeline()
-{
-    dom.timelineRows.innerHTML = '';
-
-    if (!state.project || !state.duration) {
-        dom.timelineScale.innerHTML = '';
-        return;
-    }
-
-    renderTimelineScale();
-
-    const groups = [
-        {
-            key:'comment',
-            name:'テキスト',
-            elements:state.project.elements.filter(
-                el => el.type === 'comment'
-            )
-        },
-        {
-            key:'box',
-            name:'強調枠',
-            elements:state.project.elements.filter(
-                el => el.type === 'box'
-            )
-        },
-        {
-            key:'skip',
-            name:'スキップ',
-            elements:state.project.elements.filter(
-                el => el.type === 'skip'
-            )
-        },
-        {
-            key:'connection',
-            name:'接続',
-            elements:state.project.connections
-        }
-    ];
-
-    groups.forEach(group => {
-
-        if (!group.elements.length) return;
-
-        const row = document.createElement('div');
-        row.className = 'timeline-row';
-
-        const name = document.createElement('div');
-        name.className = 'timeline-name';
-        name.textContent = group.name;
-
-        const track = document.createElement('div');
-        track.className = 'track';
-        track.dataset.type = group.key;
-
-        row.append(name, track);
-        dom.timelineRows.append(row);
-
-        group.elements.forEach(item => {
-
-            if (group.key === 'connection') {
-                renderConnectionTimelineItem(
-                    track,
-                    item
-                );
-            } else {
-                renderElementTimelineItem(
-                    track,
-                    item
-                );
-            }
-        });
-    });
-}
-
-function renderTimelineScale()
-{
-    dom.timelineScale.innerHTML = '';
-
-    const count = 10;
-
-    for (let i = 0; i <= count; i++) {
-
-        const span = document.createElement('span');
-
-        const ratio = i / count;
-
-        span.style.left =
-            (ratio * 100) + '%';
-
-        span.textContent =
-            formatTime(state.duration * ratio);
-
-        dom.timelineScale.append(span);
-    }
-}
-
-function renderElementTimelineItem(track, el)
-{
-    const item = document.createElement('div');
-
-    item.className =
-        'track-item ' +
-        el.type +
-        (state.selected.has(el.id) ? ' selected' : '');
-
-    item.dataset.id = el.id;
-
-    const left =
-        clamp(el.start / state.duration * 100, 0, 100);
-
-    const width =
-        clamp(
-            (el.end - el.start) /
-            state.duration * 100,
-            0.3,
-            100
-        );
-
-    item.style.left = left + '%';
-    item.style.width = width + '%';
-
-    const label = document.createElement('div');
-    label.className = 'track-time';
-
-    label.textContent =
-        `${formatTime(el.start)} ～ ${formatTime(el.end)}`;
-
-    item.append(label);
-
-    const leftHandle = document.createElement('div');
-    leftHandle.className = 'timeline-handle left';
-
-    const rightHandle = document.createElement('div');
-    rightHandle.className = 'timeline-handle right';
-
-    item.append(leftHandle, rightHandle);
-
-    item.addEventListener(
-        'pointerdown',
-        event => {
-            if (
-                event.target === leftHandle ||
-                event.target === rightHandle
-            ) {
-                beginTimelineResize(
-                    event,
-                    el.id,
-                    event.target === leftHandle
-                        ? 'start'
-                        : 'end'
-                );
                 return;
             }
-
-            beginTimelineMove(event, el.id);
-        },
-        {passive:false}
-    );
-
-    item.addEventListener(
-        'contextmenu',
-        event => {
-            event.preventDefault();
-            event.stopPropagation();
-
-            state.contextElementId = el.id;
-            state.contextConnectionId = null;
-
-            showContext(
-                event.clientX,
-                event.clientY
-            );
-        }
-    );
-
-    track.append(item);
-}
-
-function renderConnectionTimelineItem(track, connection)
-{
-    const item = document.createElement('div');
-
-    item.className = 'track-item connection';
-
-    item.style.left = '0%';
-    item.style.width = '100%';
-
-    const label = document.createElement('div');
-    label.className = 'track-time';
-
-    label.textContent =
-        getElement(connection.from)?.name +
-        ' → ' +
-        getElement(connection.to)?.name;
-
-    item.append(label);
-
-    item.addEventListener(
-        'contextmenu',
-        event => {
-            event.preventDefault();
-            event.stopPropagation();
-
-            state.contextConnectionId =
-                connection.id;
-
-            state.contextElementId = null;
-
-            showContext(
-                event.clientX,
-                event.clientY
-            );
-        }
-    );
-
-    track.append(item);
-}
-
-function updateTime()
-{
-    if (!state.duration) {
-        dom.readout.textContent =
-            '00:00.000 / 00:00.000';
-        return;
-    }
-
-    const current = dom.video.currentTime || 0;
-
-    dom.readout.textContent =
-        `${formatTime(current)} / ${formatTime(state.duration)}`;
-
-    if (
-        document.activeElement !== dom.seek
-    ) {
-        dom.seek.value = String(current);
-    }
-}
-
-/* =========================================================
- * Stage sizing
- * ======================================================= */
-
-function fitStage()
-{
-    if (!state.ready ||
-        !dom.video.videoWidth ||
-        !dom.video.videoHeight) {
-        return;
-    }
-
-    const areaWidth = dom.videoArea.clientWidth;
-    const areaHeight = dom.videoArea.clientHeight;
-
-    const ratio =
-        dom.video.videoWidth /
-        dom.video.videoHeight;
-
-    let width = areaWidth;
-    let height = width / ratio;
-
-    if (height > areaHeight) {
-        height = areaHeight;
-        width = height * ratio;
-    }
-
-    dom.stage.style.width = Math.max(1, width) + 'px';
-    dom.stage.style.height = Math.max(1, height) + 'px';
-
-    renderStage();
-    renderConnections();
-}
-
-/* =========================================================
- * Stage pointer
- * ======================================================= */
-
-function stagePositionFromPointer(event)
-{
-    const rect =
-        dom.stage.getBoundingClientRect();
-
-    return {
-        x: clamp(
-            (event.clientX - rect.left) /
-            rect.width * 100,
-            0,
-            100
-        ),
-        y: clamp(
-            (event.clientY - rect.top) /
-            rect.height * 100,
-            0,
-            100
-        )
-    };
-}
-
-function beginElementPointer(event, id)
-{
-    if (!canEdit()) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    const el = getElement(id);
-
-    if (!el) return;
-
-    const target = event.currentTarget;
-
-    const resizing =
-        event.target.classList.contains(
-            'resize-handle'
-        );
-
-    if (event.shiftKey) {
-
-        if (state.selected.has(id)) {
-            state.selected.delete(id);
-        } else {
-            state.selected.add(id);
         }
 
-        renderStage();
-        renderConnections();
-        return;
-    }
-
-    if (!state.selected.has(id)) {
-        state.selected.clear();
-        state.selected.add(id);
-    }
-
-    if (state.selected.size > 1) {
-        renderStage();
-        return;
-    }
-
-    const rect =
-        dom.stage.getBoundingClientRect();
-
-    state.pointer = {
-        id,
-        resizing,
-        startClientX:event.clientX,
-        startClientY:event.clientY,
-        startX:el.x,
-        startY:el.y,
-        startW:el.w,
-        startH:el.h,
-        rect
-    };
-
-    safeCapturePointer(target, event);
-
-    const move = e => updateElementPointer(e);
-    const up = e => endElementPointer(e, target, move, up);
-
-    target.addEventListener(
-        'pointermove',
-        move,
-        {passive:false}
-    );
-
-    target.addEventListener(
-        'pointerup',
-        up,
-        {once:true}
-    );
-
-    target.addEventListener(
-        'pointercancel',
-        up,
-        {once:true}
-    );
-}
-
-function updateElementPointer(event)
-{
-    const p = state.pointer;
-
-    if (!p) return;
-
-    event.preventDefault();
-
-    const el = getElement(p.id);
-
-    if (!el) return;
-
-    const dx =
-        (event.clientX - p.startClientX) /
-        p.rect.width * 100;
-
-    const dy =
-        (event.clientY - p.startClientY) /
-        p.rect.height * 100;
-
-    if (p.resizing) {
-
-        el.w = clamp(
-            p.startW + dx,
-            1,
-            100 - p.startX
-        );
-
-        el.h = clamp(
-            p.startH + dy,
-            1,
-            100 - p.startY
-        );
-
-    } else {
-
-        el.x = clamp(
-            p.startX + dx,
-            0,
-            100 - el.w
-        );
-
-        el.y = clamp(
-            p.startY + dy,
-            0,
-            100 - el.h
-        );
-    }
-
-    markDirty();
-    renderStage();
-    renderConnections();
-    renderTimeline();
-}
-
-function endElementPointer(
-    event,
-    target,
-    move,
-    up
-){
-    if (!state.pointer) return;
-
-    safeReleasePointer(target, event);
-
-    target.removeEventListener(
-        'pointermove',
-        move
-    );
-
-    state.pointer = null;
-}
-
-/* =========================================================
- * Timeline pointer
- * ======================================================= */
-
-function beginTimelineMove(event, id)
-{
-    if (!canEdit()) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    const el = getElement(id);
-
-    if (!el) return;
-
-    state.selected.clear();
-    state.selected.add(id);
-
-    const track = event.currentTarget;
-    const rect = track.getBoundingClientRect();
-
-    state.timelinePointer = {
-        id,
-        mode:'move',
-        startX:event.clientX,
-        originalStart:el.start,
-        originalEnd:el.end,
-        rect,
-        target:event.currentTarget
-    };
-
-    safeCapturePointer(track, event);
-
-    const move = e =>
-        updateTimelinePointer(e);
-
-    const up = e =>
-        endTimelinePointer(e, track, move);
-
-    track.addEventListener(
-        'pointermove',
-        move,
-        {passive:false}
-    );
-
-    track.addEventListener(
-        'pointerup',
-        up,
-        {once:true}
-    );
-
-    track.addEventListener(
-        'pointercancel',
-        up,
-        {once:true}
-    );
-
-    renderStage();
-    renderTimeline();
-}
-
-function beginTimelineResize(event, id, mode)
-{
-    if (!canEdit()) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    const el = getElement(id);
-
-    if (!el) return;
-
-    const track =
-        event.currentTarget.closest('.track');
-
-    if (!track) return;
-
-    const rect = track.getBoundingClientRect();
-
-    state.timelinePointer = {
-        id,
-        mode,
-        startX:event.clientX,
-        originalStart:el.start,
-        originalEnd:el.end,
-        rect,
-        target:track
-    };
-
-    safeCapturePointer(track, event);
-
-    const move = e =>
-        updateTimelinePointer(e);
-
-    const up = e =>
-        endTimelinePointer(e, track, move);
-
-    track.addEventListener(
-        'pointermove',
-        move,
-        {passive:false}
-    );
-
-    track.addEventListener(
-        'pointerup',
-        up,
-        {once:true}
-    );
-
-    track.addEventListener(
-        'pointercancel',
-        up,
-        {once:true}
-    );
-}
-
-function updateTimelinePointer(event)
-{
-    const p = state.timelinePointer;
-
-    if (!p) return;
-
-    const el = getElement(p.id);
-
-    if (!el) return;
-
-    event.preventDefault();
-
-    const dx =
-        (event.clientX - p.startX) /
-        p.rect.width *
-        state.duration;
-
-    if (p.mode === 'move') {
-
-        const length =
-            p.originalEnd -
-            p.originalStart;
-
-        let start =
-            p.originalStart + dx;
-
-        start = clamp(
-            start,
-            0,
-            state.duration - length
-        );
-
-        el.start = start;
-        el.end = start + length;
-
-    } else if (p.mode === 'start') {
-
-        el.start = clamp(
-            p.originalStart + dx,
-            0,
-            p.originalEnd - 0.05
-        );
-
-    } else if (p.mode === 'end') {
-
-        el.end = clamp(
-            p.originalEnd + dx,
-            p.originalStart + 0.05,
-            state.duration
-        );
-    }
-
-    markDirty();
-    renderStage();
-    renderTimeline();
-}
-
-function endTimelinePointer(event, target, move)
-{
-    safeReleasePointer(target, event);
-
-    target.removeEventListener(
-        'pointermove',
-        move
-    );
-
-    state.timelinePointer = null;
-}
-
-/* =========================================================
- * Context menu
- * ======================================================= */
-
-function showContext(x, y)
-{
-    const menu = dom.context;
-
-    menu.style.display = 'block';
-
-    const width = menu.offsetWidth;
-    const height = menu.offsetHeight;
-
-    menu.style.left =
-        Math.min(
-            x,
-            window.innerWidth - width - 8
-        ) + 'px';
-
-    menu.style.top =
-        Math.min(
-            y,
-            window.innerHeight - height - 8
-        ) + 'px';
-
-    const hasElement =
-        !!state.contextElementId;
-
-    const hasConnection =
-        !!state.contextConnectionId;
-
-    const twoSelected =
-        state.selected.size === 2;
-
-    $('ctxEdit').style.display =
-        hasElement ? 'block' : 'none';
-
-    $('ctxStyle').style.display =
-        hasElement ? 'block' : 'none';
-
-    $('ctxDelete').style.display =
-        hasElement ? 'block' : 'none';
-
-    $('ctxConnect').style.display =
-        twoSelected ? 'block' : 'none';
-
-    $('ctxDeleteConnection').style.display =
-        hasConnection ? 'block' : 'none';
-
-    $('ctxAddText').style.display =
-        state.ready ? 'block' : 'none';
-
-    $('ctxAddBox').style.display =
-        state.ready ? 'block' : 'none';
-
-    $('ctxAddSkip').style.display =
-        state.ready ? 'block' : 'none';
-}
-
-function hideContext()
-{
-    dom.context.style.display = 'none';
-}
-
-/* =========================================================
- * Add element
- * ======================================================= */
-
-function addElement(type)
-{
-    hideContext();
-
-    if (!canEdit()) return;
-
-    const el = createElement(
-        type,
-        state.contextX,
-        state.contextY
-    );
-
-    state.project.elements.push(el);
-
-    state.selected.clear();
-    state.selected.add(el.id);
-
-    markDirty();
-    renderAll();
-
-    openElementModal(el.id);
-}
-
-/* =========================================================
- * Element modal
- * ======================================================= */
-
-function openElementModal(id)
-{
-    if (!canEdit()) return;
-
-    const el = getElement(id);
-
-    if (!el) return;
-
-    state.modalElementId = id;
-
-    $('elementModalTitle').textContent =
-        `${el.name || '要素'}の編集`;
-
-    $('elementType').value = el.type;
-    $('elementName').value = el.name;
-    $('elementText').value = el.text;
-
-    $('elementStart').value =
-        el.start.toFixed(3);
-
-    $('elementEnd').value =
-        el.end.toFixed(3);
-
-    $('elementX').value =
-        el.x.toFixed(1);
-
-    $('elementY').value =
-        el.y.toFixed(1);
-
-    $('elementW').value =
-        el.w.toFixed(1);
-
-    $('elementH').value =
-        el.h.toFixed(1);
-
-    $('elementFontSize').value =
-        el.fontSize;
-
-    $('elementBorderWidth').value =
-        el.borderWidth;
-
-    $('elementOpacity').value =
-        el.opacity;
-
-    $('elementTextColor').value =
-        normalizeColor(el.textColor);
-
-    $('elementBorderStyle').value =
-        el.borderStyle;
-
-    $('elementBgOpacity').value =
-        el.bgOpacity;
-
-    renderPalette(el.borderColor);
-
-    $('elementModal').style.display = 'flex';
-}
-
-function renderPalette(activeColor)
-{
-    const palette =
-        $('elementBorderPalette');
-
-    palette.innerHTML = '';
-
-    COLORS.forEach(color => {
-
-        const button =
-            document.createElement('button');
-
-        button.type = 'button';
-        button.dataset.color = color;
-        button.style.background = color;
-
-        if (
-            normalizeColor(activeColor) ===
-            normalizeColor(color)
-        ) {
-            button.classList.add('active');
-        }
-
-        button.addEventListener(
-            'click',
-            () => {
-                document
-                    .querySelectorAll(
-                        '#elementBorderPalette button'
-                    )
-                    .forEach(
-                        b => b.classList.remove('active')
-                    );
-
-                button.classList.add('active');
-                button.dataset.selected = '1';
-            }
-        );
-
-        palette.append(button);
-    });
-}
-
-function selectedPaletteColor()
-{
-    const active =
-        document.querySelector(
-            '#elementBorderPalette button.active,' +
-            '#elementBorderPalette button[data-selected="1"]'
-        );
-
-    return active?.dataset.color || '#ffffff';
-}
-
-function applyElementModal()
-{
-    const el =
-        getElement(state.modalElementId);
-
-    if (!el) return;
-
-    const start =
-        clamp(
-            num($('elementStart').value, 0),
-            0,
-            state.duration
-        );
-
-    const end =
-        clamp(
-            num($('elementEnd').value, state.duration),
-            start + 0.05,
-            state.duration
-        );
-
-    el.type =
-        ['comment','box','skip'].includes(
-            $('elementType').value
-        )
-            ? $('elementType').value
-            : 'comment';
-
-    el.name =
-        $('elementName').value.trim() ||
-        '要素';
-
-    el.text =
-        $('elementText').value;
-
-    el.start = start;
-    el.end = end;
-
-    el.x =
-        clamp(
-            num($('elementX').value, el.x),
-            0,
-            100 - el.w
-        );
-
-    el.y =
-        clamp(
-            num($('elementY').value, el.y),
-            0,
-            100 - el.h
-        );
-
-    el.w =
-        clamp(
-            num($('elementW').value, el.w),
-            1,
-            100 - el.x
-        );
-
-    el.h =
-        clamp(
-            num($('elementH').value, el.h),
-            1,
-            100 - el.y
-        );
-
-    el.fontSize =
-        clamp(
-            num($('elementFontSize').value, 28),
-            8,
-            200
-        );
-
-    el.borderWidth =
-        clamp(
-            num($('elementBorderWidth').value, 2),
-            0,
-            30
-        );
-
-    el.opacity =
-        clamp(
-            num($('elementOpacity').value, 1),
-            0,
-            1
-        );
-
-    el.bgOpacity =
-        clamp(
-            num($('elementBgOpacity').value, 0),
-            0,
-            1
-        );
-
-    el.textColor =
-        $('elementTextColor').value ||
-        '#ffffff';
-
-    el.borderColor =
-        selectedPaletteColor();
-
-    el.borderStyle =
-        $('elementBorderStyle').value;
-
-    markDirty();
-
-    $('elementModal').style.display = 'none';
-
-    renderAll();
-}
-
-/* =========================================================
- * Connection
- * ======================================================= */
-
-function openConnectionModal(connection = null)
-{
-    if (!canEdit()) return;
-
-    let from;
-    let to;
-
-    if (connection) {
-        from = getElement(connection.from);
-        to = getElement(connection.to);
-
-        state.modalConnectionId = connection.id;
-    } else {
-        const ids = [...state.selected];
-
-        if (ids.length !== 2) {
-            showMessage(
-                'Shiftキーを押しながら2つの要素を選択してください。'
-            );
-            return;
-        }
-
-        from = getElement(ids[0]);
-        to = getElement(ids[1]);
-
-        state.modalConnectionId = null;
-    }
-
-    if (!from || !to) return;
-
-    $('connectionFromName').value =
-        from.name || from.id;
-
-    $('connectionToName').value =
-        to.name || to.id;
-
-    $('connectionFromPoint').value =
-        connection?.fromPoint || 'right';
-
-    $('connectionToPoint').value =
-        connection?.toPoint || 'left';
-
-    $('connectionWidth').value =
-        connection?.width || 1.5;
-
-    $('connectionStyle').value =
-        connection?.style || 'solid';
-
-    $('connectionColor').value =
-        connection?.color ||
-        from.borderColor ||
-        '#ffffff';
-
-    $('connectionModal').style.display = 'flex';
-}
-
-function applyConnectionModal()
-{
-    const ids = [...state.selected];
-
-    let connection =
-        state.modalConnectionId
-            ? getConnection(state.modalConnectionId)
-            : null;
-
-    if (!connection) {
-
-        if (ids.length !== 2) {
-            showMessage(
-                '接続には2つの要素を選択してください。'
-            );
-            return;
-        }
-
-        connection = {
-            id:uid('conn'),
-            from:ids[0],
-            to:ids[1],
-            fromPoint:'right',
-            toPoint:'left',
-            color:'#ffffff',
-            width:1.5,
-            style:'solid'
-        };
-
-        state.project.connections.push(connection);
-    }
-
-    connection.fromPoint =
-        $('connectionFromPoint').value;
-
-    connection.toPoint =
-        $('connectionToPoint').value;
-
-    connection.width =
-        clamp(
-            num($('connectionWidth').value, 1.5),
-            1,
-            10
-        );
-
-    connection.style =
-        $('connectionStyle').value;
-
-    connection.color =
-        $('connectionColor').value ||
-        '#ffffff';
-
-    state.contextConnectionId =
-        connection.id;
-
-    state.contextElementId = null;
-
-    markDirty();
-
-    $('connectionModal').style.display = 'none';
-
-    renderAll();
-}
-
-/* =========================================================
- * Delete
- * ======================================================= */
-
-function deleteElement(id)
-{
-    const el = getElement(id);
-
-    if (!el) return;
-
-    if (!confirm(
-        `「${el.name || '要素'}」を削除しますか？`
-    )) {
-        return;
-    }
-
-    state.project.elements =
-        state.project.elements.filter(
-            item => item.id !== id
-        );
-
-    state.project.connections =
-        state.project.connections.filter(
-            connection =>
-                connection.from !== id &&
-                connection.to !== id
-        );
-
-    state.selected.delete(id);
-    state.contextElementId = null;
-
-    markDirty();
-    hideContext();
-    renderAll();
-}
-
-function deleteConnection(id)
-{
-    const connection = getConnection(id);
-
-    if (!connection) return;
-
-    if (!confirm('この接続を削除しますか？')) {
-        return;
-    }
-
-    state.project.connections =
-        state.project.connections.filter(
-            c => c.id !== id
-        );
-
-    state.contextConnectionId = null;
-
-    markDirty();
-    hideContext();
-    renderAll();
-}
-
-/* =========================================================
- * Video export
- * ======================================================= */
-
-function chooseRecorderMime()
-{
-    const candidates = [
-        'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
-        'video/mp4',
-        'video/webm;codecs=vp9,opus',
-        'video/webm;codecs=vp8,opus',
-        'video/webm'
-    ];
-
-    if (!window.MediaRecorder) {
-        return '';
-    }
-
-    return candidates.find(
-        type => MediaRecorder.isTypeSupported(type)
-    ) || '';
-}
-
-async function exportVideo()
-{
-    if (!canEdit()) return;
-
-    if (!window.MediaRecorder) {
-        showMessage(
-            'このブラウザは動画書き出しに対応していません。'
-        );
-        return;
-    }
-
-    const mime = chooseRecorderMime();
-
-    if (!mime) {
-        showMessage(
-            '利用できる動画エンコード形式がありません。'
-        );
-        return;
-    }
-
-    const canvas =
-        document.createElement('canvas');
-
-    const width =
-        dom.video.videoWidth || 1280;
-
-    const height =
-        dom.video.videoHeight || 720;
-
-    canvas.width = width;
-    canvas.height = height;
-
-    const ctx =
-        canvas.getContext('2d');
-
-    if (!ctx) {
-        showMessage('Canvasを利用できません。');
-        return;
-    }
-
-    const stream =
-        canvas.captureStream(30);
-
-    const chunks = [];
-
-    let recorder;
-
-    try {
-        recorder = new MediaRecorder(
-            stream,
-            {
-                mimeType:mime,
-                videoBitsPerSecond:8000000
-            }
-        );
-    } catch (error) {
-        showMessage(
-            '動画エンコーダを開始できませんでした。\n' +
-            error.message
-        );
-        return;
-    }
-
-    const originalTime =
-        dom.video.currentTime;
-
-    const wasPlaying =
-        !dom.video.paused;
-
-    dom.loading.style.display = 'flex';
-    setStatus('動画を書き出し中...');
-
-    recorder.ondataavailable = event => {
-        if (event.data && event.data.size > 0) {
-            chunks.push(event.data);
-        }
-    };
-
-    const stopped =
-        new Promise(resolve => {
-            recorder.onstop = resolve;
-        });
-
-    recorder.start(200);
-
-    dom.video.pause();
-    dom.video.currentTime = 0;
-
-    await waitForSeek();
-
-    const draw = () => {
-
-        if (dom.video.ended) {
-            return;
-        }
-
-        ctx.clearRect(
-            0,
-            0,
-            width,
-            height
-        );
-
-        ctx.drawImage(
-            dom.video,
-            0,
-            0,
-            width,
-            height
-        );
-
-        drawElementsToCanvas(
-            ctx,
-            width,
-            height,
-            dom.video.currentTime
-        );
-
-        if (
-            !dom.video.paused &&
-            !dom.video.ended
-        ) {
-            requestAnimationFrame(draw);
-        }
-    };
-
-    dom.video.play().catch(() => {});
-
-    draw();
-
-    await new Promise(resolve => {
-
-        const check = () => {
-
-            if (
-                dom.video.ended ||
-                dom.video.currentTime >=
-                state.duration - 0.03
-            ) {
-                resolve();
-                return;
-            }
-
-            requestAnimationFrame(check);
-        };
-
-        check();
-    });
-
-    dom.video.pause();
-
-    if (recorder.state !== 'inactive') {
-        recorder.stop();
-    }
-
-    await stopped;
-
-    dom.video.currentTime = originalTime;
-
-    if (wasPlaying) {
-        dom.video.play().catch(() => {});
-    }
-
-    const extension =
-        mime.includes('mp4')
-            ? 'mp4'
-            : 'webm';
-
-    const blob = new Blob(
-        chunks,
-        {type:mime}
-    );
-
-    const filename =
-        (state.project.name || 'edited-video')
-            .replace(/[\\/:*?"<>|]/g, '_') +
-        '.' +
-        extension;
-
-    downloadBlob(blob, filename);
-
-    dom.loading.style.display = 'none';
-
-    setStatus('編集完了');
-
-    showMessage(
-        `動画を書き出しました。\n形式: ${mime}`,
-        true
-    );
-}
-
-function drawElementsToCanvas(
-    ctx,
-    width,
-    height,
-    time
-)
-{
-    if (!state.project) return;
-
-    state.project.elements.forEach(el => {
-
-        if (
-            time < el.start ||
-            time > el.end
-        ) {
-            return;
-        }
-
-        const x =
-            el.x / 100 * width;
-
-        const y =
-            el.y / 100 * height;
-
-        const w =
-            el.w / 100 * width;
-
-        const h =
-            el.h / 100 * height;
-
-        ctx.save();
-
-        ctx.globalAlpha = el.opacity;
-
-        ctx.strokeStyle =
-            el.borderColor;
-
-        ctx.lineWidth =
-            Math.max(
-                1,
-                el.borderWidth *
-                width /
-                1280
-            );
-
-        if (el.borderStyle === 'dashed') {
-            ctx.setLineDash([10, 7]);
-        }
-
-        if (el.borderStyle === 'dotted') {
-            ctx.setLineDash([2, 5]);
-        }
-
-        if (el.bgOpacity > 0) {
-            ctx.fillStyle =
-                hexToRgba(
-                    el.borderColor,
-                    el.bgOpacity
-                );
-
-            ctx.fillRect(
-                x,
-                y,
-                w,
-                h
-            );
-        }
-
-        ctx.strokeRect(
-            x,
-            y,
-            w,
-            h
-        );
-
-        if (
-            el.type === 'comment' ||
-            el.type === 'skip'
-        ) {
-
-            ctx.setLineDash([]);
-
-            ctx.fillStyle =
-                el.textColor;
-
-            ctx.font =
-                `${el.fontSize * width / 1280}px sans-serif`;
-
-            ctx.textBaseline = 'top';
-
-            const text =
-                el.type === 'skip'
-                    ? (el.text || 'SKIP')
-                    : el.text;
-
-            const lines =
-                String(text).split('\n');
-
-            const lineHeight =
-                el.fontSize *
-                width /
-                1280 *
-                1.25;
-
-            lines.forEach(
-                (line, index) => {
-
-                    ctx.fillText(
-                        line,
-                        x + 8,
-                        y + 8 +
-                        index * lineHeight
-                    );
-                }
-            );
-        }
-
-        ctx.restore();
-    });
-
-    state.project.connections.forEach(connection => {
-
-        const from =
-            getElement(connection.from);
-
-        const to =
-            getElement(connection.to);
-
-        if (!from || !to) return;
-
-        if (
-            time < from.start ||
-            time > from.end ||
-            time < to.start ||
-            time > to.end
-        ) {
-            return;
-        }
-
-        const a =
-            pointPositionCanvas(
-                from,
-                connection.fromPoint,
-                width,
-                height
-            );
-
-        const b =
-            pointPositionCanvas(
-                to,
-                connection.toPoint,
-                width,
-                height
-            );
-
-        ctx.save();
-
-        ctx.strokeStyle =
-            connection.color;
-
-        ctx.lineWidth =
-            connection.width *
-            width /
-            1280;
-
-        if (connection.style === 'dashed') {
-            ctx.setLineDash([8, 5]);
-        }
-
-        if (connection.style === 'dotted') {
-            ctx.setLineDash([2, 4]);
-        }
-
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.stroke();
-
-        ctx.restore();
-    });
-}
-
-function pointPositionCanvas(
-    el,
-    point,
-    width,
-    height
-)
-{
-    const x = el.x / 100 * width;
-    const y = el.y / 100 * height;
-    const w = el.w / 100 * width;
-    const h = el.h / 100 * height;
-
-    switch (point) {
-        case 'left':
-            return {x, y:y + h / 2};
-
-        case 'top':
-            return {x:x + w / 2, y};
-
-        case 'bottom':
-            return {x:x + w / 2, y:y + h};
-
-        default:
-            return {x:x + w, y:y + h / 2};
-    }
-}
-
-function waitForSeek()
-{
-    return new Promise(resolve => {
-
-        const check = () => {
-
-            if (
-                Math.abs(
-                    dom.video.currentTime
-                ) < 0.05
-            ) {
-                resolve();
-            } else {
-                requestAnimationFrame(check);
-            }
-        };
-
-        check();
-    });
-}
-
-/* =========================================================
- * Color
- * ======================================================= */
-
-function normalizeColor(color)
-{
-    if (!color) return '#ffffff';
-
-    if (/^#[0-9a-f]{6}$/i.test(color)) {
-        return color.toLowerCase();
-    }
-
-    return '#ffffff';
-}
-
-function hexToRgba(hex, alpha)
-{
-    hex = normalizeColor(hex);
-
-    const r =
-        parseInt(hex.slice(1,3),16);
-
-    const g =
-        parseInt(hex.slice(3,5),16);
-
-    const b =
-        parseInt(hex.slice(5,7),16);
-
-    return `rgba(${r},${g},${b},${alpha})`;
-}
-
-/* =========================================================
- * Events
- * ======================================================= */
-
-function bind(id, event, handler)
-{
-    const element = $(id);
-
-    if (!element) {
-        console.warn(
-            `イベント対象が存在しません: #${id}`
-        );
-        return;
-    }
-
-    element.addEventListener(
-        event,
-        handler
-    );
-}
-
-bind('newVideoBtn','click',() => {
-    $('videoFile').click();
-});
-
-bind('homeVideoBtn','click',() => {
-    $('videoFile').click();
-});
-
-bind('openProjectBtn','click',() => {
-    $('projectsModal').style.display = 'flex';
-    refreshProjectList();
-});
-
-bind('homeOpenBtn','click',() => {
-    $('projectsModal').style.display = 'flex';
-    refreshProjectList();
-});
-
-bind('homeImportBtn','click',() => {
-    $('projectFile').click();
-});
-
-bind('saveServerBtn','click',saveServer);
-
-bind('saveLocalBtn','click',async () => {
-    try {
-        if (!state.project) return;
-
-        state.project.name =
-            dom.projectName.value.trim();
-
-        if (!state.project.name) {
-            showMessage(
-                'プロジェクト名を入力してください。'
-            );
-            return;
-        }
-
-        await saveProjectToIndexedDB();
-
-        state.dirty = false;
-
-        setStatus('ローカル保存');
+        state.pendingProject =
+            normalized;
 
         showMessage(
-            'ブラウザのIndexedDBへ保存しました。',
+            'プロジェクトは読み込みました。対応する動画ファイルを選択してください。',
             true
         );
 
-    } catch (error) {
+        chooseVideo();
+
+    }catch(error){
+        console.error(error);
+
         showMessage(
-            'ローカル保存に失敗しました。\n' +
+            'プロジェクト読み込みに失敗しました：' +
             error.message
         );
     }
-});
+}
 
-bind('exportProjectBtn','click',exportProjectFile);
+/* =========================================================
+ * Project list
+ * ======================================================= */
 
-bind('exportVideoBtn','click',exportVideo);
+async function renderProjectList(){
+    const box =
+        $('projectList');
 
-bind('backBtn','click',() => {
+    if (!box) return;
 
+    box.innerHTML = '';
+
+    try{
+        const response =
+            await fetch(
+                '?api=list&_=' +
+                Date.now(),
+                {
+                    cache:'no-store'
+                }
+            );
+
+        const server =
+            await response.json();
+
+        const local =
+            await idbGetAll(
+                'projects'
+            );
+
+        const serverIds =
+            new Set(
+                (server.projects || [])
+                    .map(p => p.projectId)
+            );
+
+        const all = [];
+
+        (server.projects || []).forEach(
+            p =>
+                all.push({
+                    ...p,
+                    storage:'server'
+                })
+        );
+
+        local
+            .filter(
+                p =>
+                    !serverIds.has(
+                        p.projectId
+                    )
+            )
+            .forEach(
+                p =>
+                    all.push({
+                        ...p,
+                        storage:'local'
+                    })
+            );
+
+        if (!all.length) {
+            const help =
+                document.createElement('div');
+
+            help.className =
+                'help';
+
+            help.style.marginTop =
+                '20px';
+
+            help.textContent =
+                '保存済みプロジェクトはありません。';
+
+            box.appendChild(help);
+
+            return;
+        }
+
+        const title =
+            document.createElement('h3');
+
+        title.textContent =
+            '保存済みプロジェクト';
+
+        box.appendChild(title);
+
+        all.forEach(project=>{
+            const row =
+                document.createElement('div');
+
+            row.className =
+                'project';
+
+            const info =
+                document.createElement('div');
+
+            info.className =
+                'project-info';
+
+            const name =
+                document.createElement('div');
+
+            name.className =
+                'project-name';
+
+            name.textContent =
+                project.name;
+
+            const meta =
+                document.createElement('div');
+
+            meta.className =
+                'project-meta';
+
+            meta.textContent =
+                (
+                    project.storage === 'server'
+                        ? 'サーバー'
+                        : 'ローカル'
+                ) +
+                ' / ' +
+                (
+                    project.videoName ||
+                    '動画不明'
+                ) +
+                ' / ' +
+                (
+                    project.savedAt ||
+                    ''
+                );
+
+            info.appendChild(name);
+            info.appendChild(meta);
+
+            const actions =
+                document.createElement('div');
+
+            actions.className =
+                'project-actions';
+
+            const load =
+                document.createElement('button');
+
+            load.textContent =
+                '開く';
+
+            load.addEventListener(
+                'click',
+                () =>
+                    loadProject(
+                        project.projectId,
+                        project.storage
+                    )
+            );
+
+            actions.appendChild(
+                load
+            );
+
+            const del =
+                document.createElement('button');
+
+            del.textContent =
+                '削除';
+
+            del.className =
+                'danger';
+
+            del.addEventListener(
+                'click',
+                () =>
+                    project.storage === 'server'
+                        ? deleteServerProject(
+                            project.projectId
+                        )
+                        : deleteLocalProject(
+                            project.projectId
+                        )
+            );
+
+            actions.appendChild(
+                del
+            );
+
+            row.appendChild(info);
+            row.appendChild(actions);
+
+            box.appendChild(row);
+        });
+
+    }catch(error){
+        console.error(error);
+
+        box.innerHTML =
+            '<div class="help">保存データを取得できませんでした。</div>';
+    }
+}
+
+async function loadProject(id,storage){
+    try{
+        let project;
+
+        if (storage === 'local') {
+            project =
+                await idbGet(
+                    'projects',
+                    id
+                );
+        } else {
+            const response =
+                await fetch(
+                    '?api=load&id=' +
+                    encodeURIComponent(id) +
+                    '&_=' +
+                    Date.now(),
+                    {
+                        cache:'no-store'
+                    }
+                );
+
+            const result =
+                await response.json();
+
+            if (!result.ok) {
+                throw new Error(
+                    result.message
+                );
+            }
+
+            project =
+                result.project;
+        }
+
+        if (!project) {
+            throw new Error(
+                'プロジェクトが見つかりません。'
+            );
+        }
+
+        project =
+            normalizeProject(
+                project
+            );
+
+        if (
+            project.videoKey
+        ) {
+            const record =
+                await idbGet(
+                    'videos',
+                    project.videoKey
+                );
+
+            if (record?.blob) {
+                await openEditor(
+                    project,
+                    record.blob
+                );
+
+                showMessage(
+                    'プロジェクトを読み込みました。',
+                    true
+                );
+
+                return;
+            }
+        }
+
+        state.pendingProject =
+            project;
+
+        showMessage(
+            'プロジェクトは読み込みましたが、動画本体がこのブラウザにありません。動画ファイルを選択してください。',
+            true
+        );
+
+        chooseVideo();
+
+    }catch(error){
+        console.error(error);
+
+        showMessage(
+            '読み込みに失敗しました：' +
+            error.message
+        );
+    }
+}
+
+async function deleteLocalProject(id){
     if (
-        state.dirty &&
         !confirm(
-            '未保存の変更があります。戻りますか？'
+            'ローカルプロジェクトを削除しますか？'
         )
     ) {
         return;
     }
 
-    showHome();
-});
+    try{
+        await idbDelete(
+            'projects',
+            id
+        );
 
-bind('playBtn','click',() => {
+        renderProjectList();
 
-    if (!canEdit()) return;
-
-    if (dom.video.paused) {
-        dom.video.play().catch(error => {
-            showMessage(error.message);
-        });
-    } else {
-        dom.video.pause();
-    }
-});
-
-bind('videoFile','change',event => {
-
-    const file =
-        event.target.files?.[0];
-
-    if (file) {
-
-        if (!state.project) {
-            state.project = emptyProject();
-        }
-
-        loadVideoFile(file);
-    }
-
-    event.target.value = '';
-});
-
-bind('projectFile','change',event => {
-
-    const file =
-        event.target.files?.[0];
-
-    if (file) {
-        importProjectFile(file);
-    }
-
-    event.target.value = '';
-});
-
-bind('projectsClose','click',() => {
-    $('projectsModal').style.display = 'none';
-});
-
-bind('elementCancel','click',() => {
-    $('elementModal').style.display = 'none';
-});
-
-bind('elementApply','click',applyElementModal);
-
-bind('connectionCancel','click',() => {
-    $('connectionModal').style.display = 'none';
-});
-
-bind(
-    'connectionApply',
-    'click',
-    applyConnectionModal
-);
-
-bind('ctxAddText','click',() => {
-    addElement('comment');
-});
-
-bind('ctxAddBox','click',() => {
-    addElement('box');
-});
-
-bind('ctxAddSkip','click',() => {
-    addElement('skip');
-});
-
-bind('ctxEdit','click',() => {
-
-    const id = state.contextElementId;
-
-    hideContext();
-
-    if (id) {
-        openElementModal(id);
-    }
-});
-
-bind('ctxStyle','click',() => {
-
-    const id = state.contextElementId;
-
-    hideContext();
-
-    if (id) {
-        openElementModal(id);
-    }
-});
-
-bind('ctxDelete','click',() => {
-
-    const id = state.contextElementId;
-
-    if (id) {
-        deleteElement(id);
-    }
-});
-
-bind('ctxConnect','click',() => {
-
-    hideContext();
-
-    if (state.selected.size === 2) {
-        openConnectionModal();
-    }
-});
-
-bind('ctxDeleteConnection','click',() => {
-
-    const id =
-        state.contextConnectionId;
-
-    if (id) {
-        deleteConnection(id);
-    }
-});
-
-bind('projectName','input',() => {
-
-    if (!state.project) return;
-
-    state.project.name =
-        dom.projectName.value;
-
-    markDirty();
-});
-
-bind('seek','input',() => {
-
-    if (!canEdit()) return;
-
-    dom.video.currentTime =
-        num(dom.seek.value);
-
-    updateTime();
-    renderAll();
-});
-
-dom.video.addEventListener(
-    'timeupdate',
-    () => {
-        updateTime();
-        renderStage();
-        renderConnections();
-    }
-);
-
-dom.video.addEventListener(
-    'play',
-    () => {
-        dom.play.textContent = '⏸';
-    }
-);
-
-dom.video.addEventListener(
-    'pause',
-    () => {
-        dom.play.textContent = '▶';
-    }
-);
-
-dom.video.addEventListener(
-    'ended',
-    () => {
-        dom.play.textContent = '▶';
-        updateTime();
-        renderAll();
-    }
-);
-
-/* =========================================================
- * Video area context menu
- * ======================================================= */
-
-dom.videoArea.addEventListener(
-    'contextmenu',
-    event => {
-
-        event.preventDefault();
-
-        if (!state.ready) {
-            showMessage(
-                '動画の読み込みが完了してから編集してください。'
-            );
-            return;
-        }
-
-        const target =
-            event.target.closest('.edit-object');
-
-        if (target) {
-            return;
-        }
-
-        const connection =
-            event.target.closest('.connector-hit');
-
-        if (connection) {
-            return;
-        }
-
-        const position =
-            stagePositionFromPointer(event);
-
-        state.contextElementId = null;
-        state.contextConnectionId = null;
-        state.contextX = position.x;
-        state.contextY = position.y;
-
-        showContext(
-            event.clientX,
-            event.clientY
+        showMessage(
+            'ローカルプロジェクトを削除しました。',
+            true
+        );
+    }catch(error){
+        showMessage(
+            error.message
         );
     }
-);
+}
+
+async function deleteServerProject(id){
+    if (
+        !confirm(
+            'サーバープロジェクトを削除しますか？'
+        )
+    ) {
+        return;
+    }
+
+    try{
+        const response =
+            await fetch(
+                '?api=delete',
+                {
+                    method:'POST',
+                    headers:{
+                        'Content-Type':
+                            'application/json'
+                    },
+                    body:
+                        JSON.stringify({
+                            projectId:id
+                        })
+                }
+            );
+
+        const result =
+            await response.json();
+
+        if (!result.ok) {
+            throw new Error(
+                result.message
+            );
+        }
+
+        renderProjectList();
+
+        showMessage(
+            'サーバープロジェクトを削除しました。',
+            true
+        );
+    }catch(error){
+        showMessage(
+            error.message
+        );
+    }
+}
 
 /* =========================================================
- * Click stage
+ * Recorder
  * ======================================================= */
 
-dom.videoArea.addEventListener(
-    'pointerdown',
-    event => {
+async function startRecording(){
+    try{
+        if (
+            !navigator.mediaDevices?.getDisplayMedia
+        ) {
+            throw new Error(
+                'このブラウザでは画面録画に対応していません。'
+            );
+        }
+
+        const display =
+            await navigator.mediaDevices.getDisplayMedia({
+                video:true,
+                audio:$('systemAudio').checked
+            });
+
+        let stream =
+            display;
 
         if (
-            event.target === dom.video ||
-            event.target === dom.objects ||
-            event.target === dom.videoArea
+            $('microphone').checked
         ) {
-            if (!event.shiftKey) {
-                state.selected.clear();
-                renderStage();
-            }
-        }
-    }
-);
+            const mic =
+                await navigator.mediaDevices.getUserMedia({
+                    audio:true
+                });
 
-/* =========================================================
- * Context menu outside
- * ======================================================= */
-
-document.addEventListener(
-    'pointerdown',
-    event => {
-
-        if (
-            dom.context.style.display !== 'block'
-        ) {
-            return;
-        }
-
-        if (!dom.context.contains(event.target)) {
-            hideContext();
-        }
-    }
-);
-
-/* =========================================================
- * Escape
- * ======================================================= */
-
-document.addEventListener(
-    'keydown',
-    event => {
-
-        if (event.key === 'Escape') {
-            hideContext();
-
-            document
-                .querySelectorAll('.modal-backdrop')
+            mic.getAudioTracks()
                 .forEach(
-                    modal => modal.style.display = 'none'
+                    track =>
+                        stream.addTrack(track)
                 );
         }
 
-        if (
-            event.key === 'Delete' &&
-            state.selected.size === 1 &&
-            !['INPUT','TEXTAREA','SELECT'].includes(
-                document.activeElement?.tagName
-            )
-        ) {
-            const id =
-                [...state.selected][0];
+        state.recordStream =
+            stream;
 
-            deleteElement(id);
-        }
-    }
-);
+        $('preview').srcObject =
+            stream;
 
-/* =========================================================
- * Resize
- * ======================================================= */
+        const types = [
+            'video/webm;codecs=vp9,opus',
+            'video/webm;codecs=vp8,opus',
+            'video/webm'
+        ];
 
-window.addEventListener(
-    'resize',
-    fitStage
-);
+        const mimeType =
+            types.find(
+                type =>
+                    MediaRecorder.isTypeSupported(
+                        type
+                    )
+            ) || '';
 
-/* =========================================================
- * Drag/drop video
- * ======================================================= */
+        state.recordChunks = [];
 
-['dragenter','dragover'].forEach(eventName => {
+        state.recorder =
+            new MediaRecorder(
+                stream,
+                mimeType
+                    ? {mimeType}
+                    : undefined
+            );
 
-    document.addEventListener(
-        eventName,
-        event => {
-
-            event.preventDefault();
-
-            if (
-                event.dataTransfer &&
-                [...event.dataTransfer.types]
-                    .includes('Files')
-            ) {
-                dom.videoArea.style.outline =
-                    '2px solid #267bd3';
-            }
-        }
-    );
-});
-
-['dragleave','drop'].forEach(eventName => {
-
-    document.addEventListener(
-        eventName,
-        event => {
-
-            event.preventDefault();
-
-            dom.videoArea.style.outline = '';
-
-            if (eventName === 'drop') {
-
-                const files =
-                    [...(event.dataTransfer?.files || [])];
-
-                const video =
-                    files.find(
-                        file =>
-                            file.type.startsWith('video/')
+        state.recorder.ondataavailable =
+            event=>{
+                if (event.data.size) {
+                    state.recordChunks.push(
+                        event.data
                     );
-
-                if (video) {
-                    if (!state.project) {
-                        state.project = emptyProject();
-                    }
-
-                    loadVideoFile(video);
                 }
-            }
-        }
-    );
-});
+            };
 
-/* =========================================================
- * Initial
- * ======================================================= */
+        state.recorder.onstop =
+            finishRecording;
 
-async function initialize()
-{
-    state.project = null;
+        state.recorder.start(250);
 
-    try {
-        await openDB();
-    } catch (error) {
-        console.warn(
-            'IndexedDB unavailable:',
-            error
+        state.recordStartedAt =
+            Date.now();
+
+        state.recordTimer =
+            setInterval(
+                updateRecordTimer,
+                250
+            );
+
+        $('startRecord').disabled =
+            true;
+
+        $('pauseRecord').disabled =
+            false;
+
+        $('stopRecord').disabled =
+            false;
+
+        stream.getVideoTracks()[0].onended =
+            () => {
+                if (
+                    state.recorder &&
+                    state.recorder.state !==
+                        'inactive'
+                ) {
+                    state.recorder.stop();
+                }
+            };
+
+    }catch(error){
+        console.error(error);
+
+        showMessage(
+            '録画を開始できませんでした：' +
+            error.message
         );
     }
-
-    await refreshProjectList();
-
-    setStatus('待機中');
 }
 
-initialize();
+function updateRecordTimer(){
+    if (!state.recordStartedAt) {
+        return;
+    }
 
+    const elapsed =
+        Math.floor(
+            (
+                Date.now() -
+                state.recordStartedAt
+            ) / 1000
+        );
+
+    const h =
+        Math.floor(
+            elapsed / 3600
+        );
+
+    const m =
+        Math.floor(
+            elapsed % 3600 / 60
+        );
+
+    const s =
+        elapsed % 60;
+
+    $('timer').textContent =
+        [
+            h,
+            m,
+            s
+        ]
+            .map(
+                x =>
+                    String(x).padStart(
+                        2,
+                        '0'
+                    )
+            )
+            .join(':');
+}
+
+function pauseRecording(){
+    if (!state.recorder) {
+        return;
+    }
+
+    if (
+        state.recorder.state === 'recording'
+    ) {
+        state.recorder.pause();
+        $('pauseRecord').textContent =
+            '再開';
+    } else if (
+        state.recorder.state === 'paused'
+    ) {
+        state.recorder.resume();
+        $('pauseRecord').textContent =
+            '一時停止';
+    }
+}
+
+function stopRecording(){
+    if (
+        state.recorder &&
+        state.recorder.state !== 'inactive'
+    ) {
+        state.recorder.stop();
+    }
+}
+
+async function finishRecording(){
+    clearInterval(
+        state.recordTimer
+    );
+
+    state.recordTimer =
+        null;
+
+    state.recordStream
+        ?.getTracks()
+        .forEach(
+            track =>
+                track.stop()
+        );
+
+    const type =
+        state.recordChunks[0]?.type ||
+        'video/webm';
+
+    const blob =
+        new Blob(
+            state.recordChunks,
+            {type}
+        );
+
+    state.recordChunks = [];
+
+    $('preview').srcObject =
+        null;
+
+    $('startRecord').disabled =
+        false;
+
+    $('pauseRecord').disabled =
+        true;
+
+    $('stopRecord').disabled =
+        true;
+
+    $('pauseRecord').textContent =
+        '一時停止';
+
+    try{
+        const metadata =
+            await validateVideoBlob(
+                blob
+            );
+
+        const project =
+            createEmptyProject(
+                '画面録画 ' +
+                new Date()
+                    .toLocaleString(),
+                'recording.webm'
+            );
+
+        project.duration =
+            metadata.duration;
+
+        await openEditor(
+            project,
+            blob,
+            metadata
+        );
+
+        try{
+            const key =
+                await saveVideoBlob(
+                    blob,
+                    'recording.webm',
+                    type
+                );
+
+            state.project.videoKey =
+                key;
+
+            markDirty();
+
+        }catch(error){
+            console.error(error);
+        }
+
+        showMessage(
+            '録画した動画を編集対象として読み込みました。',
+            true
+        );
+
+    }catch(error){
+        showMessage(
+            '録画データを編集できませんでした：' +
+            error.message
+        );
+    }
+}
+
+/* =========================================================
+ * Close editor
+ * ======================================================= */
+
+function closeEditor(){
+    if (
+        state.dirty &&
+        !confirm(
+            '未保存の編集があります。閉じますか？'
+        )
+    ) {
+        return;
+    }
+
+    $('editor').style.display =
+        'none';
+
+    $('home').style.display =
+        'flex';
+
+    hideContextMenu();
+
+    if (state.videoUrl) {
+        URL.revokeObjectURL(
+            state.videoUrl
+        );
+
+        state.videoUrl = '';
+    }
+
+    $('recordedVideo').pause();
+
+    $('recordedVideo')
+        .removeAttribute('src');
+
+    $('recordedVideo').load();
+
+    state.project = null;
+    state.videoBlob = null;
+    state.selected = null;
+    state.selectedType = null;
+    state.multiSelected = [];
+    state.drag = null;
+    state.timelineDrag = null;
+    state.dirty = false;
+
+    setStatus('待機中');
+
+    renderProjectList();
+}
+
+/* =========================================================
+ * Event binding
+ * ======================================================= */
+
+function bindEvents(){
+
+    $('newVideoBtn')
+        ?.addEventListener(
+            'click',
+            chooseVideo
+        );
+
+    $('videoFile')
+        ?.addEventListener(
+            'change',
+            async event=>{
+                const file =
+                    event.target.files?.[0];
+
+                event.target.value = '';
+
+                await handleVideoFile(
+                    file
+                );
+            }
+        );
+
+    $('manageBtn')
+        ?.addEventListener(
+            'click',
+            renderProjectList
+        );
+
+    $('recordScreenBtn')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                $('home').style.display =
+                    'none';
+
+                $('recorder').style.display =
+                    'flex';
+            }
+        );
+
+    $('recordCancel')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                if (
+                    state.recorder &&
+                    state.recorder.state !==
+                        'inactive'
+                ) {
+                    state.recorder.stop();
+                }
+
+                state.recordStream
+                    ?.getTracks()
+                    .forEach(
+                        track =>
+                            track.stop()
+                    );
+
+                $('recorder').style.display =
+                    'none';
+
+                $('home').style.display =
+                    'flex';
+            }
+        );
+
+    $('startRecord')
+        ?.addEventListener(
+            'click',
+            startRecording
+        );
+
+    $('pauseRecord')
+        ?.addEventListener(
+            'click',
+            pauseRecording
+        );
+
+    $('stopRecord')
+        ?.addEventListener(
+            'click',
+            stopRecording
+        );
+
+    $('backHome')
+        ?.addEventListener(
+            'click',
+            closeEditor
+        );
+
+    $('saveServer')
+        ?.addEventListener(
+            'click',
+            saveServer
+        );
+
+    $('saveLocal')
+        ?.addEventListener(
+            'click',
+            saveLocal
+        );
+
+    $('exportJson')
+        ?.addEventListener(
+            'click',
+            exportProject
+        );
+
+    $('importJson')
+        ?.addEventListener(
+            'click',
+            () =>
+                $('jsonFile').click()
+        );
+
+    $('jsonFile')
+        ?.addEventListener(
+            'change',
+            async event=>{
+                const file =
+                    event.target.files?.[0];
+
+                event.target.value = '';
+
+                await importProjectFile(
+                    file
+                );
+            }
+        );
+
+    $('editorProjectName')
+        ?.addEventListener(
+            'input',
+            ()=>{
+                if (state.project) {
+                    state.project.name =
+                        $('editorProjectName')
+                            .value;
+
+                    markDirty();
+                }
+            }
+        );
+
+    $('seek')
+        ?.addEventListener(
+            'input',
+            event=>{
+                const d =
+                    duration();
+
+                $('recordedVideo')
+                    .currentTime =
+                    clamp(
+                        number(
+                            event.target.value
+                        ),
+                        0,
+                        d
+                    );
+            }
+        );
+
+    $('playVideo')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                $('recordedVideo')
+                    .play()
+                    .catch(
+                        console.error
+                    );
+            }
+        );
+
+    $('pauseVideo')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                $('recordedVideo')
+                    .pause();
+            }
+        );
+
+    $('clearSelection')
+        ?.addEventListener(
+            'click',
+            selectNone
+        );
+
+    $('deleteSelected')
+        ?.addEventListener(
+            'click',
+            deleteSelected
+        );
+
+    $('recordedVideo')
+        ?.addEventListener(
+            'loadedmetadata',
+            ()=>{
+                const d =
+                    Number(
+                        $('recordedVideo')
+                            .duration
+                    );
+
+                if (
+                    Number.isFinite(d) &&
+                    d > 0
+                ) {
+                    if (state.project) {
+                        state.project.duration =
+                            d;
+                    }
+
+                    $('seek').min =
+                        '0';
+
+                    $('seek').max =
+                        String(d);
+
+                    $('seek').disabled =
+                        false;
+                }
+
+                updateStageSize();
+                renderAll();
+            }
+        );
+
+    $('recordedVideo')
+        ?.addEventListener(
+            'timeupdate',
+            ()=>{
+                updateTimeReadout();
+                applySkip();
+                renderObjects();
+                renderConnections();
+            }
+        );
+
+    $('recordedVideo')
+        ?.addEventListener(
+            'seeked',
+            renderAll
+        );
+
+    $('videoArea')
+        ?.addEventListener(
+            'pointerdown',
+            beginElementPointer
+        );
+
+    window.addEventListener(
+        'pointermove',
+        moveElementPointer
+    );
+
+    window.addEventListener(
+        'pointerup',
+        endElementPointer
+    );
+
+    /*
+     * 動画画面右クリック。
+     */
+    $('videoStage')
+        ?.addEventListener(
+            'contextmenu',
+            event=>{
+                event.preventDefault();
+
+                const object =
+                    event.target.closest(
+                        '.edit-object'
+                    );
+
+                const connectionPath =
+                    event.target.closest(
+                        '.connector-hit'
+                    );
+
+                if (object) {
+                    const id =
+                        object.dataset.id;
+
+                    state.contextTarget = {
+                        type:'element',
+                        id
+                    };
+
+                    selectElement(id);
+
+                } else if (
+                    connectionPath
+                ) {
+                    /*
+                     * SVG hit pathにはIDを持たせていないので
+                     * 選択済み接続を対象にする。
+                     */
+                    state.contextTarget = {
+                        type:'connection',
+                        id:
+                            state.selectedType ===
+                                'connection'
+                                ? state.selected
+                                : null
+                    };
+
+                } else {
+                    const rect =
+                        $('videoStage')
+                            .getBoundingClientRect();
+
+                    state.contextTarget = {
+                        type:'stage',
+                        x:
+                            (
+                                event.clientX -
+                                rect.left
+                            ) /
+                            rect.width *
+                            100,
+                        y:
+                            (
+                                event.clientY -
+                                rect.top
+                            ) /
+                            rect.height *
+                            100
+                    };
+                }
+
+                updateContextMenu();
+
+                showContextMenu(
+                    event.clientX,
+                    event.clientY
+                );
+            }
+        );
+
+    document.addEventListener(
+        'click',
+        event=>{
+            if (
+                !event.target.closest(
+                    '#contextMenu'
+                )
+            ) {
+                hideContextMenu();
+            }
+        }
+    );
+
+    $('ctxAddComment')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                const t =
+                    state.contextTarget;
+
+                addElement(
+                    'comment',
+                    t?.x ?? null,
+                    t?.y ?? null
+                );
+
+                hideContextMenu();
+            }
+        );
+
+    $('ctxAddBox')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                const t =
+                    state.contextTarget;
+
+                addElement(
+                    'box',
+                    t?.x ?? null,
+                    t?.y ?? null
+                );
+
+                hideContextMenu();
+            }
+        );
+
+    $('ctxAddSkip')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                const t =
+                    state.contextTarget;
+
+                addElement(
+                    'skip',
+                    t?.x ?? null,
+                    t?.y ?? null
+                );
+
+                hideContextMenu();
+            }
+        );
+
+    $('ctxEdit')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                if (
+                    state.contextTarget?.id
+                ) {
+                    openObjectModal(
+                        state.contextTarget.id
+                    );
+                }
+
+                hideContextMenu();
+            }
+        );
+
+    $('ctxDuplicate')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                duplicateSelected();
+                hideContextMenu();
+            }
+        );
+
+    $('ctxDelete')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                deleteSelected();
+                hideContextMenu();
+            }
+        );
+
+    $('ctxConnect')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                connectSelected();
+                hideContextMenu();
+            }
+        );
+
+    $('ctxConnectionEdit')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                if (
+                    state.contextTarget?.id
+                ) {
+                    openConnectionModal(
+                        state.contextTarget.id
+                    );
+                } else {
+                    openConnectionModal();
+                }
+
+                hideContextMenu();
+            }
+        );
+
+    $('ctxConnectionDelete')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                deleteConnection(
+                    state.contextTarget?.id ||
+                    state.selected
+                );
+
+                hideContextMenu();
+            }
+        );
+
+    $('cancelObjectStyle')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                $('objectModal')
+                    .style.display =
+                    'none';
+            }
+        );
+
+    $('applyObjectStyle')
+        ?.addEventListener(
+            'click',
+            applyObjectStyle
+        );
+
+    $('cancelConnection')
+        ?.addEventListener(
+            'click',
+            ()=>{
+                $('connectionModal')
+                    .style.display =
+                    'none';
+            }
+        );
+
+    $('applyConnection')
+        ?.addEventListener(
+            'click',
+            applyConnection
+        );
+
+    $('objectModal')
+        ?.addEventListener(
+            'click',
+            event=>{
+                if (
+                    event.target ===
+                    $('objectModal')
+                ) {
+                    event.currentTarget
+                        .style.display =
+                        'none';
+                }
+            }
+        );
+
+    $('connectionModal')
+        ?.addEventListener(
+            'click',
+            event=>{
+                if (
+                    event.target ===
+                    $('connectionModal')
+                ) {
+                    event.currentTarget
+                        .style.display =
+                        'none';
+                }
+            }
+        );
+
+    document.addEventListener(
+        'keydown',
+        event=>{
+            if (
+                event.key === 'Escape'
+            ) {
+                hideContextMenu();
+
+                $('objectModal')
+                    .style.display =
+                    'none';
+
+                $('connectionModal')
+                    .style.display =
+                    'none';
+            }
+
+            if (
+                event.key === 'Delete' &&
+                !event.target.matches(
+                    'input,textarea,select'
+                )
+            ) {
+                deleteSelected();
+            }
+        }
+    );
+
+    window.addEventListener(
+        'resize',
+        ()=>{
+            if (
+                $('editor').style.display !==
+                'none'
+            ) {
+                updateStageSize();
+                renderAll();
+            }
+        }
+    );
+}
+
+/* =========================================================
+ * Render all
+ * ======================================================= */
+
+function renderAll(){
+    if (!state.project) {
+        return;
+    }
+
+    renderObjects();
+    renderConnections();
+    renderTimeline();
+    updateTimeReadout();
+}
+
+/* =========================================================
+ * Init
+ * ======================================================= */
+
+async function init(){
+    try{
+        buildColorPalette();
+
+        await openDB();
+
+        bindEvents();
+
+        setStatus(
+            '待機中'
+        );
+
+        await renderProjectList();
+
+        try{
+            const local =
+                await idbGetAll(
+                    'projects'
+                );
+
+            if (local.length) {
+                setStatus(
+                    '待機中 / ローカル保存 ' +
+                    local.length +
+                    '件'
+                );
+            }
+        }catch(error){
+            console.warn(
+                'ローカルプロジェクト一覧取得失敗',
+                error
+            );
+        }
+
+    }catch(error){
+        console.error(error);
+
+        setStatus(
+            '初期化エラー'
+        );
+
+        showMessage(
+            '初期化に失敗しました：' +
+            error.message
+        );
+    }
+}
+
+if (
+    document.readyState ===
+    'loading'
+) {
+    document.addEventListener(
+        'DOMContentLoaded',
+        init,
+        {once:true}
+    );
+} else {
+    init();
+}
 </script>
 
 </body>
