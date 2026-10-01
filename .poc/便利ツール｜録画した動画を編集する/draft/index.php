@@ -5,98 +5,71 @@ declare(strict_types=1);
  * 動画上直接編集ツール
  * Apache + PHP / index.php 1ファイル
  *
- * サーバー保存:
- *   ./data/projects/*.json
+ * 保存:
+ *   サーバー: ./data/projects/*.json
+ *   ブラウザ: IndexedDB
  *
- * 動画本体:
- *   ブラウザ IndexedDB
- *
- * プロジェクト書き出し:
- *   JSON
- *
- * MP4再エンコード:
- *   このファイルでは行わない。
+ * 注意:
+ *   「書き出し」は編集プロジェクト(JSON)の書き出し。
+ *   MP4への再エンコードにはFFmpeg等のサーバー処理が別途必要。
  */
 
-const APP_VERSION = 11;
+const APP_VERSION = 12;
 const MAX_SERVER_PROJECTS = 20;
 
 const DATA_DIR = __DIR__ . DIRECTORY_SEPARATOR . 'data';
 const PROJECT_DIR = DATA_DIR . DIRECTORY_SEPARATOR . 'projects';
 
-function jsonResponse(array $data, int $status = 200): never
-{
+function jsonResponse(array $data, int $status = 200): never {
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }
 
-function ensureProjectDir(): bool
-{
-    if (!is_dir(DATA_DIR) && !@mkdir(DATA_DIR, 0775, true)) {
-        return false;
-    }
-
-    if (!is_dir(PROJECT_DIR) && !@mkdir(PROJECT_DIR, 0775, true)) {
-        return false;
-    }
-
+function ensureProjectDir(): bool {
+    if (!is_dir(DATA_DIR) && !@mkdir(DATA_DIR, 0775, true)) return false;
+    if (!is_dir(PROJECT_DIR) && !@mkdir(PROJECT_DIR, 0775, true)) return false;
     return is_dir(PROJECT_DIR) && is_writable(PROJECT_DIR);
 }
 
-function validProjectId(string $id): bool
-{
-    return (bool)preg_match('/^[A-Za-z0-9_-]{8,120}$/', $id);
+function validProjectId(string $id): bool {
+    return (bool)preg_match('/^[A-Za-z0-9_-]{8,100}$/', $id);
 }
 
-function projectPath(string $id): string
-{
+function projectPath(string $id): string {
     return PROJECT_DIR . DIRECTORY_SEPARATOR . $id . '.json';
 }
 
-function readServerProjects(): array
-{
-    if (!is_dir(PROJECT_DIR)) {
-        return [];
-    }
+function readProjects(): array {
+    if (!is_dir(PROJECT_DIR)) return [];
 
-    $result = [];
-
+    $items = [];
     foreach (glob(PROJECT_DIR . DIRECTORY_SEPARATOR . '*.json') ?: [] as $file) {
         $data = json_decode(@file_get_contents($file) ?: '', true);
-
-        if (is_array($data) && isset($data['projectId'])) {
-            $result[] = $data;
-        }
+        if (is_array($data) && isset($data['projectId'])) $items[] = $data;
     }
 
-    usort(
-        $result,
-        static fn(array $a, array $b): int =>
-            strcmp(
-                (string)($b['savedAt'] ?? ''),
-                (string)($a['savedAt'] ?? '')
-            )
+    usort($items, static fn($a, $b) =>
+        strcmp((string)($b['savedAt'] ?? ''), (string)($a['savedAt'] ?? ''))
     );
 
-    return $result;
+    return $items;
 }
 
-function projectSummary(array $project): array
-{
+function summary(array $p): array {
     return [
-        'projectId' => (string)($project['projectId'] ?? ''),
-        'name' => (string)($project['name'] ?? '名称未設定'),
-        'videoName' => (string)($project['videoName'] ?? ''),
-        'savedAt' => (string)($project['savedAt'] ?? ''),
-        'version' => (int)($project['version'] ?? 1),
+        'projectId' => (string)($p['projectId'] ?? ''),
+        'name' => (string)($p['name'] ?? '名称未設定'),
+        'videoName' => (string)($p['videoName'] ?? ''),
+        'videoDuration' => (float)($p['videoDuration'] ?? 0),
+        'savedAt' => (string)($p['savedAt'] ?? ''),
         'storage' => 'server'
     ];
 }
 
 /* =========================================================
- * PHP API
+ * API
  * ======================================================= */
 
 if (isset($_GET['api'])) {
@@ -108,14 +81,15 @@ if (isset($_GET['api'])) {
             'version' => APP_VERSION,
             'serverWritable' => ensureProjectDir(),
             'serverLimit' => MAX_SERVER_PROJECTS,
-            'serverCount' => count(readServerProjects())
+            'serverCount' => count(readProjects()),
+            'php' => PHP_VERSION
         ]);
     }
 
     if ($api === 'list') {
         jsonResponse([
             'ok' => true,
-            'projects' => array_map('projectSummary', readServerProjects()),
+            'projects' => array_map('summary', readProjects()),
             'limit' => MAX_SERVER_PROJECTS
         ]);
     }
@@ -133,13 +107,13 @@ if (isset($_GET['api'])) {
             jsonResponse(['ok' => false, 'message' => 'プロジェクトが見つかりません。'], 404);
         }
 
-        $data = json_decode(@file_get_contents($file) ?: '', true);
+        $project = json_decode(@file_get_contents($file) ?: '', true);
 
-        if (!is_array($data)) {
+        if (!is_array($project)) {
             jsonResponse(['ok' => false, 'message' => '保存データが壊れています。'], 500);
         }
 
-        jsonResponse(['ok' => true, 'project' => $data]);
+        jsonResponse(['ok' => true, 'project' => $project]);
     }
 
     if ($api === 'save') {
@@ -150,72 +124,65 @@ if (isset($_GET['api'])) {
         if (!ensureProjectDir()) {
             jsonResponse([
                 'ok' => false,
-                'message' => 'data/projects に書き込めません。'
+                'message' => 'サーバー側の保存先に書き込めません。'
             ], 500);
         }
 
-        $payload = json_decode(file_get_contents('php://input') ?: '', true);
+        $project = json_decode(file_get_contents('php://input') ?: '', true);
 
-        if (!is_array($payload)) {
+        if (!is_array($project)) {
             jsonResponse(['ok' => false, 'message' => 'JSONが不正です。'], 400);
         }
 
-        $id = trim((string)($payload['projectId'] ?? ''));
+        $id = trim((string)($project['projectId'] ?? ''));
 
-        if ($id === '') {
-            $id = 'project-' . bin2hex(random_bytes(10));
-        }
+        if ($id === '') $id = 'project-' . bin2hex(random_bytes(8));
 
         if (!validProjectId($id)) {
             jsonResponse(['ok' => false, 'message' => 'プロジェクトIDが不正です。'], 400);
         }
 
-        $name = trim((string)($payload['name'] ?? ''));
+        $name = trim((string)($project['name'] ?? ''));
 
         if ($name === '') {
             jsonResponse(['ok' => false, 'message' => 'プロジェクト名を入力してください。'], 422);
         }
 
         if (mb_strlen($name) > 120) {
-            jsonResponse(['ok' => false, 'message' => 'プロジェクト名は120文字以内にしてください。'], 422);
+            jsonResponse(['ok' => false, 'message' => 'プロジェクト名は120文字以内です。'], 422);
         }
 
-        $existing = is_file(projectPath($id));
-        $projects = readServerProjects();
+        $file = projectPath($id);
+        $existing = is_file($file);
 
-        if (!$existing && count($projects) >= MAX_SERVER_PROJECTS) {
+        if (!$existing && count(readProjects()) >= MAX_SERVER_PROJECTS) {
             jsonResponse([
                 'ok' => false,
                 'limit' => true,
-                'message' => 'サーバー保存上限に達しました。ローカル保存を使用してください。'
+                'message' => 'サーバー保存上限に達しています。ローカル保存を使用してください。'
             ], 409);
         }
 
-        $payload['version'] = APP_VERSION;
-        $payload['projectId'] = $id;
-        $payload['name'] = $name;
-        $payload['savedAt'] = date('c');
+        $project['projectId'] = $id;
+        $project['name'] = $name;
+        $project['version'] = APP_VERSION;
+        $project['savedAt'] = date('c');
 
         $json = json_encode(
-            $payload,
+            $project,
             JSON_UNESCAPED_UNICODE |
             JSON_UNESCAPED_SLASHES |
             JSON_PRETTY_PRINT
         );
 
-        if ($json === false) {
-            jsonResponse(['ok' => false, 'message' => 'JSON生成に失敗しました。'], 500);
-        }
-
-        if (@file_put_contents(projectPath($id), $json, LOCK_EX) === false) {
-            jsonResponse(['ok' => false, 'message' => '編集データを保存できませんでした。'], 500);
+        if ($json === false || @file_put_contents($file, $json, LOCK_EX) === false) {
+            jsonResponse(['ok' => false, 'message' => '保存に失敗しました。'], 500);
         }
 
         jsonResponse([
             'ok' => true,
             'projectId' => $id,
-            'savedAt' => $payload['savedAt'],
-            'version' => APP_VERSION
+            'savedAt' => $project['savedAt']
         ]);
     }
 
@@ -248,56 +215,80 @@ if (isset($_GET['api'])) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>動画上直接編集ツール</title>
+<title>動画直接編集</title>
 
 <style>
 :root{
     --bg:#101216;
     --panel:#1b1e23;
     --panel2:#252a30;
-    --border:#414750;
-    --text:#f5f7fa;
-    --muted:#9ca5af;
-    --blue:#176bb9;
-    --green:#277a47;
-    --red:#a73535;
+    --panel3:#30353c;
+    --border:#454c55;
+    --text:#f4f6f8;
+    --muted:#9da6b0;
+    --blue:#1976d2;
+    --green:#287c4a;
+    --red:#a83b3b;
     --yellow:#ffd447;
-    --orange:#e38b28;
+    --orange:#e58b27;
+    --purple:#a76be5;
 }
+
 *{box-sizing:border-box}
+
 html,body{
     width:100%;
     height:100%;
     margin:0;
     background:var(--bg);
     color:var(--text);
-    font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP",sans-serif;
+    font-family:
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        "Noto Sans JP",
+        sans-serif;
 }
+
 body{overflow:hidden}
+
 button,input,select,textarea{font:inherit}
+
 button{
-    border:1px solid #565d66;
-    background:#30353c;
+    border:1px solid #555d66;
+    background:var(--panel3);
     color:#fff;
     border-radius:6px;
-    padding:7px 10px;
+    padding:7px 11px;
     cursor:pointer;
 }
-button:hover:not(:disabled){background:#424850}
-button:disabled{opacity:.4;cursor:not-allowed}
+
+button:hover:not(:disabled){background:#414850}
+
+button:disabled{
+    opacity:.4;
+    cursor:not-allowed;
+}
+
 button.primary{background:var(--blue)}
 button.success{background:var(--green)}
 button.danger{background:var(--red)}
+
 input,select,textarea{
     width:100%;
     color:#fff;
-    background:#252a30;
-    border:1px solid #555c65;
+    background:var(--panel2);
+    border:1px solid #555d66;
     border-radius:5px;
     padding:7px;
 }
-textarea{min-height:90px;resize:vertical}
-input[type=color]{height:38px;padding:3px}
+
+textarea{
+    min-height:90px;
+    resize:vertical;
+}
+
 .hidden{display:none!important}
 
 #message{
@@ -308,25 +299,44 @@ input[type=color]{height:38px;padding:3px}
     z-index:10000;
     display:none;
     max-width:90vw;
-    padding:10px 16px;
+    padding:9px 15px;
     border-radius:7px;
-    background:#983838;
+    background:#a83b3b;
     box-shadow:0 10px 35px #000b;
     white-space:pre-wrap;
 }
-#message.ok{background:#287348}
+
+#message.ok{background:#287c4a}
+
+/* =========================================================
+   HEADER
+========================================================= */
 
 header{
     height:48px;
     display:flex;
     align-items:center;
-    justify-content:space-between;
-    padding:0 14px;
+    gap:12px;
+    padding:0 12px;
     background:#1b1e22;
     border-bottom:1px solid #353a41;
 }
-header h1{margin:0;font-size:15px}
-#status{color:#b6bec7;font-size:12px}
+
+header h1{
+    margin:0;
+    font-size:15px;
+    white-space:nowrap;
+}
+
+#status{
+    margin-left:auto;
+    color:#aeb6bf;
+    font-size:12px;
+}
+
+/* =========================================================
+   HOME
+========================================================= */
 
 #home{
     height:calc(100vh - 48px);
@@ -334,56 +344,96 @@ header h1{margin:0;font-size:15px}
     justify-content:center;
     align-items:center;
     padding:20px;
-    background:#111317;
 }
+
 .home-card{
     width:min(760px,95vw);
     max-height:90vh;
     overflow:auto;
     padding:25px;
-    background:#1b1e23;
+    background:var(--panel);
     border:1px solid var(--border);
     border-radius:10px;
-    box-shadow:0 15px 50px #0007;
 }
+
 .home-card h2{margin:0 0 8px}
-.home-card p{color:var(--muted);font-size:13px;line-height:1.6}
-.home-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:15px}
+
+.home-card p{
+    color:var(--muted);
+    font-size:13px;
+    line-height:1.6;
+}
+
+.home-actions{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+    margin:16px 0;
+}
+
+.project-list{margin-top:20px}
+
 .project{
     display:flex;
     justify-content:space-between;
     align-items:center;
     gap:10px;
-    padding:11px;
+    padding:10px;
     margin:7px 0;
-    border:1px solid #414750;
+    border:1px solid var(--border);
     border-radius:7px;
 }
+
 .project-info{min-width:0}
-.project-name{font-weight:600}
-.project-meta{color:#929aa4;font-size:11px;margin-top:3px}
-.project-actions{display:flex;gap:5px}
+
+.project-name{
+    font-weight:600;
+}
+
+.project-meta{
+    margin-top:3px;
+    color:#929aa4;
+    font-size:11px;
+}
+
+.project-actions{
+    display:flex;
+    gap:5px;
+    flex-shrink:0;
+}
+
+/* =========================================================
+   EDITOR
+========================================================= */
 
 #editor{
     position:fixed;
-    inset:0;
-    z-index:200;
+    inset:48px 0 0;
     display:none;
     flex-direction:column;
-    background:#111;
+    background:#0e1013;
 }
+
 .editor-top{
-    min-height:48px;
+    height:46px;
     flex-shrink:0;
     display:flex;
     align-items:center;
     gap:7px;
-    padding:6px 10px;
+    padding:5px 9px;
     background:#1b1e22;
     border-bottom:1px solid #363b42;
 }
-#editorProjectName{width:220px;font-weight:600}
-#editorStatus{color:#aeb6bf;font-size:12px;margin-left:auto}
+
+#editorProjectName{
+    width:220px;
+    font-weight:600;
+}
+
+#editorStatus{
+    color:#aeb6bf;
+    font-size:12px;
+}
 
 .editor-main{
     flex:1;
@@ -391,33 +441,43 @@ header h1{margin:0;font-size:15px}
     display:flex;
     flex-direction:column;
 }
+
+/* 動画領域を必要以上に大きくしない */
 .video-area{
-    flex:1;
+    flex:1 1 auto;
     min-height:0;
     display:flex;
-    justify-content:center;
     align-items:center;
+    justify-content:center;
     overflow:hidden;
-    background:#000;
-    position:relative;
+    background:#050607;
+    padding:8px;
 }
+
 #videoStage{
     position:relative;
+    width:min(78vw,1200px);
+    height:min(48vh,675px);
+    max-width:100%;
+    max-height:100%;
     background:#000;
+    overflow:visible;
     line-height:0;
-    flex:none;
 }
+
 #recordedVideo{
     display:block;
     width:100%;
     height:100%;
-    object-fit:fill;
+    object-fit:contain;
 }
+
 #objects{
     position:absolute;
     inset:0;
     pointer-events:none;
 }
+
 #connectors{
     position:absolute;
     inset:0;
@@ -426,6 +486,7 @@ header h1{margin:0;font-size:15px}
     overflow:visible;
     pointer-events:none;
 }
+
 .edit-object{
     position:absolute;
     pointer-events:auto;
@@ -433,41 +494,48 @@ header h1{margin:0;font-size:15px}
     user-select:none;
     touch-action:none;
     line-height:normal;
-    overflow:visible;
 }
+
 .edit-object.selected{
     outline:2px solid #fff;
     outline-offset:2px;
 }
+
 .edit-object.multi-selected{
     outline:2px dashed var(--yellow);
     outline-offset:3px;
 }
+
 .edit-object.comment{
     display:flex;
     align-items:center;
-    justify-content:flex-start;
     padding:5px 8px;
     white-space:pre-wrap;
     word-break:break-word;
     overflow:hidden;
+    box-shadow:0 2px 12px #0006;
 }
-.edit-object.box{background:transparent}
+
+.edit-object.box{
+    background:transparent;
+}
+
 .edit-object.skip{
-    border-style:dashed!important;
-    background:#e38b2818;
+    background:#e58b2715;
 }
+
 .skip-label{
     position:absolute;
-    left:4px;
-    top:4px;
-    padding:2px 6px;
-    color:#fff;
-    background:#c87518;
+    top:3px;
+    left:3px;
+    padding:2px 5px;
     border-radius:4px;
-    font-size:11px;
+    color:#fff;
+    background:#c57418;
+    font-size:10px;
     pointer-events:none;
 }
+
 .resize-handle{
     position:absolute;
     right:-7px;
@@ -480,185 +548,272 @@ header h1{margin:0;font-size:15px}
     cursor:nwse-resize;
     display:none;
 }
-.edit-object.selected .resize-handle{display:block}
+
+.edit-object.selected .resize-handle{
+    display:block;
+}
+
+.connection-point{
+    position:absolute;
+    width:13px;
+    height:13px;
+    margin:-6.5px;
+    border:2px solid #fff;
+    background:#2680d9;
+    border-radius:50%;
+    display:none;
+    z-index:20;
+    cursor:crosshair;
+}
+
+.edit-object.selected .connection-point,
+.edit-object.multi-selected .connection-point{
+    display:block;
+}
+
+.cp-n{left:50%;top:0}
+.cp-e{left:100%;top:50%}
+.cp-s{left:50%;top:100%}
+.cp-w{left:0;top:50%}
 
 .connector{
     fill:none;
     pointer-events:none;
 }
+
 .connector-hit{
     fill:none;
     stroke:transparent;
-    stroke-width:18;
+    stroke-width:14;
     pointer-events:stroke;
     cursor:pointer;
 }
-.connector.selected{
-    filter:drop-shadow(0 0 4px #ffd447);
-}
+
+/* =========================================================
+   TIMELINE
+========================================================= */
 
 #timeline{
-    height:260px;
-    flex-shrink:0;
+    flex:0 0 245px;
+    min-height:245px;
     background:#191c20;
     border-top:1px solid #363b42;
-    padding:7px 12px;
-    overflow:auto;
+    padding:7px 10px 9px;
+    overflow:hidden;
 }
-.timeline-toolbar{
-    height:34px;
+
+.timeline-control{
     display:flex;
     align-items:center;
-    gap:6px;
+    gap:7px;
+    height:35px;
 }
+
 #playToggle{
     width:42px;
-    padding:5px;
+    height:30px;
+    padding:0;
+    font-size:16px;
+    flex-shrink:0;
 }
-#timelineZoom{width:110px}
-#currentTime{
-    color:#d8dde2;
+
+#seek{
+    flex:1;
+    min-width:0;
+    margin:0;
+}
+
+#timeReadout{
+    width:150px;
+    text-align:center;
+    font-size:12px;
     font-variant-numeric:tabular-nums;
-    min-width:110px;
+    flex-shrink:0;
 }
+
+.timeline-tools{
+    display:flex;
+    align-items:center;
+    gap:5px;
+    margin:3px 0 4px 49px;
+}
+
+.timeline-tools label{
+    color:#aeb5bd;
+    font-size:11px;
+}
+
+.timeline-tools select{
+    width:90px;
+    padding:3px 5px;
+    font-size:11px;
+}
+
 .timeline-scroll{
-    position:relative;
-    min-width:100%;
+    height:160px;
+    overflow-x:auto;
+    overflow-y:auto;
 }
+
 .timeline-content{
     position:relative;
+    min-width:100%;
+    width:100%;
 }
+
 .timeline-scale{
     position:relative;
-    height:23px;
-    color:#8f969f;
-    font-size:10px;
-    border-bottom:1px solid #444;
+    height:22px;
+    border-left:1px solid #4a5058;
+    border-right:1px solid #4a5058;
 }
+
 .timeline-scale span{
     position:absolute;
     transform:translateX(-50%);
+    color:#8f969f;
+    font-size:9px;
     white-space:nowrap;
 }
-.playhead{
+
+.timeline-track{
+    position:relative;
+    height:30px;
+    margin:3px 0;
+    background:#292d33;
+    border:1px solid #3c4249;
+    border-radius:4px;
+}
+
+.timeline-label{
     position:absolute;
-    top:0;
-    bottom:0;
-    width:2px;
-    background:#ff3b30;
-    box-shadow:0 0 5px #ff3b30;
-    z-index:100;
+    left:4px;
+    top:6px;
+    z-index:2;
+    color:#b9c0c8;
+    font-size:9px;
     pointer-events:none;
 }
-.playhead:before{
-    content:"";
-    position:absolute;
-    top:-2px;
-    left:-5px;
-    width:12px;
-    height:12px;
-    border-radius:50%;
-    background:#ff3b30;
-}
-.timeline-row{
-    display:grid;
-    grid-template-columns:70px 1fr;
-    gap:7px;
-    margin-top:12px;
-    align-items:center;
-    font-size:11px;
-    color:#b0b7c0;
-}
-.track{
-    position:relative;
-    height:34px;
-    background:#292d33;
-    border-radius:4px;
-    border:1px solid #3c4249;
-    overflow:visible;
-}
+
 .track-item{
     position:absolute;
-    top:5px;
-    height:24px;
-    min-width:9px;
+    top:3px;
+    height:23px;
+    min-width:5px;
     border-radius:3px;
     cursor:grab;
+    overflow:visible;
 }
+
 .track-item:active{cursor:grabbing}
+
 .track-item.comment{background:#42a5f5}
 .track-item.box{background:#ef5350}
-.track-item.skip{background:#e38b28}
-.track-item.connection{background:#8e68d6}
+.track-item.skip{background:var(--orange)}
+.track-item.connection{background:var(--purple)}
+
 .track-item.selected{
     outline:2px solid #fff;
     outline-offset:1px;
 }
-.track-handle{
+
+.track-time,
+.track-end-time{
     position:absolute;
-    top:-3px;
-    bottom:-3px;
-    width:11px;
-    z-index:5;
-    cursor:ew-resize;
-}
-.track-handle.left{left:-5px}
-.track-handle.right{right:-5px}
-.track-item:hover .track-handle{background:#fff5}
-.track-time,.track-end-time{
-    position:absolute;
-    top:-17px;
-    font-size:9px;
-    color:#dfe4e9;
+    top:-15px;
+    color:#e0e5ea;
+    font-size:8px;
     white-space:nowrap;
     pointer-events:none;
 }
+
 .track-time{left:0}
 .track-end-time{right:0}
+
 .track-name{
     position:absolute;
-    left:6px;
-    right:6px;
+    left:5px;
+    right:5px;
     top:4px;
     overflow:hidden;
     text-overflow:ellipsis;
     white-space:nowrap;
     color:#fff;
-    font-size:9px;
+    font-size:8px;
     pointer-events:none;
 }
 
+.trim-handle{
+    position:absolute;
+    top:0;
+    bottom:0;
+    width:8px;
+    z-index:3;
+    cursor:ew-resize;
+}
+
+.trim-handle.left{left:-4px}
+.trim-handle.right{right:-4px}
+
+/* 再生インデックス */
+#playhead{
+    position:absolute;
+    top:0;
+    bottom:0;
+    width:2px;
+    background:#ff3b30;
+    box-shadow:0 0 4px #ff3b30;
+    pointer-events:none;
+    z-index:100;
+}
+
+#playhead::before{
+    content:"";
+    position:absolute;
+    left:-5px;
+    top:-1px;
+    width:12px;
+    height:8px;
+    background:#ff3b30;
+    clip-path:polygon(0 0,100% 0,50% 100%);
+}
+
+/* =========================================================
+   FOOTER
+========================================================= */
+
 #editorFooter{
-    min-height:42px;
+    min-height:40px;
     display:flex;
     justify-content:center;
     align-items:center;
-    flex-wrap:wrap;
-    gap:7px;
-    padding:5px 10px;
+    gap:10px;
+    padding:5px;
     background:#1b1e22;
     border-top:1px solid #383d44;
 }
+
 .connection-status{
-    padding:5px 9px;
-    border-radius:5px;
-    background:#15181c;
-    border:1px solid #414750;
-    color:#d9dee4;
+    color:#cdd3da;
     font-size:11px;
 }
+
+/* =========================================================
+   CONTEXT MENU
+========================================================= */
 
 #contextMenu{
     position:fixed;
     z-index:7000;
     display:none;
-    width:260px;
+    width:245px;
     padding:5px;
     border:1px solid #555b63;
     border-radius:7px;
     background:#292d33;
     box-shadow:0 12px 40px #000c;
 }
+
 #contextMenu button{
     display:block;
     width:100%;
@@ -666,13 +821,18 @@ header h1{margin:0;font-size:15px}
     background:transparent;
     border:0;
 }
+
 #contextMenu button:hover{background:#3c424a}
+
 .context-separator{
     height:1px;
     margin:5px 0;
     background:#464c54;
 }
-#contextConnect[disabled]{display:none}
+
+/* =========================================================
+   MODAL
+========================================================= */
 
 .modal-backdrop{
     position:fixed;
@@ -681,56 +841,86 @@ header h1{margin:0;font-size:15px}
     display:none;
     align-items:center;
     justify-content:center;
-    padding:20px;
-    background:#000a;
+    background:#0009;
 }
+
 .modal{
-    width:min(700px,96vw);
-    max-height:92vh;
+    width:min(520px,94vw);
+    max-height:90vh;
     overflow:auto;
-    padding:17px;
-    background:#20242a;
-    border:1px solid #555b64;
+    padding:18px;
+    background:#1d2126;
+    border:1px solid #4c535c;
     border-radius:9px;
+    box-shadow:0 20px 60px #000d;
 }
-.modal h3{margin:0 0 14px}
+
+.modal h3{margin:0 0 15px}
+
 .form-row{
     display:grid;
-    grid-template-columns:120px 1fr;
+    grid-template-columns:105px 1fr;
     gap:10px;
     align-items:center;
     margin:9px 0;
 }
-.form-row label{color:#c7cdd3;font-size:12px}
+
+.form-row > label{
+    color:#c2c8ce;
+    font-size:12px;
+}
+
+.palette{
+    display:grid;
+    grid-template-columns:repeat(6,32px);
+    gap:5px;
+    margin-bottom:6px;
+}
+
+.palette button{
+    width:30px;
+    height:30px;
+    padding:0;
+    border-radius:4px;
+}
+
 .modal-actions{
     display:flex;
     justify-content:flex-end;
     gap:7px;
     margin-top:15px;
 }
-.palette{
-    display:grid;
-    grid-template-columns:repeat(6,1fr);
-    gap:5px;
-}
-.palette button{
-    height:28px;
-    padding:0;
-    border:2px solid transparent;
-}
-.palette button.active{border-color:#fff}
 
-#editor.locked .video-area:after{
-    content:"動画を読み込んでください";
+/* 編集ロック */
+#editor.locked #videoStage,
+#editor.locked #timeline{
+    opacity:.55;
+}
+
+#editor.locked #videoStage::after{
+    content:"動画を読み込むまで編集できません";
     position:absolute;
     inset:0;
     display:flex;
     align-items:center;
     justify-content:center;
-    background:#0008;
     color:#fff;
-    font-size:18px;
+    background:#0007;
+    font-size:14px;
+    line-height:normal;
     pointer-events:none;
+}
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media(max-width:700px){
+    .editor-top{flex-wrap:wrap;height:auto;min-height:46px}
+    #editorProjectName{width:150px}
+    #timeline{flex-basis:235px;min-height:235px}
+    .timeline-tools{margin-left:0}
+    #timeReadout{width:110px}
 }
 </style>
 </head>
@@ -738,59 +928,70 @@ header h1{margin:0;font-size:15px}
 <body>
 
 <header>
-    <h1>動画上直接編集ツール</h1>
-    <div id="status">準備中</div>
+    <h1>動画直接編集</h1>
+    <span id="status">準備中</span>
 </header>
 
 <div id="message"></div>
 
 <section id="home">
     <div class="home-card">
-        <h2>動画を編集</h2>
+        <h2>動画編集</h2>
         <p>
-            動画を読み込んでから、動画画面上で直接編集できます。
-            要素の追加・移動・サイズ変更・書式変更・削除、
-            タイムライン上の開始終了時間変更、要素間接続、スキップ区間を利用できます。
+            動画を読み込んだあと、動画画面上で直接要素を配置できます。
+            要素の追加・移動・サイズ変更・テキスト変更・書式変更は右クリックから操作できます。
         </p>
 
         <div class="home-actions">
-            <button class="primary" id="newProject">新しい編集を開始</button>
-            <button id="openVideo">動画を読み込む</button>
-            <button id="importProject">プロジェクトを読み込む</button>
+            <button id="newProject">新しい編集を開始</button>
+            <button id="openVideo" class="primary">動画を読み込む</button>
+            <button id="importProject">編集データを読み込む</button>
             <input id="videoFile" type="file" accept="video/*" class="hidden">
             <input id="projectFile" type="file" accept=".json,application/json" class="hidden">
         </div>
 
-        <h3>保存済み</h3>
-        <div id="projectList"></div>
+        <div id="projectList" class="project-list"></div>
     </div>
 </section>
 
-<section id="editor" class="locked">
+<section id="editor">
 
     <div class="editor-top">
         <button id="backHome">← 戻る</button>
-        <input id="editorProjectName" value="名称未設定">
-        <button class="success" id="saveProject">保存</button>
-        <button id="exportProject">書き出し</button>
-        <button id="loadVideoButton">動画変更</button>
+
+        <input
+            id="editorProjectName"
+            value="新しい編集"
+            aria-label="プロジェクト名"
+        >
+
+        <button id="loadVideoButton" class="primary">
+            動画を読み込む
+        </button>
+
+        <button id="saveProject" class="success">
+            保存
+        </button>
+
+        <button id="exportProject">
+            書き出し
+        </button>
+
         <input id="editorVideoFile" type="file" accept="video/*" class="hidden">
-        <span id="editorStatus">動画未読込</span>
+
+        <span id="editorStatus">動画を読み込んでください</span>
     </div>
 
     <div class="editor-main">
 
-        <div class="video-area" id="videoArea">
+        <div id="videoArea" class="video-area">
 
             <div id="videoStage">
 
-                <video
-                    id="recordedVideo"
-                    preload="metadata"
-                    playsinline
-                ></video>
+                <video id="recordedVideo" preload="metadata"></video>
 
                 <svg id="connectors"></svg>
+
                 <div id="objects"></div>
 
             </div>
@@ -799,28 +1000,34 @@ header h1{margin:0;font-size:15px}
 
         <div id="timeline">
 
-            <div class="timeline-toolbar">
-                <button id="playToggle">▶</button>
-                <span id="currentTime">00:00.000 / 00:00.000</span>
-
-                <button id="timelineZoomOut">−</button>
-
-                <select id="timelineZoom">
-                    <option value="0.5">0.5×</option>
-                    <option value="1" selected>1×</option>
-                    <option value="2">2×</option>
-                    <option value="3">3×</option>
-                    <option value="5">5×</option>
-                </select>
-
-                <button id="timelineZoomIn">＋</button>
+            <div class="timeline-control">
+                <button id="playToggle" disabled>▶</button>
+                <input id="seek" type="range" min="0" max="0" step="0.01" value="0" disabled>
+                <div id="timeReadout">00:00.000 / 00:00.000</div>
             </div>
 
-            <div class="timeline-scroll">
+            <div class="timeline-tools">
+                <label>時間軸</label>
+                <button id="zoomOut">−</button>
+                <select id="timelineZoom">
+                    <option value="0.5">0.5秒</option>
+                    <option value="1" selected>1秒</option>
+                    <option value="2">2秒</option>
+                    <option value="5">5秒</option>
+                    <option value="10">10秒</option>
+                    <option value="30">30秒</option>
+                </select>
+                <button id="zoomIn">＋</button>
+                <span style="color:#888;font-size:10px">
+                    ※表示間隔
+                </span>
+            </div>
+
+            <div id="timelineScroll" class="timeline-scroll">
                 <div id="timelineContent" class="timeline-content">
                     <div id="timelineScale" class="timeline-scale"></div>
                     <div id="timelineTracks"></div>
-                    <div id="playhead" class="playhead"></div>
+                    <div id="playhead"></div>
                 </div>
             </div>
 
@@ -837,7 +1044,6 @@ header h1{margin:0;font-size:15px}
 </section>
 
 <div id="contextMenu">
-
     <button data-action="add-comment">＋ テキスト</button>
     <button data-action="add-box">＋ 強調枠</button>
     <button data-action="add-skip">＋ スキップ</button>
@@ -850,13 +1056,11 @@ header h1{margin:0;font-size:15px}
 
     <div class="context-separator"></div>
 
-    <button id="contextConnect" data-action="connect">
-        🔗 選択した2要素を接続
-    </button>
-
+    <button data-action="connect">🔗 選択した2要素を接続</button>
 </div>
 
 <div id="elementModal" class="modal-backdrop">
+
     <div class="modal">
 
         <h3 id="modalTitle">要素を編集</h3>
@@ -873,12 +1077,12 @@ header h1{margin:0;font-size:15px}
 
         <div class="form-row">
             <label>開始</label>
-            <input id="elementStart" type="number" min="0" step="0.001">
+            <input id="elementStart" type="number" min="0" step="0.01">
         </div>
 
         <div class="form-row">
             <label>終了</label>
-            <input id="elementEnd" type="number" min="0" step="0.001">
+            <input id="elementEnd" type="number" min="0" step="0.01">
         </div>
 
         <div class="form-row">
@@ -896,7 +1100,7 @@ header h1{margin:0;font-size:15px}
 
         <div class="form-row" id="fontSizeRow">
             <label>文字サイズ</label>
-            <input id="elementFontSize" type="number" min="8" max="200" step="1">
+            <input id="elementFontSize" type="number" min="8" max="200">
         </div>
 
         <div class="form-row" id="fontWeightRow">
@@ -908,20 +1112,30 @@ header h1{margin:0;font-size:15px}
             </select>
         </div>
 
+        <div class="form-row">
+            <label>線種</label>
+            <select id="elementBorderStyle">
+                <option value="solid">実線</option>
+                <option value="dashed">破線</option>
+                <option value="dotted">点線</option>
+            </select>
+        </div>
+
         <div class="modal-actions">
             <button id="modalCancel">キャンセル</button>
-            <button class="primary" id="modalSave">保存</button>
+            <button id="modalSave" class="primary">保存</button>
         </div>
 
     </div>
+
 </div>
 
 <script>
 'use strict';
 
 /* =========================================================
- * 基本
- * ======================================================= */
+   基本
+========================================================= */
 
 const $ = id => document.getElementById(id);
 
@@ -940,7 +1154,7 @@ const COLORS = [
     '#8e8e93'
 ];
 
-const DB_NAME = 'video-direct-editor';
+const DB_NAME = 'video-direct-editor-v12';
 const DB_VERSION = 1;
 const STORE = 'projects';
 
@@ -952,55 +1166,49 @@ const state = {
     context:null,
     drag:null,
     timelineDrag:null,
-    skipLock:false,
-    zoom:1,
-    videoObjectUrl:null,
+    connectionDrag:null,
     db:null,
-    dirty:false
+    videoObjectUrl:null,
+    dirty:false,
+    zoomStep:1,
+    modalId:null,
+    skipLock:false
 };
 
 function uid(prefix='id'){
     return prefix + '-' +
         Date.now().toString(36) + '-' +
-        Math.random().toString(36).slice(2,10);
+        Math.random().toString(36).slice(2,9);
 }
 
-function clamp(value,min,max){
-    return Math.max(min,Math.min(max,value));
+function clamp(v,min,max){
+    return Math.max(min,Math.min(max,v));
 }
 
 function duration(){
-    const video = $('recordedVideo');
-    return Number.isFinite(video.duration) ? video.duration : 0;
+    const d = $('recordedVideo').duration;
+    return Number.isFinite(d) ? d : 0;
 }
 
-function currentTime(){
-    return $('recordedVideo').currentTime || 0;
+function now(){
+    return Number($('recordedVideo').currentTime || 0);
 }
 
-function fmt(sec){
-    sec = Math.max(0,Number(sec)||0);
-
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    const ms = Math.floor((sec % 1) * 1000);
+function fmt(v){
+    v = Math.max(0,Number(v)||0);
+    const m = Math.floor(v / 60);
+    const s = Math.floor(v % 60);
+    const ms = Math.floor((v % 1) * 1000);
 
     return String(m).padStart(2,'0') + ':' +
         String(s).padStart(2,'0') + '.' +
         String(ms).padStart(3,'0');
 }
 
-function markDirty(){
-    state.dirty = true;
-    $('editorStatus').textContent =
-        '変更あり';
-}
-
-let messageTimer = null;
+let messageTimer;
 
 function message(text,ok=false){
     const el = $('message');
-
     el.textContent = text;
     el.className = ok ? 'ok' : '';
     el.style.display = 'block';
@@ -1012,9 +1220,14 @@ function message(text,ok=false){
     },3000);
 }
 
+function markDirty(){
+    state.dirty = true;
+    $('editorStatus').textContent = '変更あり';
+}
+
 /* =========================================================
- * IndexedDB
- * ======================================================= */
+   IndexedDB
+========================================================= */
 
 function openDB(){
     return new Promise((resolve,reject)=>{
@@ -1035,9 +1248,7 @@ function openDB(){
             resolve(state.db);
         };
 
-        request.onerror = ()=>{
-            reject(request.error);
-        };
+        request.onerror = ()=>reject(request.error);
     });
 }
 
@@ -1053,16 +1264,7 @@ function idbPut(project){
 
         tx.oncomplete = resolve;
         tx.onerror = ()=>reject(tx.error);
-    });
-}
-
-function idbGetAll(){
-    return new Promise((resolve,reject)=>{
-        const tx = state.db.transaction(STORE,'readonly');
-        const req = tx.objectStore(STORE).getAll();
-
-        req.onsuccess = ()=>resolve(req.result || []);
-        req.onerror = ()=>reject(req.error);
+        tx.onabort = ()=>reject(tx.error);
     });
 }
 
@@ -1076,10 +1278,19 @@ function idbGet(id){
     });
 }
 
+function idbGetAll(){
+    return new Promise((resolve,reject)=>{
+        const tx = state.db.transaction(STORE,'readonly');
+        const req = tx.objectStore(STORE).getAll();
+
+        req.onsuccess = ()=>resolve(req.result || []);
+        req.onerror = ()=>reject(req.error);
+    });
+}
+
 function idbDelete(id){
     return new Promise((resolve,reject)=>{
         const tx = state.db.transaction(STORE,'readwrite');
-
         tx.objectStore(STORE).delete(id);
 
         tx.oncomplete = resolve;
@@ -1088,18 +1299,19 @@ function idbDelete(id){
 }
 
 /* =========================================================
- * Project
- * ======================================================= */
+   Project
+========================================================= */
 
 function newProject(){
     state.project = {
-        version:11,
+        version:12,
         projectId:uid('project'),
         name:'新しい編集',
         videoName:'',
-        videoDuration:0,
         videoType:'',
         videoSize:0,
+        videoDuration:0,
+        videoBlob:null,
         elements:[],
         connections:[],
         createdAt:new Date().toISOString(),
@@ -1132,6 +1344,7 @@ function showHome(){
         state.videoObjectUrl = null;
     }
 
+    $('recordedVideo').pause();
     $('recordedVideo').removeAttribute('src');
     $('recordedVideo').load();
 
@@ -1140,643 +1353,279 @@ function showHome(){
 
 function setEditorLocked(locked){
     $('editor').classList.toggle('locked',locked);
-}
 
-function normalizeElement(e){
-    const d = duration() || state.project?.videoDuration || 0;
-
-    e.start = clamp(Number(e.start)||0,0,d);
-
-    e.end = clamp(
-        Number(e.end)||Math.min(d,e.start+5),
-        Math.min(d,e.start+0.05),
-        d
-    );
-
-    e.x = clamp(Number(e.x)||10,0,99);
-    e.y = clamp(Number(e.y)||10,0,99);
-    e.w = clamp(Number(e.w)||30,1,100-e.x);
-    e.h = clamp(Number(e.h)||15,1,100-e.y);
+    $('playToggle').disabled = locked;
+    $('seek').disabled = locked;
 }
 
 function makeElement(type,time){
     const d = duration();
 
     const start = clamp(
-        Number.isFinite(time) ? time : 0,
+        Number.isFinite(time) ? time : now(),
         0,
-        d
+        Math.max(0,d)
     );
 
-    const end = clamp(
-        start + Math.min(5,Math.max(.05,d-start)),
-        start+.05,
-        d || start+.05
-    );
+    const end = d
+        ? Math.min(d,start + Math.min(5,d-start))
+        : start + 5;
 
     return {
         id:uid('element'),
         type,
-        text:
-            type === 'comment'
-                ? 'テキスト'
-                : '',
+        text:type === 'comment' ? 'テキスト' : '',
         start,
-        end,
+        end:Math.max(start + .05,end),
         x:10,
         y:10,
         w:type === 'box' ? 35 : 30,
         h:type === 'box' ? 25 : 15,
-        color:
-            type === 'skip'
-                ? '#ff9500'
-                : '#ffffff',
-        borderWidth:2,
-        borderStyle:
-            type === 'skip'
-                ? 'dashed'
-                : 'solid',
+        color:type === 'skip' ? '#ff9500' : '#ffffff',
+        borderWidth:type === 'skip' ? 2 : 2,
+        borderStyle:type === 'skip' ? 'dashed' : 'solid',
         fontSize:24,
-        fontWeight:600,
-        opacity:1,
-        radius:4
+        fontWeight:600
     };
-}
-
-/* =========================================================
- * Video
- * ======================================================= */
-
-async function handleVideo(file){
-    if(!file || !file.type.startsWith('video/')){
-        message('動画ファイルを選択してください。');
-        return;
-    }
-
-    const video = $('recordedVideo');
-
-    setEditorLocked(true);
-
-    if(state.videoObjectUrl){
-        URL.revokeObjectURL(state.videoObjectUrl);
-    }
-
-    state.videoObjectUrl = URL.createObjectURL(file);
-
-    video.src = state.videoObjectUrl;
-    video.load();
-
-    $('editorStatus').textContent =
-        '動画を読み込み中…';
-
-    await new Promise((resolve,reject)=>{
-        const loaded = ()=>{
-            video.removeEventListener('loadedmetadata',loaded);
-            video.removeEventListener('error',failed);
-            resolve();
-        };
-
-        const failed = ()=>{
-            video.removeEventListener('loadedmetadata',loaded);
-            video.removeEventListener('error',failed);
-            reject(new Error('動画を読み込めませんでした'));
-        };
-
-        video.addEventListener('loadedmetadata',loaded);
-        video.addEventListener('error',failed);
-    }).catch(err=>{
-        message(err.message);
-        return null;
-    });
-
-    if(!Number.isFinite(video.duration) || video.duration <= 0){
-        message('動画の長さを取得できませんでした。');
-        return;
-    }
-
-    state.project.videoName = file.name;
-    state.project.videoType = file.type;
-    state.project.videoSize = file.size;
-    state.project.videoDuration = video.duration;
-
-    $('editorProjectName').value =
-        state.project.name;
-
-    setEditorLocked(false);
-
-    $('editorStatus').textContent =
-        `${file.name} / ${fmt(video.duration)}`;
-
-    state.dirty = false;
-
-    renderAll();
-
-    message('動画の読み込みが完了しました。編集できます。',true);
-}
-
-/* =========================================================
- * Elements
- * ======================================================= */
-
-function addElement(type){
-    if(!state.project || duration() <= 0){
-        message('先に動画を読み込んでください。');
-        return;
-    }
-
-    const e = makeElement(type,currentTime());
-
-    state.project.elements.push(e);
-
-    state.selectedId = e.id;
-    state.selectedType = 'element';
-    state.multiSelected = [];
-
-    markDirty();
-    hideContextMenu();
-    renderAll();
-
-    if(type === 'comment' || type === 'box' || type === 'skip'){
-        openElementModal(e);
-    }
-}
-
-function selectElement(id){
-    state.selectedId = id;
-    state.selectedType = 'element';
-    state.multiSelected = [id];
-    renderAll();
-}
-
-function toggleMultiSelection(id){
-    const index = state.multiSelected.indexOf(id);
-
-    if(index >= 0){
-        state.multiSelected.splice(index,1);
-    }else{
-        if(state.multiSelected.length >= 2){
-            state.multiSelected.shift();
-        }
-
-        state.multiSelected.push(id);
-    }
-
-    state.selectedId =
-        state.multiSelected[state.multiSelected.length-1] || null;
-
-    state.selectedType = 'element';
-
-    renderAll();
-
-    if(state.multiSelected.length === 2){
-        $('connectionStatus').textContent =
-            '2要素を選択中。右クリック →「選択した2要素を接続」';
-    }else{
-        $('connectionStatus').textContent =
-            'Shift+クリックで2要素を選択 → 右クリックで接続';
-    }
 }
 
 function getElement(id){
     return state.project?.elements.find(e=>e.id===id) || null;
 }
 
-function deleteSelected(){
+function normalizeElement(e){
+    const d = duration() || state.project.videoDuration || 0;
+
+    e.start = clamp(Number(e.start)||0,0,d);
+    e.end = clamp(
+        Number(e.end)||Math.min(d,e.start+5),
+        Math.min(d,e.start+.05),
+        d
+    );
+
+    e.x = clamp(Number(e.x)||0,0,99);
+    e.y = clamp(Number(e.y)||0,0,99);
+    e.w = clamp(Number(e.w)||10,1,100-e.x);
+    e.h = clamp(Number(e.h)||10,1,100-e.y);
+}
+
+/* =========================================================
+   Video
+========================================================= */
+
+async function handleVideo(file){
+    if(!file) return;
+
+    if(!file.type.startsWith('video/')){
+        message('動画ファイルを選択してください。');
+        return;
+    }
+
+    try{
+        if(!state.project) newProject();
+
+        const video = $('recordedVideo');
+
+        setEditorLocked(true);
+        $('editorStatus').textContent = '動画を読み込んでいます…';
+
+        if(state.videoObjectUrl){
+            URL.revokeObjectURL(state.videoObjectUrl);
+        }
+
+        state.videoObjectUrl = URL.createObjectURL(file);
+
+        video.src = state.videoObjectUrl;
+        video.load();
+
+        state.project.videoName = file.name;
+        state.project.videoType = file.type;
+        state.project.videoSize = file.size;
+        state.project.videoBlob = file;
+
+        showEditor();
+
+    }catch(err){
+        console.error(err);
+        message('動画の読み込みに失敗しました。');
+    }
+}
+
+$('recordedVideo').addEventListener('loadedmetadata',async ()=>{
+    const d = duration();
+
     if(!state.project) return;
 
-    if(state.selectedType === 'connection'){
-        state.project.connections =
-            state.project.connections.filter(
-                c=>c.id!==state.selectedId
-            );
-    }else{
-        const id = state.selectedId;
+    state.project.videoDuration = d;
 
-        state.project.elements =
-            state.project.elements.filter(e=>e.id!==id);
+    setEditorLocked(false);
+    $('editorStatus').textContent = '編集可能';
 
-        state.project.connections =
-            state.project.connections.filter(
-                c=>c.from!==id && c.to!==id
-            );
-    }
+    $('seek').min = 0;
+    $('seek').max = d;
+    $('seek').step = '0.01';
 
-    state.selectedId = null;
-    state.selectedType = null;
-    state.multiSelected = [];
+    state.project.elements.forEach(normalizeElement);
 
-    markDirty();
-    hideContextMenu();
-    renderAll();
-}
-
-function duplicateSelected(){
-    const e = getElement(state.selectedId);
-
-    if(!e) return;
-
-    const copy = structuredClone(e);
-
-    copy.id = uid('element');
-    copy.x = clamp(copy.x+3,0,100-copy.w);
-    copy.y = clamp(copy.y+3,0,100-copy.h);
-
-    state.project.elements.push(copy);
-
-    selectElement(copy.id);
-    markDirty();
-    hideContextMenu();
-}
-
-function moveElementPointer(event){
-    if(!state.drag || !state.project) return;
-
-    const e = getElement(state.drag.id);
-
-    if(!e){
-        state.drag = null;
-        return;
-    }
-
-    const dx = event.clientX - state.drag.startX;
-    const dy = event.clientY - state.drag.startY;
-
-    if(state.drag.mode === 'move'){
-        e.x = clamp(
-            state.drag.originalX +
-            dx/state.drag.stageW*100,
-            0,
-            100-e.w
-        );
-
-        e.y = clamp(
-            state.drag.originalY +
-            dy/state.drag.stageH*100,
-            0,
-            100-e.h
-        );
-    }else{
-        e.w = clamp(
-            state.drag.originalW +
-            dx/state.drag.stageW*100,
-            1,
-            100-e.x
-        );
-
-        e.h = clamp(
-            state.drag.originalH +
-            dy/state.drag.stageH*100,
-            1,
-            100-e.y
-        );
-    }
-
-    markDirty();
-    renderObjects();
-    renderConnectors();
-}
-
-function beginElementPointer(event){
-    const object = event.target.closest('.edit-object');
-
-    if(!object || !state.project || duration() <= 0){
-        return;
-    }
-
-    const e = getElement(object.dataset.id);
-
-    if(!e) return;
-
-    if(event.target.closest('.resize-handle')){
-        selectElement(e.id);
-
-        const rect = $('videoStage').getBoundingClientRect();
-
-        state.drag = {
-            mode:'resize',
-            id:e.id,
-            startX:event.clientX,
-            startY:event.clientY,
-            originalW:e.w,
-            originalH:e.h,
-            stageW:Math.max(1,rect.width),
-            stageH:Math.max(1,rect.height)
-        };
-
-        event.preventDefault();
-        return;
-    }
-
-    if(event.shiftKey){
-        toggleMultiSelection(e.id);
-        event.preventDefault();
-        return;
-    }
-
-    selectElement(e.id);
-
-    const rect = $('videoStage').getBoundingClientRect();
-
-    state.drag = {
-        mode:'move',
-        id:e.id,
-        startX:event.clientX,
-        startY:event.clientY,
-        originalX:e.x,
-        originalY:e.y,
-        stageW:Math.max(1,rect.width),
-        stageH:Math.max(1,rect.height)
-    };
-
-    event.preventDefault();
-}
-
-function endElementPointer(){
-    state.drag = null;
-}
-
-/* =========================================================
- * Connections
- * ======================================================= */
-
-function connectSelected(){
-    if(state.multiSelected.length !== 2){
-        message('Shiftキーを押しながら2つの要素を選択してください。');
-        return;
-    }
-
-    const [fromId,toId] = state.multiSelected;
-
-    if(fromId === toId){
-        message('同じ要素同士は接続できません。');
-        return;
-    }
-
-    const from = getElement(fromId);
-    const to = getElement(toId);
-
-    if(!from || !to){
-        message('接続対象が見つかりません。');
-        return;
-    }
-
-    const duplicate =
-        state.project.connections.some(
-            c=>c.from===fromId && c.to===toId
-        );
-
-    if(duplicate){
-        message('その2要素は既に接続されています。');
-        return;
-    }
-
-    const color =
-        from.color ||
-        '#ffffff';
-
-    const connection = {
-        id:uid('connection'),
-        from:fromId,
-        to:toId,
-        fromPoint:'e',
-        toPoint:'w',
-        start:Math.min(from.start,to.start),
-        end:Math.max(from.end,to.end),
-        color,
-        width:1.5,
-        dash:'',
-        arrow:true,
-        curve:35
-    };
-
-    state.project.connections.push(connection);
-
-    state.selectedId = connection.id;
-    state.selectedType = 'connection';
-    state.multiSelected = [];
-
-    markDirty();
-    hideContextMenu();
     renderAll();
 
-    message('要素を接続しました。',true);
-}
+    /*
+     * 動画BlobもIndexedDBへ保持。
+     * リロード後にも編集データと動画を復元できる。
+     */
+    try{
+        await idbPut(state.project);
+    }catch(err){
+        console.warn('IndexedDB保存:',err);
+    }
+});
 
 /* =========================================================
- * Render video
- * ======================================================= */
+   Rendering
+========================================================= */
+
+function isVisible(e,t){
+    return t >= e.start && t < e.end;
+}
 
 function renderObjects(){
-    const container = $('objects');
-    container.innerHTML = '';
+    const wrap = $('objects');
+    wrap.innerHTML = '';
 
     if(!state.project) return;
 
-    const t = currentTime();
+    const t = now();
 
     state.project.elements.forEach(e=>{
-        if(t < e.start || t > e.end){
-            return;
-        }
+        if(!isVisible(e,t)) return;
 
         const el = document.createElement('div');
 
         el.className =
             'edit-object ' +
             e.type +
-            (e.id===state.selectedId ? ' selected' : '') +
-            (state.multiSelected.includes(e.id)
-                ? ' multi-selected'
-                : '');
+            (state.selectedId===e.id ? ' selected' : '') +
+            (state.multiSelected.includes(e.id) ? ' multi-selected' : '');
 
         el.dataset.id = e.id;
 
-        el.style.left = `${e.x}%`;
-        el.style.top = `${e.y}%`;
-        el.style.width = `${e.w}%`;
-        el.style.height = `${e.h}%`;
+        el.style.left = e.x + '%';
+        el.style.top = e.y + '%';
+        el.style.width = e.w + '%';
+        el.style.height = e.h + '%';
 
         el.style.border =
             `${e.borderWidth}px ${e.borderStyle} ${e.color}`;
 
-        el.style.borderRadius =
-            `${e.radius}px`;
-
-        el.style.opacity =
-            String(e.opacity);
-
-        if(e.type === 'comment'){
-            el.style.fontSize =
-                `${e.fontSize}px`;
-
-            el.style.fontWeight =
-                String(e.fontWeight);
-
-            el.style.color =
-                e.color;
-
-            el.textContent =
-                e.text || 'テキスト';
+        if(e.type==='comment'){
+            el.textContent = e.text || 'テキスト';
+            el.style.color = e.color;
+            el.style.fontSize = e.fontSize + 'px';
+            el.style.fontWeight = e.fontWeight;
         }
 
-        if(e.type === 'box'){
-            el.style.background =
-                'transparent';
+        if(e.type==='box'){
+            el.style.border =
+                `${e.borderWidth}px ${e.borderStyle} ${e.color}`;
         }
 
-        if(e.type === 'skip'){
-            const label = document.createElement('div');
-
+        if(e.type==='skip'){
+            const label = document.createElement('span');
             label.className = 'skip-label';
             label.textContent = 'SKIP';
-
             el.appendChild(label);
         }
 
-        const resize = document.createElement('div');
+        const resize = document.createElement('span');
         resize.className = 'resize-handle';
+        resize.dataset.resize = '1';
         el.appendChild(resize);
 
-        el.addEventListener(
-            'pointerdown',
-            beginElementPointer
-        );
-
-        el.addEventListener(
-            'contextmenu',
-            event=>{
-                event.preventDefault();
-                event.stopPropagation();
-
-                state.context = {
-                    type:'element',
-                    id:e.id
-                };
-
-                selectElement(e.id);
-
-                showContextMenu(
-                    event.clientX,
-                    event.clientY
-                );
-            }
-        );
-
-        el.addEventListener('dblclick',event=>{
-            event.preventDefault();
-            openElementModal(e);
+        ['n','e','s','w'].forEach(pos=>{
+            const cp = document.createElement('span');
+            cp.className = `connection-point cp-${pos}`;
+            cp.dataset.cp = pos;
+            el.appendChild(cp);
         });
 
-        container.appendChild(el);
+        el.addEventListener('pointerdown',beginElementPointer);
+
+        el.addEventListener('click',event=>{
+            if(event.shiftKey){
+                event.preventDefault();
+                toggleMultiSelection(e.id);
+                return;
+            }
+
+            if(!event.target.closest('.resize-handle')){
+                state.selectedId = e.id;
+                state.selectedType = 'element';
+                state.multiSelected = [e.id];
+                updateSelectionUI();
+            }
+        });
+
+        el.addEventListener('contextmenu',event=>{
+            event.preventDefault();
+            event.stopPropagation();
+
+            state.selectedId = e.id;
+            state.selectedType = 'element';
+
+            if(!state.multiSelected.includes(e.id)){
+                state.multiSelected = [e.id];
+            }
+
+            updateSelectionUI();
+
+            state.context = {
+                type:'element',
+                id:e.id
+            };
+
+            showContextMenu(event.clientX,event.clientY);
+        });
+
+        wrap.appendChild(el);
     });
-}
-
-/* =========================================================
- * SVG connections
- * ======================================================= */
-
-function pointForElement(e,point){
-    const x = e.x;
-    const y = e.y;
-    const w = e.w;
-    const h = e.h;
-
-    const map = {
-        n:[x+w/2,y],
-        ne:[x+w,y],
-        e:[x+w,y+h/2],
-        se:[x+w,y+h],
-        s:[x+w/2,y+h],
-        sw:[x,y+h],
-        w:[x,y+h/2],
-        nw:[x,y]
-    };
-
-    return map[point] || map.e;
 }
 
 function renderConnectors(){
     const svg = $('connectors');
-
     svg.innerHTML = '';
 
     if(!state.project) return;
 
-    const ns = 'http://www.w3.org/2000/svg';
+    const stage = $('videoStage');
 
     state.project.connections.forEach(c=>{
-        const from = getElement(c.from);
-        const to = getElement(c.to);
+        const a = getElement(c.from);
+        const b = getElement(c.to);
 
-        if(!from || !to) return;
+        if(!a || !b) return;
 
-        const a = pointForElement(
-            from,
-            c.fromPoint || 'e'
-        );
+        const x1 = (a.x + a.w) / 100 * stage.clientWidth;
+        const y1 = (a.y + a.h/2) / 100 * stage.clientHeight;
+        const x2 = b.x / 100 * stage.clientWidth;
+        const y2 = (b.y + b.h/2) / 100 * stage.clientHeight;
 
-        const b = pointForElement(
-            to,
-            c.toPoint || 'w'
-        );
+        const dx = Math.max(40,Math.abs(x2-x1)*.4);
 
-        const dx = Math.abs(b[0]-a[0]);
+        const path =
+            `M ${x1} ${y1} C ${x1+dx} ${y1}, ${x2-dx} ${y2}, ${x2} ${y2}`;
 
-        const curve =
-            Math.max(
-                3,
-                Math.min(25,dx*.35)
-            );
+        const visible =
+            isVisible(a,now()) || isVisible(b,now());
 
-        const pathData =
-            `M ${a[0]} ${a[1]} ` +
-            `C ${a[0]+curve} ${a[1]}, ` +
-            `${b[0]-curve} ${b[1]}, ` +
-            `${b[0]} ${b[1]}`;
-
-        const path = document.createElementNS(
-            ns,
-            'path'
-        );
-
-        path.setAttribute('d',pathData);
-        path.setAttribute(
-            'stroke',
-            c.color || from.color || '#fff'
-        );
-        path.setAttribute(
-            'stroke-width',
-            String(c.width || 1.5)
-        );
-        path.setAttribute(
-            'stroke-dasharray',
-            c.dash || ''
-        );
-        path.classList.add('connector');
-
-        if(c.id === state.selectedId){
-            path.classList.add('selected');
-        }
-
-        svg.appendChild(path);
+        if(!visible) return;
 
         const hit = document.createElementNS(
-            ns,
+            'http://www.w3.org/2000/svg',
             'path'
         );
 
-        hit.setAttribute('d',pathData);
+        hit.setAttribute('d',path);
         hit.classList.add('connector-hit');
-
-        hit.addEventListener('click',event=>{
-            event.stopPropagation();
-
-            state.selectedId = c.id;
-            state.selectedType = 'connection';
-            state.multiSelected = [];
-
-            renderAll();
-        });
 
         hit.addEventListener('contextmenu',event=>{
             event.preventDefault();
@@ -1787,480 +1636,668 @@ function renderConnectors(){
                 id:c.id
             };
 
-            state.selectedId = c.id;
-            state.selectedType = 'connection';
-
-            showContextMenu(
-                event.clientX,
-                event.clientY
-            );
+            showContextMenu(event.clientX,event.clientY);
         });
 
         svg.appendChild(hit);
+
+        const line = document.createElementNS(
+            'http://www.w3.org/2000/svg',
+            'path'
+        );
+
+        line.setAttribute('d',path);
+        line.classList.add('connector');
+
+        /*
+         * 接続元の枠線色をそのまま使用。
+         * 初期値は細い2px。
+         */
+        line.setAttribute('stroke',a.color || '#fff');
+        line.setAttribute('stroke-width',String(c.width || 2));
+
+        svg.appendChild(line);
     });
 }
 
-/* =========================================================
- * Timeline
- * ======================================================= */
-
-function timelineWidth(){
-    return Math.max(
-        700,
-        duration() * 8 * state.zoom
-    );
-}
-
 function renderTimeline(){
+    if(!state.project) return;
+
+    const d = duration() || state.project.videoDuration || 1;
     const content = $('timelineContent');
     const scale = $('timelineScale');
     const tracks = $('timelineTracks');
 
-    const d = duration();
+    const zoom =
+        Number(state.zoomStep) || 1;
 
-    content.style.width =
-        `${timelineWidth()}px`;
+    /*
+     * 時間そのものとピクセルの対応を固定。
+     * 動画時間の途中でバーが切れない。
+     */
+    const pxPerSecond = 60 / zoom;
+    const width = Math.max(
+        $('timelineScroll').clientWidth,
+        d * pxPerSecond
+    );
+
+    content.style.width = width + 'px';
+    scale.style.width = width + 'px';
 
     scale.innerHTML = '';
-    tracks.innerHTML = '';
 
-    if(!d){
-        return;
-    }
-
-    const width = timelineWidth();
-
-    let step;
-
-    if(state.zoom >= 3){
-        step = 1;
-    }else if(state.zoom >= 2){
-        step = 2;
-    }else if(state.zoom >= 1){
-        step = 5;
-    }else{
-        step = 10;
-    }
+    const step = Number($('timelineZoom').value) || 1;
 
     for(let t=0;t<=d;t+=step){
         const span = document.createElement('span');
-
+        span.style.left = (t/d*100) + '%';
         span.textContent = fmt(t);
-
-        span.style.left =
-            `${t/d*100}%`;
-
         scale.appendChild(span);
     }
 
-    renderTrack(
-        'テキスト',
-        'comment',
-        state.project.elements.filter(
-            e=>e.type==='comment'
-        ),
-        width,
-        d
-    );
+    tracks.innerHTML = '';
 
-    renderTrack(
-        '強調枠',
-        'box',
-        state.project.elements.filter(
-            e=>e.type==='box'
-        ),
-        width,
-        d
-    );
+    const groups = [
+        ['comment','テキスト'],
+        ['box','強調枠'],
+        ['skip','スキップ'],
+        ['connection','接続']
+    ];
 
-    renderTrack(
-        'スキップ',
-        'skip',
-        state.project.elements.filter(
-            e=>e.type==='skip'
-        ),
-        width,
-        d
-    );
+    groups.forEach(([type,label])=>{
+        const row = document.createElement('div');
+        row.className = 'timeline-track';
 
-    renderTrack(
-        '接続',
-        'connection',
-        state.project.connections,
-        width,
-        d
-    );
+        const labelEl = document.createElement('div');
+        labelEl.className = 'timeline-label';
+        labelEl.textContent = label;
+        row.appendChild(labelEl);
+
+        if(type==='connection'){
+            state.project.connections.forEach(c=>{
+                const a = getElement(c.from);
+                const b = getElement(c.to);
+
+                if(!a || !b) return;
+
+                const item = document.createElement('div');
+                item.className = 'track-item connection';
+
+                const start = Math.min(a.start,b.start);
+                const end = Math.max(a.end,b.end);
+
+                item.style.left = (start/d*100) + '%';
+                item.style.width =
+                    Math.max(.2,(end-start)/d*100) + '%';
+
+                item.title =
+                    `${a.text || a.type} → ${b.text || b.type}`;
+
+                row.appendChild(item);
+            });
+        }else{
+            state.project.elements
+                .filter(e=>e.type===type)
+                .forEach(e=>{
+                    const item = document.createElement('div');
+
+                    item.className =
+                        `track-item ${e.type}` +
+                        (state.selectedId===e.id ? ' selected' : '');
+
+                    item.dataset.id = e.id;
+
+                    item.style.left =
+                        (e.start/d*100) + '%';
+
+                    item.style.width =
+                        Math.max(.15,(e.end-e.start)/d*100) + '%';
+
+                    const startLabel =
+                        document.createElement('span');
+
+                    startLabel.className='track-time';
+                    startLabel.textContent=fmt(e.start);
+
+                    const endLabel =
+                        document.createElement('span');
+
+                    endLabel.className='track-end-time';
+                    endLabel.textContent=fmt(e.end);
+
+                    const name =
+                        document.createElement('span');
+
+                    name.className='track-name';
+                    name.textContent =
+                        e.type==='comment'
+                            ? (e.text || 'テキスト')
+                            : e.type==='box'
+                                ? '強調枠'
+                                : 'スキップ';
+
+                    const left =
+                        document.createElement('span');
+
+                    left.className='trim-handle left';
+
+                    const right =
+                        document.createElement('span');
+
+                    right.className='trim-handle right';
+
+                    item.append(
+                        startLabel,
+                        endLabel,
+                        name,
+                        left,
+                        right
+                    );
+
+                    item.addEventListener(
+                        'pointerdown',
+                        event=>beginTimelinePointer(event,e)
+                    );
+
+                    item.addEventListener(
+                        'click',
+                        event=>{
+                            if(event.shiftKey){
+                                event.preventDefault();
+                                toggleMultiSelection(e.id);
+                            }else{
+                                selectElement(e.id);
+                            }
+                        }
+                    );
+
+                    item.addEventListener(
+                        'contextmenu',
+                        event=>{
+                            event.preventDefault();
+                            event.stopPropagation();
+
+                            selectElement(e.id);
+
+                            state.context = {
+                                type:'element',
+                                id:e.id
+                            };
+
+                            showContextMenu(
+                                event.clientX,
+                                event.clientY
+                            );
+                        }
+                    );
+
+                    row.appendChild(item);
+                });
+        }
+
+        tracks.appendChild(row);
+    });
 
     updatePlayhead();
 }
 
-function renderTrack(name,type,items,width,d){
-    const row = document.createElement('div');
-    row.className = 'timeline-row';
+function updatePlayhead(){
+    if(!state.project) return;
 
-    const label = document.createElement('div');
-    label.textContent = name;
+    const d = duration() || state.project.videoDuration || 1;
 
-    const track = document.createElement('div');
-    track.className = 'track';
-    track.style.width = `${width}px`;
+    const p = clamp(now()/d,0,1);
 
-    row.appendChild(label);
-    row.appendChild(track);
+    $('playhead').style.left = (p*100) + '%';
 
-    items.forEach(item=>{
-        const bar = document.createElement('div');
+    $('seek').value = now();
 
-        bar.className =
-            `track-item ${type}` +
-            (
-                item.id===state.selectedId
-                    ? ' selected'
-                    : ''
-            );
+    $('timeReadout').textContent =
+        `${fmt(now())} / ${fmt(d)}`;
+}
 
-        const start =
-            Number(item.start) || 0;
+/* =========================================================
+   Selection
+========================================================= */
 
-        const end =
-            Number(item.end) || 0;
+function selectElement(id){
+    state.selectedId=id;
+    state.selectedType='element';
+    state.multiSelected=[id];
 
-        bar.style.left =
-            `${start/d*100}%`;
+    updateSelectionUI();
+}
 
-        bar.style.width =
-            `${Math.max(.2,(end-start)/d*100)}%`;
-
-        const startText =
-            document.createElement('span');
-
-        startText.className =
-            'track-time';
-
-        startText.textContent =
-            fmt(start);
-
-        const endText =
-            document.createElement('span');
-
-        endText.className =
-            'track-end-time';
-
-        endText.textContent =
-            fmt(end);
-
-        const nameText =
-            document.createElement('span');
-
-        nameText.className =
-            'track-name';
-
-        nameText.textContent =
-            type==='comment'
-                ? (item.text || 'テキスト')
-                : type==='box'
-                    ? '強調枠'
-                    : type==='skip'
-                        ? 'SKIP'
-                        : '接続';
-
-        bar.appendChild(startText);
-        bar.appendChild(endText);
-        bar.appendChild(nameText);
-
-        if(type !== 'connection'){
-            const left =
-                document.createElement('div');
-
-            left.className =
-                'track-handle left';
-
-            const right =
-                document.createElement('div');
-
-            right.className =
-                'track-handle right';
-
-            left.addEventListener(
-                'pointerdown',
-                event=>{
-                    beginTimelineResize(
-                        event,
-                        item,
-                        'start',
-                        track,
-                        d
-                    );
-                }
-            );
-
-            right.addEventListener(
-                'pointerdown',
-                event=>{
-                    beginTimelineResize(
-                        event,
-                        item,
-                        'end',
-                        track,
-                        d
-                    );
-                }
-            );
-
-            bar.appendChild(left);
-            bar.appendChild(right);
+function toggleMultiSelection(id){
+    if(state.multiSelected.includes(id)){
+        state.multiSelected =
+            state.multiSelected.filter(v=>v!==id);
+    }else{
+        if(state.multiSelected.length>=2){
+            state.multiSelected.shift();
         }
 
-        bar.addEventListener(
-            'pointerdown',
-            event=>{
-                if(
-                    event.target.closest('.track-handle') ||
-                    type==='connection'
-                ){
-                    return;
-                }
-
-                selectTimelineItem(item,type);
-
-                const rect =
-                    track.getBoundingClientRect();
-
-                state.timelineDrag = {
-                    item,
-                    side:'move',
-                    rect,
-                    duration:d,
-                    startXRatio:
-                        (event.clientX-rect.left) /
-                        rect.width,
-                    originalStart:start,
-                    originalEnd:end
-                };
-
-                event.preventDefault();
-            }
-        );
-
-        bar.addEventListener(
-            'dblclick',
-            event=>{
-                event.preventDefault();
-
-                if(type==='connection'){
-                    editConnection(item);
-                }else{
-                    openElementModal(item);
-                }
-            }
-        );
-
-        bar.addEventListener(
-            'contextmenu',
-            event=>{
-                event.preventDefault();
-                event.stopPropagation();
-
-                state.context = {
-                    type:
-                        type==='connection'
-                            ? 'connection'
-                            : 'element',
-                    id:item.id
-                };
-
-                selectTimelineItem(item,type);
-
-                showContextMenu(
-                    event.clientX,
-                    event.clientY
-                );
-            }
-        );
-
-        track.appendChild(bar);
-    });
-
-    $('timelineTracks').appendChild(row);
-}
-
-function selectTimelineItem(item,type){
-    state.selectedId = item.id;
-    state.selectedType =
-        type==='connection'
-            ? 'connection'
-            : 'element';
-
-    state.multiSelected = [];
-
-    renderAll();
-}
-
-function beginTimelineResize(
-    event,
-    item,
-    side,
-    track,
-    d
-){
-    event.preventDefault();
-    event.stopPropagation();
-
-    state.timelineDrag = {
-        item,
-        side,
-        rect:track.getBoundingClientRect(),
-        duration:d
-    };
-}
-
-function moveTimeline(event){
-    const drag = state.timelineDrag;
-
-    if(!drag) return;
-
-    const ratio = clamp(
-        (event.clientX-drag.rect.left) /
-        drag.rect.width,
-        0,
-        1
-    );
-
-    const time =
-        ratio * drag.duration;
-
-    if(drag.side==='start'){
-        drag.item.start =
-            clamp(
-                time,
-                0,
-                Number(drag.item.end)-.05
-            );
-    }else if(drag.side==='end'){
-        drag.item.end =
-            clamp(
-                time,
-                Number(drag.item.start)+.05,
-                drag.duration
-            );
-    }else{
-        const length =
-            drag.originalEnd -
-            drag.originalStart;
-
-        const delta =
-            (ratio-drag.startXRatio) *
-            drag.duration;
-
-        const start =
-            clamp(
-                drag.originalStart+delta,
-                0,
-                drag.duration-length
-            );
-
-        drag.item.start = start;
-        drag.item.end = start+length;
+        state.multiSelected.push(id);
     }
 
-    normalizeElement(drag.item);
+    state.selectedId =
+        state.multiSelected[state.multiSelected.length-1] || null;
+
+    state.selectedType =
+        state.selectedId ? 'element' : null;
+
+    updateSelectionUI();
+}
+
+function updateSelectionUI(){
+    document.querySelectorAll('.edit-object').forEach(el=>{
+        const id=el.dataset.id;
+
+        el.classList.toggle(
+            'selected',
+            id===state.selectedId
+        );
+
+        el.classList.toggle(
+            'multi-selected',
+            state.multiSelected.includes(id)
+        );
+    });
+
+    document.querySelectorAll('.track-item').forEach(el=>{
+        el.classList.toggle(
+            'selected',
+            el.dataset.id===state.selectedId
+        );
+    });
+
+    const n=state.multiSelected.length;
+
+    if(n===2){
+        $('connectionStatus').textContent =
+            '2要素選択中 → 右クリック →「選択した2要素を接続」';
+    }else if(n===1){
+        $('connectionStatus').textContent =
+            '1要素選択中。Shift+クリックで2つ目を選択できます。';
+    }else{
+        $('connectionStatus').textContent =
+            'Shift+クリックで2要素を選択 → 右クリックで接続';
+    }
+}
+
+/* =========================================================
+   Element drag / resize
+========================================================= */
+
+function beginElementPointer(event){
+    if(event.button!==0) return;
+    if(!state.project || !duration()) return;
+
+    const target =
+        event.currentTarget.closest('.edit-object');
+
+    if(!target) return;
+
+    const id=target.dataset.id;
+    const e=getElement(id);
+
+    if(!e) return;
+
+    if(event.shiftKey){
+        toggleMultiSelection(id);
+        return;
+    }
+
+    selectElement(id);
+
+    const resize =
+        event.target.closest('.resize-handle');
+
+    const stage=$('videoStage');
+    const rect=stage.getBoundingClientRect();
+
+    state.drag={
+        id,
+        mode:resize?'resize':'move',
+        startX:event.clientX,
+        startY:event.clientY,
+        x:e.x,
+        y:e.y,
+        w:e.w,
+        h:e.h,
+        pointerId:event.pointerId
+    };
+
+    try{
+        target.setPointerCapture(event.pointerId);
+    }catch(err){
+        /*
+         * DOM再描画などでcapture対象が消えた場合でも
+         * 編集全体を止めない。
+         */
+    }
+
+    event.preventDefault();
+}
+
+function moveElementPointer(event){
+    const d=state.drag;
+    if(!d) return;
+
+    const e=getElement(d.id);
+    if(!e) return;
+
+    const rect=$('videoStage').getBoundingClientRect();
+
+    const dx=(event.clientX-d.startX)/rect.width*100;
+    const dy=(event.clientY-d.startY)/rect.height*100;
+
+    if(d.mode==='move'){
+        e.x=clamp(d.x+dx,0,100-e.w);
+        e.y=clamp(d.y+dy,0,100-e.h);
+    }else{
+        e.w=clamp(d.w+dx,1,100-d.x);
+        e.h=clamp(d.h+dy,1,100-d.y);
+    }
 
     markDirty();
-    renderTimeline();
     renderObjects();
     renderConnectors();
 }
 
-function endTimelineDrag(){
-    state.timelineDrag = null;
+function endElementPointer(){
+    if(state.drag){
+        state.drag=null;
+        renderTimeline();
+    }
 }
 
 /* =========================================================
- * Playhead / Skip
- * ======================================================= */
+   Timeline drag
+========================================================= */
 
-function updatePlayhead(){
-    const d = duration();
+function beginTimelinePointer(event,e){
+    if(event.button!==0) return;
 
-    if(!d){
-        $('playhead').style.display = 'none';
+    const item=event.currentTarget;
+    const handle=event.target.closest('.trim-handle');
+
+    selectElement(e.id);
+
+    const rect=item.getBoundingClientRect();
+
+    state.timelineDrag={
+        id:e.id,
+        mode:handle
+            ? handle.classList.contains('left')
+                ? 'left'
+                : 'right'
+            : 'move',
+        startX:event.clientX,
+        start:e.start,
+        end:e.end,
+        width:rect.width
+    };
+
+    event.preventDefault();
+}
+
+function moveTimeline(event){
+    const d=state.timelineDrag;
+    if(!d) return;
+
+    const e=getElement(d.id);
+    if(!e) return;
+
+    const timelineWidth =
+        $('timelineContent').getBoundingClientRect().width;
+
+    const videoDuration =
+        duration() || state.project.videoDuration || 1;
+
+    const delta =
+        (event.clientX-d.startX) /
+        timelineWidth *
+        videoDuration;
+
+    if(d.mode==='left'){
+        e.start=clamp(
+            d.start+delta,
+            0,
+            d.end-.05
+        );
+    }else if(d.mode==='right'){
+        e.end=clamp(
+            d.end+delta,
+            d.start+.05,
+            videoDuration
+        );
+    }else{
+        const len=d.end-d.start;
+        const ns=clamp(
+            d.start+delta,
+            0,
+            videoDuration-len
+        );
+
+        e.start=ns;
+        e.end=ns+len;
+    }
+
+    markDirty();
+
+    renderTimeline();
+    renderObjects();
+}
+
+function endTimelineDrag(){
+    state.timelineDrag=null;
+}
+
+/* =========================================================
+   Add / duplicate / delete
+========================================================= */
+
+function addElement(type){
+    if(!state.project || !duration()){
+        message('先に動画を読み込んでください。');
         return;
     }
 
-    $('playhead').style.display = 'block';
+    const e=makeElement(type,now());
 
-    $('playhead').style.left =
-        `${currentTime()/d*100}%`;
+    state.project.elements.push(e);
 
-    $('currentTime').textContent =
-        `${fmt(currentTime())} / ${fmt(d)}`;
+    selectElement(e.id);
+    markDirty();
+
+    renderAll();
+
+    if(type!=='skip'){
+        openElementModal(e);
+    }
 }
 
-function processSkip(){
-    if(state.skipLock || !state.project) return;
+function duplicateSelected(){
+    if(state.selectedType!=='element') return;
 
-    const now = currentTime();
+    const e=getElement(state.selectedId);
+    if(!e) return;
 
-    const skip =
-        state.project.elements.find(
-            e =>
-                e.type==='skip' &&
-                now>=e.start &&
-                now<e.end-.02
-        );
+    const copy={
+        ...e,
+        id:uid('element'),
+        x:clamp(e.x+3,0,100-e.w),
+        y:clamp(e.y+3,0,100-e.h)
+    };
 
-    if(!skip) return;
+    state.project.elements.push(copy);
 
-    state.skipLock = true;
+    selectElement(copy.id);
+    markDirty();
+    renderAll();
+}
 
-    $('recordedVideo').currentTime =
-        Math.min(skip.end,duration());
+function deleteSelected(){
+    if(state.context?.type==='connection'){
+        const id=state.context.id;
 
-    requestAnimationFrame(()=>{
-        state.skipLock = false;
-    });
+        state.project.connections =
+            state.project.connections.filter(c=>c.id!==id);
+
+        state.context=null;
+        markDirty();
+        renderAll();
+        return;
+    }
+
+    if(state.multiSelected.length){
+        const ids=new Set(state.multiSelected);
+
+        state.project.elements =
+            state.project.elements.filter(e=>!ids.has(e.id));
+
+        state.project.connections =
+            state.project.connections.filter(c=>
+                !ids.has(c.from) &&
+                !ids.has(c.to)
+            );
+
+        state.selectedId=null;
+        state.selectedType=null;
+        state.multiSelected=[];
+
+        state.context=null;
+
+        markDirty();
+        renderAll();
+    }
 }
 
 /* =========================================================
- * Context menu
- * ======================================================= */
+   Connection
+========================================================= */
+
+function connectSelected(){
+    if(state.multiSelected.length!==2){
+        message(
+            '接続するにはShift+クリックで2つの要素を選択してください。'
+        );
+        return;
+    }
+
+    const [a,b]=state.multiSelected;
+
+    if(a===b) return;
+
+    const exists =
+        state.project.connections.some(c=>
+            (c.from===a && c.to===b) ||
+            (c.from===b && c.to===a)
+        );
+
+    if(exists){
+        message('その2要素はすでに接続されています。');
+        return;
+    }
+
+    state.project.connections.push({
+        id:uid('connection'),
+        from:a,
+        to:b,
+        width:2
+    });
+
+    markDirty();
+    renderAll();
+
+    message('2つの要素を接続しました。',true);
+}
+
+/* =========================================================
+   Context menu
+========================================================= */
 
 function showContextMenu(x,y){
-    const menu = $('contextMenu');
+    const menu=$('contextMenu');
 
-    const canConnect =
-        state.multiSelected.length===2;
+    const connect =
+        menu.querySelector('[data-action="connect"]');
 
-    $('contextConnect').disabled =
-        !canConnect;
+    connect.disabled =
+        state.multiSelected.length!==2;
 
-    menu.style.display = 'block';
+    menu.style.display='block';
 
-    const w = 260;
-    const h = menu.offsetHeight;
+    const w=250;
+    const h=menu.offsetHeight;
 
     menu.style.left =
-        `${Math.min(x,innerWidth-w-5)}px`;
+        Math.min(x,window.innerWidth-w-8)+'px';
 
     menu.style.top =
-        `${Math.min(y,innerHeight-h-5)}px`;
+        Math.min(y,window.innerHeight-h-8)+'px';
 }
 
 function hideContextMenu(){
-    $('contextMenu').style.display = 'none';
-    state.context = null;
+    $('contextMenu').style.display='none';
 }
 
-/* =========================================================
- * Element modal
- * ======================================================= */
+$('contextMenu').addEventListener('click',event=>{
+    const btn=event.target.closest('[data-action]');
+    if(!btn) return;
 
-let modalTarget = null;
+    const action=btn.dataset.action;
+    const context=state.context;
+
+    hideContextMenu();
+
+    if(action==='add-comment'){
+        addElement('comment');
+        return;
+    }
+
+    if(action==='add-box'){
+        addElement('box');
+        return;
+    }
+
+    if(action==='add-skip'){
+        addElement('skip');
+        return;
+    }
+
+    if(action==='edit'){
+        if(context?.type==='element'){
+            const e=getElement(context.id);
+            if(e) openElementModal(e);
+        }
+        return;
+    }
+
+    if(action==='duplicate'){
+        duplicateSelected();
+        return;
+    }
+
+    if(action==='delete'){
+        deleteSelected();
+        return;
+    }
+
+    if(action==='connect'){
+        connectSelected();
+    }
+});
+
+/* =========================================================
+   Element modal
+========================================================= */
 
 function openElementModal(e){
     if(!e) return;
 
-    modalTarget = e;
+    state.modalId=e.id;
 
     $('modalTitle').textContent =
         e.type==='comment'
@@ -2276,166 +2313,434 @@ function openElementModal(e){
                 ? '強調枠'
                 : 'スキップ';
 
-    $('elementText').value =
-        e.text || '';
+    $('elementText').value=e.text || '';
 
-    $('elementStart').value =
-        Number(e.start).toFixed(3);
+    $('elementStart').value=
+        Number(e.start).toFixed(2);
 
-    $('elementEnd').value =
-        Number(e.end).toFixed(3);
+    $('elementEnd').value=
+        Number(e.end).toFixed(2);
 
-    $('elementColor').value =
-        e.color || '#ffffff';
+    $('elementColor').value=e.color || '#ffffff';
 
-    $('elementBorderWidth').value =
+    $('elementBorderWidth').value=
         e.borderWidth ?? 2;
 
-    $('elementFontSize').value =
+    $('elementFontSize').value=
         e.fontSize ?? 24;
 
-    $('elementFontWeight').value =
-        e.fontWeight ?? 600;
+    $('elementFontWeight').value=
+        String(e.fontWeight ?? 600);
 
-    const textVisible =
-        e.type==='comment';
+    $('elementBorderStyle').value=
+        e.borderStyle || 'solid';
 
     $('textRow').style.display =
-        textVisible ? 'grid' : 'none';
+        e.type==='comment' ? '' : 'none';
 
     $('fontSizeRow').style.display =
-        textVisible ? 'grid' : 'none';
+        e.type==='comment' ? '' : 'none';
 
     $('fontWeightRow').style.display =
-        textVisible ? 'grid' : 'none';
+        e.type==='comment' ? '' : 'none';
 
-    renderPalette();
+    buildPalette(e.color || '#ffffff');
 
-    $('elementModal').style.display =
-        'flex';
+    $('elementModal').style.display='flex';
 }
 
 function closeElementModal(){
-    $('elementModal').style.display =
-        'none';
-
-    modalTarget = null;
+    state.modalId=null;
+    $('elementModal').style.display='none';
 }
 
-function saveElementModal(){
-    if(!modalTarget) return;
+function buildPalette(current){
+    const palette=$('palette');
+    palette.innerHTML='';
 
-    const d =
-        duration() ||
-        state.project.videoDuration;
+    COLORS.forEach(color=>{
+        const b=document.createElement('button');
 
-    modalTarget.text =
-        $('elementText').value;
+        b.type='button';
+        b.style.background=color;
+        b.title=color;
 
-    modalTarget.start =
-        clamp(
-            Number($('elementStart').value) || 0,
-            0,
-            d
+        if(color===current){
+            b.style.outline='2px solid #ffd447';
+            b.style.outlineOffset='2px';
+        }
+
+        b.addEventListener('click',()=>{
+            $('elementColor').value=color;
+
+            palette.querySelectorAll('button')
+                .forEach(x=>{
+                    x.style.outline='none';
+                });
+
+            b.style.outline='2px solid #ffd447';
+            b.style.outlineOffset='2px';
+        });
+
+        palette.appendChild(b);
+    });
+}
+
+$('modalCancel').addEventListener(
+    'click',
+    closeElementModal
+);
+
+$('elementModal').addEventListener(
+    'click',
+    event=>{
+        if(event.target===$('elementModal')){
+            closeElementModal();
+        }
+    }
+);
+
+$('modalSave').addEventListener('click',()=>{
+    const e=getElement(state.modalId);
+
+    if(!e){
+        closeElementModal();
+        return;
+    }
+
+    const d=duration() || state.project.videoDuration || 0;
+
+    const start=Number($('elementStart').value);
+    const end=Number($('elementEnd').value);
+
+    if(!Number.isFinite(start) ||
+       !Number.isFinite(end) ||
+       start<0 ||
+       end<=start ||
+       (d && end>d)){
+
+        message(
+            `開始・終了時間が不正です。\n` +
+            `0.00 ～ ${fmt(d)} の範囲で、終了は開始より後にしてください。`
         );
 
-    modalTarget.end =
-        clamp(
-            Number($('elementEnd').value) || 0,
-            modalTarget.start+.05,
-            d
-        );
+        return;
+    }
 
-    modalTarget.color =
-        $('elementColor').value;
-
-    modalTarget.borderWidth =
+    e.start=start;
+    e.end=end;
+    e.text=$('elementText').value;
+    e.color=$('elementColor').value;
+    e.borderWidth=
         clamp(
             Number($('elementBorderWidth').value)||0,
             0,
             20
         );
 
-    modalTarget.fontSize =
+    e.fontSize=
         clamp(
             Number($('elementFontSize').value)||24,
             8,
             200
         );
 
-    modalTarget.fontWeight =
+    e.fontWeight=
         Number($('elementFontWeight').value)||600;
 
-    normalizeElement(modalTarget);
+    e.borderStyle=
+        $('elementBorderStyle').value;
 
     markDirty();
+
     closeElementModal();
     renderAll();
-}
+});
 
-function renderPalette(){
-    const p = $('palette');
+/* =========================================================
+   Video / timeline
+========================================================= */
 
-    p.innerHTML = '';
+$('playToggle').addEventListener('click',()=>{
+    const video=$('recordedVideo');
 
-    COLORS.forEach(color=>{
-        const b = document.createElement('button');
+    if(!video.src || duration()<=0){
+        message('先に動画を読み込んでください。');
+        return;
+    }
 
-        b.type = 'button';
-        b.style.background = color;
-
-        if(
-            modalTarget &&
-            modalTarget.color.toLowerCase() ===
-            color.toLowerCase()
-        ){
-            b.classList.add('active');
-        }
-
-        b.addEventListener('click',()=>{
-            $('elementColor').value = color;
-            renderPalette();
+    if(video.paused){
+        video.play().catch(err=>{
+            console.error(err);
+            message('動画を再生できませんでした。');
         });
+    }else{
+        video.pause();
+    }
+});
 
-        p.appendChild(b);
+$('recordedVideo').addEventListener('play',()=>{
+    $('playToggle').textContent='❚❚';
+});
+
+$('recordedVideo').addEventListener('pause',()=>{
+    $('playToggle').textContent='▶';
+});
+
+$('recordedVideo').addEventListener('ended',()=>{
+    $('playToggle').textContent='▶';
+});
+
+$('seek').addEventListener('input',event=>{
+    const t=Number(event.target.value)||0;
+
+    $('recordedVideo').currentTime=t;
+
+    updatePlayhead();
+    renderObjects();
+    renderConnectors();
+});
+
+$('recordedVideo').addEventListener('timeupdate',()=>{
+    processSkip();
+    updatePlayhead();
+    renderObjects();
+    renderConnectors();
+});
+
+$('recordedVideo').addEventListener('resize',()=>{
+    renderConnectors();
+});
+
+/* =========================================================
+   Skip
+========================================================= */
+
+function processSkip(){
+    if(state.skipLock || !state.project) return;
+
+    const t=now();
+
+    const skip=
+        state.project.elements.find(e=>
+            e.type==='skip' &&
+            t>=e.start &&
+            t<e.end
+        );
+
+    if(!skip) return;
+
+    state.skipLock=true;
+
+    $('recordedVideo').currentTime=
+        Math.min(skip.end,duration());
+
+    requestAnimationFrame(()=>{
+        state.skipLock=false;
     });
 }
 
 /* =========================================================
- * Connection modal
- * ======================================================= */
+   Timeline zoom
+========================================================= */
 
-function editConnection(c){
-    const color =
-        prompt(
-            '線の色を入力してください',
-            c.color || '#ffffff'
+const zoomValues=[0.5,1,2,5,10,30];
+
+$('timelineZoom').addEventListener('change',event=>{
+    state.zoomStep=Number(event.target.value)||1;
+    renderTimeline();
+});
+
+function changeZoom(dir){
+    const current=
+        zoomValues.indexOf(
+            Number($('timelineZoom').value)
         );
 
-    if(color===null) return;
-
-    const width =
-        prompt(
-            '線の太さ(px)',
-            String(c.width || 1.5)
-        );
-
-    if(width===null) return;
-
-    c.color = color;
-    c.width = clamp(
-        Number(width)||1.5,
-        .5,
-        10
+    const next=clamp(
+        current+dir,
+        0,
+        zoomValues.length-1
     );
 
-    markDirty();
-    renderAll();
+    $('timelineZoom').value=
+        String(zoomValues[next]);
+
+    state.zoomStep=zoomValues[next];
+
+    renderTimeline();
 }
 
+$('zoomOut').addEventListener(
+    'click',
+    ()=>changeZoom(-1)
+);
+
+$('zoomIn').addEventListener(
+    'click',
+    ()=>changeZoom(1)
+);
+
 /* =========================================================
- * Project save/load
- * ======================================================= */
+   Video context menu
+========================================================= */
+
+$('videoArea').addEventListener(
+    'contextmenu',
+    event=>{
+        event.preventDefault();
+
+        if(event.target.closest('.edit-object')){
+            return;
+        }
+
+        if(event.target.closest('.connector-hit')){
+            return;
+        }
+
+        if(!state.project || !duration()){
+            message('先に動画を読み込んでください。');
+            return;
+        }
+
+        state.context={type:'empty'};
+
+        showContextMenu(
+            event.clientX,
+            event.clientY
+        );
+    }
+);
+
+/* =========================================================
+   Timeline context menu
+========================================================= */
+
+$('timeline').addEventListener(
+    'contextmenu',
+    event=>{
+        event.preventDefault();
+
+        const item=
+            event.target.closest('.track-item');
+
+        if(item){
+            const id=item.dataset.id;
+
+            if(id){
+                selectElement(id);
+
+                state.context={
+                    type:'element',
+                    id
+                };
+
+                showContextMenu(
+                    event.clientX,
+                    event.clientY
+                );
+            }
+
+            return;
+        }
+
+        if(!state.project || !duration()) return;
+
+        state.context={type:'empty'};
+
+        showContextMenu(
+            event.clientX,
+            event.clientY
+        );
+    }
+);
+
+/* =========================================================
+   Global pointer
+========================================================= */
+
+window.addEventListener('pointermove',event=>{
+    if(state.drag){
+        moveElementPointer(event);
+    }
+
+    if(state.timelineDrag){
+        moveTimeline(event);
+    }
+});
+
+window.addEventListener('pointerup',()=>{
+    endElementPointer();
+    endTimelineDrag();
+});
+
+document.addEventListener('click',event=>{
+    if(!event.target.closest('#contextMenu')){
+        hideContextMenu();
+    }
+});
+
+/* =========================================================
+   Save
+========================================================= */
+
+async function saveLocal(){
+    if(!state.project){
+        throw new Error('プロジェクトがありません');
+    }
+
+    /*
+     * Blobを含んだままIndexedDBへ保存。
+     * JSON.stringifyではBlobを保存できないのでIndexedDBを使用。
+     */
+    await idbPut(state.project);
+
+    state.dirty=false;
+    $('editorStatus').textContent='ローカル保存済み';
+
+    await renderProjectList();
+}
+
+async function saveServer(){
+    if(!state.project) return;
+
+    /*
+     * videoBlobはサーバーJSONには送らない。
+     * サーバー側には編集データのみ保存。
+     */
+    const copy={
+        ...state.project,
+        videoBlob:null
+    };
+
+    const response=await fetch('?api=save',{
+        method:'POST',
+        headers:{
+            'Content-Type':'application/json'
+        },
+        body:JSON.stringify(copy)
+    });
+
+    const result=await response.json();
+
+    if(!response.ok || !result.ok){
+        const error=new Error(
+            result.message || 'サーバー保存に失敗しました。'
+        );
+
+        error.limit=!!result.limit;
+
+        throw error;
+    }
+
+    state.project.projectId=result.projectId;
+    state.project.savedAt=result.savedAt;
+
+    state.dirty=false;
+    $('editorStatus').textContent='サーバー保存済み';
+
+    await renderProjectList();
+}
 
 async function saveProject(){
     if(!state.project){
@@ -2443,103 +2748,52 @@ async function saveProject(){
         return;
     }
 
-    if(duration()<=0){
+    if(!state.project.videoDuration){
         message('先に動画を読み込んでください。');
         return;
     }
 
-    state.project.name =
-        $('editorProjectName').value.trim() ||
-        '名称未設定';
-
-    state.project.videoDuration =
-        duration();
+    /*
+     * まずブラウザへ保存。
+     * サーバー保存にも成功すればサーバー側を正式保存先にする。
+     */
+    try{
+        await saveLocal();
+    }catch(err){
+        console.error(err);
+        message('ブラウザへの保存に失敗しました。');
+        return;
+    }
 
     try{
-        const response =
-            await fetch('?api=save',{
-                method:'POST',
-                headers:{
-                    'Content-Type':'application/json'
-                },
-                body:JSON.stringify(state.project)
-            });
+        await saveServer();
 
-        const result =
-            await response.json();
-
-        if(result.ok){
-            state.project.projectId =
-                result.projectId;
-
-            state.project.savedAt =
-                result.savedAt;
-
-            state.dirty = false;
-
-            $('editorStatus').textContent =
-                '保存済み';
-
-            message('サーバーに保存しました。',true);
-            return;
-        }
-
-        if(result.limit){
-            throw new Error(
-                'SERVER_LIMIT'
-            );
-        }
-
-        throw new Error(
-            result.message ||
-            '保存に失敗しました'
+        message(
+            '保存しました。\n' +
+            '編集データはサーバーとブラウザの両方に保存されています。',
+            true
         );
 
     }catch(err){
+        console.warn(err);
 
-        if(err.message!=='SERVER_LIMIT'){
-            try{
-                await idbPut(state.project);
-
-                state.dirty = false;
-
-                $('editorStatus').textContent =
-                    'ローカル保存済み';
-
-                message(
-                    'サーバー保存に失敗したため、ブラウザに保存しました。',
-                    true
-                );
-
-                return;
-
-            }catch(localError){
-                console.error(localError);
-            }
+        if(err.limit){
+            message(
+                'サーバー保存上限に達したため、ローカルに保存しました。',
+                true
+            );
         }else{
-            try{
-                await idbPut(state.project);
-
-                state.dirty = false;
-
-                $('editorStatus').textContent =
-                    'ローカル保存済み';
-
-                message(
-                    'サーバー保存上限のため、ローカルに保存しました。',
-                    true
-                );
-
-                return;
-
-            }catch(localError){
-                console.error(localError);
-            }
+            message(
+                'サーバーには保存できませんでしたが、ブラウザには保存されています。',
+                true
+            );
         }
-
-        message('保存できませんでした。');
     }
 }
+
+/* =========================================================
+   Export JSON
+========================================================= */
 
 function exportProject(){
     if(!state.project){
@@ -2547,317 +2801,306 @@ function exportProject(){
         return;
     }
 
-    const data =
-        JSON.stringify(
-            state.project,
-            null,
-            2
-        );
+    const exportData={
+        ...state.project,
+        videoBlob:null
+    };
 
-    const blob =
-        new Blob(
-            [data],
-            {type:'application/json'}
-        );
+    const blob=new Blob(
+        [JSON.stringify(exportData,null,2)],
+        {type:'application/json'}
+    );
 
-    const url =
-        URL.createObjectURL(blob);
+    const url=URL.createObjectURL(blob);
 
-    const a =
-        document.createElement('a');
+    const a=document.createElement('a');
 
-    a.href = url;
+    a.href=url;
+    a.download=
+        (state.project.name || 'video-project')
+        .replace(/[\\/:*?"<>|]/g,'_') +
+        '.json';
 
-    a.download =
-        `${state.project.name || 'project'}.json`;
-
+    document.body.appendChild(a);
     a.click();
+    a.remove();
 
     URL.revokeObjectURL(url);
+
+    message(
+        '編集データを書き出しました。\n' +
+        'これはMP4ではなく、編集内容を保存したJSONです。',
+        true
+    );
 }
+
+/* =========================================================
+   Import project
+========================================================= */
 
 async function importProjectFile(file){
     if(!file) return;
 
     try{
-        const text =
-            await file.text();
+        const text=await file.text();
+        const project=JSON.parse(text);
 
-        const project =
-            JSON.parse(text);
-
-        if(
-            !project ||
-            !Array.isArray(project.elements) ||
-            !Array.isArray(project.connections)
-        ){
-            throw new Error(
-                'プロジェクト形式が不正です。'
-            );
+        if(!project || typeof project!=='object'){
+            throw new Error('不正なプロジェクト');
         }
 
-        state.project = project;
+        project.projectId =
+            project.projectId || uid('project');
 
-        if(!state.project.projectId){
-            state.project.projectId =
-                uid('project');
-        }
+        project.name =
+            project.name || '読み込んだ編集';
 
-        if(!state.project.name){
-            state.project.name =
-                '読み込んだプロジェクト';
-        }
+        project.elements =
+            Array.isArray(project.elements)
+                ? project.elements
+                : [];
 
-        state.selectedId = null;
-        state.selectedType = null;
-        state.multiSelected = [];
+        project.connections =
+            Array.isArray(project.connections)
+                ? project.connections
+                : [];
 
-        $('editorProjectName').value =
-            state.project.name;
+        project.videoBlob=null;
+
+        state.project=project;
+        state.selectedId=null;
+        state.selectedType=null;
+        state.multiSelected=[];
+        state.dirty=false;
+
+        $('editorProjectName').value=
+            project.name;
 
         showEditor();
-
         setEditorLocked(true);
+        renderAll();
 
+        /*
+         * JSONには動画本体を含めない。
+         * 編集開始には元動画を再度選択する必要がある。
+         */
         message(
-            'プロジェクトを読み込みました。動画を選択してください。',
+            '編集データを読み込みました。\n' +
+            '続けて元の動画ファイルを読み込んでください。',
             true
         );
 
     }catch(err){
         console.error(err);
-        message(
-            err.message ||
-            'プロジェクトを読み込めませんでした。'
-        );
-    }
-}
-
-async function loadServerProject(id){
-    try{
-        const response =
-            await fetch(
-                '?api=load&id='+
-                encodeURIComponent(id)
-            );
-
-        const result =
-            await response.json();
-
-        if(!result.ok){
-            throw new Error(
-                result.message ||
-                '読み込みに失敗しました。'
-            );
-        }
-
-        state.project =
-            result.project;
-
-        state.selectedId = null;
-        state.selectedType = null;
-        state.multiSelected = [];
-
-        $('editorProjectName').value =
-            state.project.name || '';
-
-        showEditor();
-        setEditorLocked(true);
-
-        message(
-            'プロジェクトを読み込みました。動画を選択してください。',
-            true
-        );
-
-    }catch(err){
-        message(err.message);
+        message('編集データを読み込めませんでした。');
     }
 }
 
 /* =========================================================
- * Project list
- * ======================================================= */
+   Project list
+========================================================= */
 
 async function renderProjectList(){
-    const list = $('projectList');
+    const list=$('projectList');
+    list.innerHTML='';
 
-    list.innerHTML =
-        '<div style="color:#888">読み込み中…</div>';
-
-    let projects = [];
+    let local=[];
 
     try{
-        const response =
-            await fetch('?api=list');
-
-        const result =
-            await response.json();
-
-        if(result.ok){
-            projects =
-                result.projects || [];
+        if(state.db){
+            local=await idbGetAll();
         }
     }catch(err){
-        console.error(err);
+        console.warn(err);
     }
+
+    let server=[];
 
     try{
-        const local =
-            await idbGetAll();
-
-        local.forEach(p=>{
-            if(
-                !projects.some(
-                    s=>s.projectId===p.projectId
-                )
-            ){
-                projects.push({
-                    ...p,
-                    storage:'local'
-                });
-            }
+        const response=await fetch('?api=list',{
+            cache:'no-store'
         });
+
+        const result=await response.json();
+
+        if(result.ok){
+            server=result.projects || [];
+        }
     }catch(err){
-        console.error(err);
+        console.warn(err);
     }
 
-    if(!projects.length){
-        list.innerHTML =
-            '<div style="color:#888">保存されたプロジェクトはありません。</div>';
+    const items=[
+        ...server.map(p=>({
+            ...p,
+            storage:'server'
+        })),
+        ...local
+            .filter(p=>
+                !server.some(s=>
+                    s.projectId===p.projectId
+                )
+            )
+            .map(p=>({
+                projectId:p.projectId,
+                name:p.name,
+                videoName:p.videoName,
+                videoDuration:p.videoDuration,
+                savedAt:p.savedAt,
+                storage:'local'
+            }))
+    ];
+
+    if(!items.length){
+        list.innerHTML=
+            '<p style="color:#888;font-size:12px">保存済み編集はありません。</p>';
         return;
     }
 
-    list.innerHTML = '';
+    items.forEach(p=>{
+        const row=document.createElement('div');
+        row.className='project';
 
-    projects.forEach(p=>{
-        const row =
-            document.createElement('div');
+        const info=document.createElement('div');
+        info.className='project-info';
 
-        row.className = 'project';
+        const name=document.createElement('div');
+        name.className='project-name';
+        name.textContent=p.name || '名称未設定';
 
-        const info =
-            document.createElement('div');
+        const meta=document.createElement('div');
+        meta.className='project-meta';
 
-        info.className = 'project-info';
-
-        const name =
-            document.createElement('div');
-
-        name.className = 'project-name';
-        name.textContent =
-            p.name || '名称未設定';
-
-        const meta =
-            document.createElement('div');
-
-        meta.className = 'project-meta';
-
-        meta.textContent =
+        meta.textContent=
+            `${p.storage==='server'?'サーバー':'このブラウザ'} / ` +
             `${p.videoName || '動画未設定'} / ` +
-            `${p.storage==='local' ? 'ローカル' : 'サーバー'} / ` +
-            `${p.savedAt || ''}`;
+            `${fmt(p.videoDuration || 0)}`;
 
-        info.appendChild(name);
-        info.appendChild(meta);
+        info.append(name,meta);
 
-        const actions =
-            document.createElement('div');
+        const actions=document.createElement('div');
+        actions.className='project-actions';
 
-        actions.className =
-            'project-actions';
+        const open=document.createElement('button');
+        open.textContent='開く';
 
-        const load =
-            document.createElement('button');
+        open.addEventListener('click',async()=>{
+            try{
+                let project=null;
 
-        load.textContent = '開く';
+                if(p.storage==='local'){
+                    project=await idbGet(p.projectId);
+                }else{
+                    const response=
+                        await fetch(
+                            '?api=load&id='+
+                            encodeURIComponent(p.projectId),
+                            {cache:'no-store'}
+                        );
 
-        load.addEventListener('click',()=>{
-            if(p.storage==='local'){
-                idbGet(p.projectId)
-                    .then(project=>{
-                        if(project){
-                            state.project = project;
-                            $('editorProjectName').value =
-                                project.name || '';
-                            showEditor();
-                            setEditorLocked(true);
-                            message(
-                                'ローカルプロジェクトを開きました。動画を選択してください。',
-                                true
-                            );
-                        }
-                    });
-            }else{
-                loadServerProject(p.projectId);
+                    const result=await response.json();
+
+                    if(!result.ok){
+                        throw new Error(result.message);
+                    }
+
+                    project=result.project;
+
+                    /*
+                     * サーバーから読み込んだ編集データを
+                     * ローカルにも保持。
+                     */
+                    await idbPut(project);
+                }
+
+                if(!project) throw new Error('プロジェクトがありません');
+
+                state.project=project;
+                state.selectedId=null;
+                state.selectedType=null;
+                state.multiSelected=[];
+                state.dirty=false;
+
+                $('editorProjectName').value=
+                    project.name || '';
+
+                showEditor();
+                setEditorLocked(true);
+                renderAll();
+
+                message(
+                    '編集データを開きました。\n' +
+                    '元の動画を読み込むと編集できます。',
+                    true
+                );
+
+            }catch(err){
+                console.error(err);
+                message(
+                    err.message ||
+                    'プロジェクトを開けませんでした。'
+                );
             }
         });
 
-        actions.appendChild(load);
+        actions.appendChild(open);
 
-        if(p.storage==='local'){
-            const del =
-                document.createElement('button');
+        const del=document.createElement('button');
+        del.className='danger';
+        del.textContent='削除';
 
-            del.className='danger';
-            del.textContent='削除';
+        del.addEventListener('click',async()=>{
+            if(!confirm('この編集データを削除しますか？')){
+                return;
+            }
 
-            del.addEventListener('click',async()=>{
-                if(!confirm('このローカルプロジェクトを削除しますか？')){
-                    return;
+            try{
+                if(p.storage==='local'){
+                    await idbDelete(p.projectId);
+                }else{
+                    await fetch('?api=delete',{
+                        method:'POST',
+                        headers:{
+                            'Content-Type':'application/json'
+                        },
+                        body:JSON.stringify({
+                            projectId:p.projectId
+                        })
+                    });
                 }
 
-                await idbDelete(p.projectId);
-                renderProjectList();
-            });
+                await renderProjectList();
 
-            actions.appendChild(del);
-        }
+            }catch(err){
+                console.error(err);
+                message('削除できませんでした。');
+            }
+        });
 
-        row.appendChild(info);
-        row.appendChild(actions);
+        actions.appendChild(del);
 
+        row.append(info,actions);
         list.appendChild(row);
     });
 }
 
 /* =========================================================
- * Render all
- * ======================================================= */
+   Header / navigation
+========================================================= */
 
-function renderAll(){
-    renderObjects();
-    renderConnectors();
-    renderTimeline();
-    updatePlayhead();
-}
+$('newProject').addEventListener('click',()=>{
+    newProject();
+});
 
-/* =========================================================
- * Events
- * ======================================================= */
+$('openVideo').addEventListener('click',()=>{
+    if(!state.project) newProject();
+    $('videoFile').click();
+});
 
-$('newProject').addEventListener(
-    'click',
-    newProject
-);
-
-$('openVideo').addEventListener(
-    'click',
-    ()=>{
-        if(!state.project){
-            newProject();
-        }
-
-        $('videoFile').click();
-    }
-);
-
-$('videoFile').addEventListener(
-    'change',
-    event=>{
-        handleVideo(event.target.files[0]);
-        event.target.value='';
-    }
-);
+$('videoFile').addEventListener('change',event=>{
+    handleVideo(event.target.files[0]);
+    event.target.value='';
+});
 
 $('loadVideoButton').addEventListener(
     'click',
@@ -2885,21 +3128,18 @@ $('projectFile').addEventListener(
     }
 );
 
-$('backHome').addEventListener(
-    'click',
-    ()=>{
-        if(
-            state.dirty &&
-            !confirm(
-                '保存していない変更があります。戻りますか？'
-            )
-        ){
-            return;
-        }
-
-        showHome();
+$('backHome').addEventListener('click',()=>{
+    if(
+        state.dirty &&
+        !confirm(
+            '保存していない変更があります。\n戻りますか？'
+        )
+    ){
+        return;
     }
-);
+
+    showHome();
+});
 
 $('saveProject').addEventListener(
     'click',
@@ -2915,350 +3155,85 @@ $('editorProjectName').addEventListener(
     'input',
     ()=>{
         if(state.project){
-            state.project.name =
+            state.project.name=
                 $('editorProjectName').value;
+
             markDirty();
         }
     }
 );
 
-$('videoArea').addEventListener(
-    'pointerdown',
-    beginElementPointer
-);
+/* =========================================================
+   Keyboard
+========================================================= */
 
-window.addEventListener(
-    'pointermove',
-    event=>{
-        if(state.drag){
-            moveElementPointer(event);
-        }
+document.addEventListener('keydown',event=>{
+    const tag=
+        document.activeElement?.tagName;
 
-        if(state.timelineDrag){
-            moveTimeline(event);
-        }
-    }
-);
-
-window.addEventListener(
-    'pointerup',
-    ()=>{
-        endElementPointer();
-        endTimelineDrag();
-    }
-);
-
-$('recordedVideo').addEventListener(
-    'loadedmetadata',
-    ()=>{
-        setEditorLocked(false);
-
-        if(state.project){
-            state.project.videoDuration =
-                $('recordedVideo').duration;
-        }
-
-        renderAll();
-    }
-);
-
-$('recordedVideo').addEventListener(
-    'timeupdate',
-    ()=>{
-        processSkip();
-        updatePlayhead();
-        renderObjects();
-    }
-);
-
-$('recordedVideo').addEventListener(
-    'play',
-    ()=>{
-        $('playToggle').textContent='❚❚';
-    }
-);
-
-$('recordedVideo').addEventListener(
-    'pause',
-    ()=>{
-        $('playToggle').textContent='▶';
-    }
-);
-
-$('recordedVideo').addEventListener(
-    'ended',
-    ()=>{
-        $('playToggle').textContent='▶';
-    }
-);
-
-$('playToggle').addEventListener(
-    'click',
-    ()=>{
-        const video = $('recordedVideo');
-
-        if(!video.src || duration()<=0){
-            message('先に動画を読み込んでください。');
-            return;
-        }
-
-        if(video.paused){
-            video.play().catch(err=>{
-                console.error(err);
-                message('動画を再生できませんでした。');
-            });
-        }else{
-            video.pause();
-        }
-    }
-);
-
-$('timelineZoom').addEventListener(
-    'change',
-    event=>{
-        state.zoom =
-            Number(event.target.value)||1;
-
-        renderTimeline();
-    }
-);
-
-$('timelineZoomOut').addEventListener(
-    'click',
-    ()=>{
-        const values=[.5,1,2,3,5];
-        const current =
-            values.indexOf(state.zoom);
-
-        state.zoom =
-            values[Math.max(0,current-1)];
-
-        $('timelineZoom').value =
-            String(state.zoom);
-
-        renderTimeline();
-    }
-);
-
-$('timelineZoomIn').addEventListener(
-    'click',
-    ()=>{
-        const values=[.5,1,2,3,5];
-        const current =
-            values.indexOf(state.zoom);
-
-        state.zoom =
-            values[Math.min(values.length-1,current+1)];
-
-        $('timelineZoom').value =
-            String(state.zoom);
-
-        renderTimeline();
-    }
-);
-
-/* 動画領域右クリック */
-$('videoArea').addEventListener(
-    'contextmenu',
-    event=>{
-        event.preventDefault();
-
-        if(
-            event.target.closest('.edit-object') ||
-            event.target.closest('.connector-hit')
-        ){
-            return;
-        }
-
-        state.context = {
-            type:'empty'
-        };
-
-        showContextMenu(
-            event.clientX,
-            event.clientY
-        );
-    }
-);
-
-/* タイムライン空白右クリック */
-$('timeline').addEventListener(
-    'contextmenu',
-    event=>{
-        if(
-            event.target.closest('.track-item')
-        ){
-            return;
-        }
-
-        event.preventDefault();
-
-        state.context = {
-            type:'empty'
-        };
-
-        showContextMenu(
-            event.clientX,
-            event.clientY
-        );
-    }
-);
-
-/* context menu */
-$('contextMenu').addEventListener(
-    'click',
-    event=>{
-        const button =
-            event.target.closest('[data-action]');
-
-        if(!button) return;
-
-        const action =
-            button.dataset.action;
-
-        const context =
-            state.context;
-
+    if(event.key==='Escape'){
         hideContextMenu();
-
-        if(action==='add-comment'){
-            addElement('comment');
-            return;
-        }
-
-        if(action==='add-box'){
-            addElement('box');
-            return;
-        }
-
-        if(action==='add-skip'){
-            addElement('skip');
-            return;
-        }
-
-        if(action==='edit'){
-            if(
-                context?.type==='element'
-            ){
-                openElementModal(
-                    getElement(context.id)
-                );
-            }else if(
-                context?.type==='connection'
-            ){
-                const c =
-                    state.project.connections.find(
-                        c=>c.id===context.id
-                    );
-
-                if(c) editConnection(c);
-            }
-
-            return;
-        }
-
-        if(action==='duplicate'){
-            duplicateSelected();
-            return;
-        }
-
-        if(action==='delete'){
-            deleteSelected();
-            return;
-        }
-
-        if(action==='connect'){
-            connectSelected();
-        }
+        closeElementModal();
+        return;
     }
-);
 
-document.addEventListener(
-    'click',
-    event=>{
-        if(
-            !event.target.closest('#contextMenu')
-        ){
-            hideContextMenu();
-        }
+    if(
+        event.key==='Delete' &&
+        $('elementModal').style.display!=='flex' &&
+        tag!=='INPUT' &&
+        tag!=='TEXTAREA' &&
+        state.selectedId
+    ){
+        deleteSelected();
+        return;
     }
-);
 
-$('modalCancel').addEventListener(
-    'click',
-    closeElementModal
-);
-
-$('modalSave').addEventListener(
-    'click',
-    saveElementModal
-);
-
-$('elementModal').addEventListener(
-    'click',
-    event=>{
-        if(
-            event.target ===
-            $('elementModal')
-        ){
-            closeElementModal();
-        }
+    if(
+        event.key===' ' &&
+        tag!=='INPUT' &&
+        tag!=='TEXTAREA' &&
+        state.project &&
+        duration()
+    ){
+        event.preventDefault();
+        $('playToggle').click();
     }
-);
-
-$('recordedVideo').addEventListener(
-    'durationchange',
-    ()=>{
-        renderTimeline();
-    }
-);
+});
 
 /* =========================================================
- * Keyboard
- * ======================================================= */
+   Resize
+========================================================= */
 
-document.addEventListener(
-    'keydown',
-    event=>{
-        if(
-            event.key==='Delete' &&
-            !$('elementModal').style.display
-        ){
-            deleteSelected();
-        }
-
-        if(
-            event.key==='Escape'
-        ){
-            hideContextMenu();
-            closeElementModal();
-        }
-
-        if(
-            event.key===' ' &&
-            document.activeElement.tagName!=='INPUT' &&
-            document.activeElement.tagName!=='TEXTAREA'
-        ){
-            event.preventDefault();
-            $('playToggle').click();
-        }
-    }
-);
+window.addEventListener('resize',()=>{
+    renderTimeline();
+    renderConnectors();
+});
 
 /* =========================================================
- * Start
- * ======================================================= */
+   Render all
+========================================================= */
+
+function renderAll(){
+    renderObjects();
+    renderConnectors();
+    renderTimeline();
+    updatePlayhead();
+}
+
+/* =========================================================
+   Init
+========================================================= */
 
 (async function init(){
 
     try{
         await openDB();
     }catch(err){
-        console.error(err);
+        console.warn('IndexedDB unavailable:',err);
     }
 
-    $('status').textContent =
-        '準備完了';
+    $('status').textContent=
+        '動画を読み込んで編集を開始してください';
 
     await renderProjectList();
 
