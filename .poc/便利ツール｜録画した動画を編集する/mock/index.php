@@ -1,4 +1,4 @@
-<?php　
+<?php
 declare(strict_types=1);
 
 const APP_VERSION = '5.0.0';
