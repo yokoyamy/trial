@@ -1,668 +1,577 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="UTF-8">
-<title>動画編集モック</title>
-<style>
-*{box-sizing:border-box}
-body{margin:0;font-family:"Yu Gothic",sans-serif;font-size:13px;color:#222;background:#f3f4f6;overflow-x:hidden}
-button{cursor:pointer;font-size:12px;padding:4px 8px;border:1px solid #999;background:#fff;border-radius:3px}
-button:hover{background:#eef}
-button.danger{color:#b00;border-color:#b00}
-button.primary{background:#2563eb;color:#fff;border-color:#2563eb}
-h2{margin:0 0 8px;font-size:15px}
-#home{padding:16px;display:grid;grid-template-columns:1.4fr 1fr;gap:16px}
-.panel{background:#fff;border:1px solid #ccc;border-radius:6px;padding:12px}
-.vrow{border:1px solid #bbb;border-radius:4px;margin-bottom:10px;background:#fafafa}
-.vhead{padding:8px;background:#e8edf5;display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap}
-.children{margin:6px 6px 8px 28px;border-left:3px solid #2563eb;padding-left:8px}
-.wrow{display:flex;justify-content:space-between;align-items:center;padding:4px;border-bottom:1px dotted #ccc;gap:6px}
-.empty{color:#888;padding:4px}
-.small{color:#666;font-size:11px}
-#edit{display:none;flex-direction:column;height:100vh}
-#topbar{background:#1f2937;color:#fff;padding:6px 10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-#topbar button{background:#374151;color:#fff;border-color:#555}
-#topbar .info{margin-right:auto}
-#dirty{color:#fbbf24;font-weight:bold}
-#stage{flex:1;min-height:0;display:flex;justify-content:center;align-items:center;background:#111;padding:6px}
-#vwrap{position:relative;width:640px;height:360px;background:#000;overflow:hidden;user-select:none}
-#vcontent{position:absolute;left:0;top:0;width:640px;height:360px;transform-origin:0 0;background:linear-gradient(135deg,#1e3a8a,#059669 50%,#d97706)}
-#vcontent .grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.12) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.12) 1px,transparent 1px);background-size:40px 40px}
-#vlabel{position:absolute;left:8px;bottom:6px;color:#fff;font-size:12px;opacity:.8}
-.el{position:absolute;cursor:move}
-.el.sel{outline:2px dashed #fde047;outline-offset:2px}
-.el .rh{position:absolute;right:-5px;bottom:-5px;width:10px;height:10px;background:#fde047;border:1px solid #333;cursor:nwse-resize;display:none}
-.el.sel .rh{display:block}
-.el.target{outline:3px solid #22c55e}
-.cm{display:flex;align-items:center;justify-content:center;text-align:center;overflow:hidden;padding:2px}
-.zm{border:2px solid #38bdf8;background:rgba(56,189,248,.12)}
-#svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-#svg .hit{pointer-events:stroke;cursor:pointer;stroke:transparent;stroke-width:16;fill:none}
-#banner{position:absolute;top:4px;left:50%;transform:translateX(-50%);background:#22c55e;color:#fff;padding:3px 10px;border-radius:10px;display:none;z-index:50;font-size:12px;white-space:nowrap}
-#ctl{background:#e5e7eb;padding:6px 10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-top:1px solid #aaa}
-#ctl .sp{margin-left:auto}
-#tlwrap{background:#fff;padding:4px 10px 8px;border-top:1px solid #ccc;height:290px;overflow:hidden}
-#tlinfo{display:flex;gap:12px;font-size:12px;margin-bottom:3px;flex-wrap:wrap}
-#tlrow{display:flex;gap:4px;align-items:stretch}
-#tlrow>button{width:26px;padding:0}
-#tlmain{flex:1;min-width:0;position:relative;padding-top:16px}
-#ruler{position:relative;height:24px;background:#f1f5f9;border:1px solid #bbb;cursor:pointer}
-.tick{position:absolute;top:0;height:100%;border-left:1px solid #888;font-size:10px;padding-left:2px;pointer-events:none;white-space:nowrap}
-.endmark{position:absolute;top:0;height:100%;border-left:3px solid #dc2626;pointer-events:none}
-.endmark span{position:absolute;top:-1px;left:3px;font-size:10px;color:#dc2626;background:#fff}
-#lanes{position:relative;height:150px;border:1px solid #bbb;border-top:none;background:#fff;overflow:hidden;cursor:grab}
-.tb{position:absolute;height:22px;border-radius:3px;color:#fff;font-size:11px;line-height:22px;padding:0 10px;overflow:hidden;white-space:nowrap;cursor:pointer;border:1px solid rgba(0,0,0,.4)}
-.tb.sel{outline:2px solid #fde047}
-.tb .hl,.tb .hr{position:absolute;top:0;width:7px;height:100%;background:rgba(0,0,0,.35);cursor:ew-resize}
-.tb .hl{left:0}.tb .hr{right:0}
-#cursor{position:absolute;top:0;width:0;border-left:2px solid #dc2626;z-index:10;pointer-events:none}
-#handle{position:absolute;top:0;left:-8px;width:16px;height:16px;border-radius:50%;background:#dc2626;border:2px solid #fff;cursor:ew-resize;pointer-events:auto}
-#overview{position:relative;height:26px;margin-top:6px;background:#e2e8f0;border:1px solid #94a3b8}
-#ovwin{position:absolute;top:0;height:100%;background:rgba(37,99,235,.25);border:2px solid #2563eb;cursor:grab}
-#ovwin .g{position:absolute;top:0;width:8px;height:100%;background:#2563eb;cursor:ew-resize}
-#ovwin .g.l{left:-2px}#ovwin .g.r{right:-2px}
-.ovitem{position:absolute;height:3px;background:rgba(0,0,0,.4);pointer-events:none}
-#ovplay{position:absolute;top:0;height:100%;border-left:2px solid #dc2626;pointer-events:none}
-#menu{position:fixed;z-index:1000;background:#fff;border:1px solid #666;border-radius:4px;box-shadow:0 3px 10px rgba(0,0,0,.3);padding:6px;min-width:200px;max-width:270px;display:none;max-height:85vh;overflow:auto}
-#menu .mt{font-weight:bold;border-bottom:1px solid #ccc;margin-bottom:4px;padding-bottom:2px}
-#menu .mi{display:block;width:100%;text-align:left;margin:2px 0;border:none;background:none;padding:4px 6px}
-#menu .mi:hover{background:#dbeafe}
-#menu .mr{margin:4px 0}
-#menu .mr>label{display:block;font-size:11px;color:#555}
-#menu input[type=text],#menu input[type=number]{width:100%}
-.sw{display:inline-block;width:18px;height:18px;border:1px solid #666;margin:1px;cursor:pointer}
-.sw.on{outline:2px solid #2563eb}
-.opt{display:inline-block;border:1px solid #999;margin:1px;padding:2px 4px;cursor:pointer;background:#fff;font-size:11px}
-.opt.on{outline:2px solid #2563eb;background:#dbeafe}
-.opt svg{display:block}
-#modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:2000}
-#modal .box{background:#fff;padding:16px;border-radius:6px;min-width:340px;max-width:520px;max-height:80vh;overflow:auto}
-#modal .btns{margin-top:12px;display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
-#modal label.cand{display:block;padding:3px}
-#player{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1500;align-items:center;justify-content:center;flex-direction:column;color:#fff;gap:8px}
-#player .pv{width:560px;height:315px;background:linear-gradient(135deg,#7c3aed,#0ea5e9);display:flex;align-items:center;justify-content:center;font-size:18px;text-align:center;padding:10px}
-#progress{width:100%;height:14px;background:#ddd;border-radius:7px;overflow:hidden;margin-top:8px}
-#progress div{height:100%;width:0;background:#2563eb}
-</style>
-</head>
-<body>
+# 業務・操作要件
 
-<div id="home">
-  <div class="panel">
-    <h2 id="hOrig"></h2>
-    <div style="margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap">
-      <button class="primary" id="btnPick">動画を選択</button>
-      <button id="btnSample">例題動画を取り込む</button>
-      <button id="btnBroken">読み込めない動画を選ぶ（テスト）</button>
-    </div>
-    <input type="file" id="file" accept="video/*" style="display:none">
-    <div id="homeMsg" style="color:#b00;margin-bottom:6px"></div>
-    <div id="origList"></div>
-    <div class="small">※編集対象の動画は未選択です。動画を選択するまで編集画面は開始しません。</div>
-  </div>
-  <div class="panel">
-    <h2 id="hRes"></h2>
-    <div id="resList"></div>
-  </div>
-</div>
+## 1. 目的
 
-<div id="edit">
-  <div id="topbar">
-    <div class="info">動画：<b id="eVideo"></b> ／ 編集作業：<b id="eWork"></b> <span id="dirty"></span></div>
-    <button id="bSave">保存</button>
-    <button id="bSaveAs">別の編集作業として保存</button>
-    <button id="bExport">編集結果を動画にする</button>
-    <button id="bEnd">編集作業を終了する</button>
-  </div>
-  <div id="stage">
-    <div id="vwrap">
-      <div id="vcontent"><div class="grid"></div></div>
-      <svg id="svg"></svg>
-      <div id="vlabel"></div>
-      <div id="banner"></div>
-    </div>
-  </div>
-  <div id="ctl">
-    <button id="bPlay">▶ 再生</button>
-    <button id="bPause">⏸ 一時停止</button>
-    <button id="bStop">⏹ 停止</button>
-    <label><input type="checkbox" id="skipChk" checked> 再生時にスキップ範囲を飛ばす</label>
-    <span id="posInfo"></span>
-    <span class="sp"></span>
-    <button id="zOut">－</button>
-    <input type="range" id="zSlider" min="0" max="1000" value="0" style="width:140px">
-    <button id="zIn">＋</button>
-    <span id="zInfo"></span>
-    <button id="zReset">全体表示に戻す</button>
-  </div>
-  <div id="tlwrap">
-    <div id="tlinfo"><span id="rangeInfo"></span></div>
-    <div id="tlrow">
-      <button id="pLeft">◀</button>
-      <div id="tlmain">
-        <div id="ruler"></div>
-        <div id="lanes"></div>
-        <div id="cursor"><div id="handle"></div></div>
-      </div>
-      <button id="pRight">▶</button>
-    </div>
-    <div id="overview"><div id="ovwin"><div class="g l"></div><div class="g r"></div></div></div>
-  </div>
-</div>
+録画した動画を編集対象として選択し、動画上の要素・接続線・表示時間などを編集し、その編集結果を画面上で確認できること。
 
-<div id="menu"></div>
-<div id="modal"><div class="box" id="mbox"></div></div>
-<div id="player"><div class="pv" id="pv"></div><button id="pClose">閉じる</button></div>
+編集作業は動画単位で管理し、操作者が選択したオリジナル動画を基準として編集を行う。
 
-<script>
-"use strict";
-const $=id=>document.getElementById(id);
-const LIM=10,MINVIS=0.5,MINDUR=0.3,DEF_DUR=5,VW=640,VH=360;
-const COLORS=["#000000","#ffffff","#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#6366f1","#a855f7","#ec4899","#6b7280"];
-const FONTS=["sans-serif","serif","monospace","cursive","Yu Mincho","Meiryo"];
-const DASH={solid:"",dot:"2 4",dash:"8 5",dashdot:"10 4 2 4"};
-const DASHN={solid:"実線",dot:"点線",dash:"破線",dashdot:"一点鎖線"};
-const SHAPEN={line:"直線",poly:"折れ線",wave:"波線"};
-const ENDN={none:"なし",arrow:"矢印",circle:"丸",square:"四角"};
-const SIDEN={auto:"自動",top:"上",right:"右",bottom:"下",left:"左"};
-const KIND={comment:"コメント",box:"強調枠",zoom:"拡大枠",skip:"スキップ"};
-const KCOL={comment:"#2563eb",box:"#dc2626",zoom:"#0891b2",skip:"#6b7280"};
+編集対象となる動画と、編集作業として保存する内容と、編集結果として作成する動画を明確に区別する。
 
-const S={videos:[],works:[],results:[],seq:1,cur:null,sel:[],selLine:null,time:0,dur:60,playing:false,vs:0,ve:60,connFrom:null};
+---
 
-const uid=()=>S.seq++;
-const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
-const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-function fmtT(t,fine){t=Math.max(0,t);const m=Math.floor(t/60),s=t-m*60;return m+":"+(fine?s.toFixed(2).padStart(5,"0"):String(Math.floor(s)).padStart(2,"0"))}
-function fmtD(ts){const d=new Date(ts);return d.getFullYear()+"/"+(d.getMonth()+1)+"/"+d.getDate()+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")}
+## 2. 用語
 
-/* ---------- モーダル ---------- */
-function modal(html,btns){
-  $("mbox").innerHTML=html+'<div class="btns" id="mbtns"></div>';
-  btns.forEach(b=>{const e=document.createElement("button");e.textContent=b.t;if(b.c)e.className=b.c;
-    e.onclick=()=>{const v=b.f?b.f():null;if(v!==false)closeModal()};$("mbtns").appendChild(e)});
-  $("modal").style.display="flex";
-}
-function closeModal(){$("modal").style.display="none"}
+### 2.1 オリジナル動画
 
-/* ---------- 初期画面 ---------- */
-function renderHome(){
-  $("hOrig").textContent=`オリジナル動画（${S.videos.length}/${LIM}件）`;
-  $("hRes").textContent=`編集結果の動画（${S.results.length}/${LIM}件）`;
-  let h=`<div class="small" style="margin-bottom:6px">編集作業 合計 ${S.works.length}/${LIM}件</div>`;
-  if(!S.videos.length)h+='<div class="empty">オリジナル動画はありません。「動画を選択」から取り込んでください。</div>';
-  S.videos.forEach(v=>{
-    const ws=S.works.filter(w=>w.videoId===v.id).sort((a,b)=>b.saved-a.saved);
-    h+=`<div class="vrow"><div class="vhead"><div><b>${esc(v.name)}</b><br><span class="small">取り込み：${fmtD(v.imported)} ／ 編集作業 ${ws.length}件</span></div>
-    <div><button class="primary" data-new="${v.id}">新しい編集作業を始める</button> <button class="danger" data-delv="${v.id}">削除</button></div></div><div class="children">`;
-    if(!ws.length)h+='<div class="empty">編集作業はありません</div>';
-    ws.forEach(w=>{h+=`<div class="wrow"><div>${esc(w.name)}<br><span class="small">最終保存：${fmtD(w.saved)}</span></div>
-      <div><button data-resume="${w.id}">再開</button> <button class="danger" data-delw="${w.id}">削除</button></div></div>`});
-    h+="</div></div>";
-  });
-  $("origList").innerHTML=h;
-  let r=S.results.length?"":'<div class="empty">編集結果の動画はありません</div>';
-  S.results.forEach(x=>{
-    const alive=S.videos.some(v=>v.id===x.videoId);
-    r+=`<div class="wrow"><div><b>${esc(x.name)}</b><br><span class="small">元の動画：${esc(x.origName)}${alive?"":"（削除済み）"} ／ 作成：${fmtD(x.created)}</span></div>
-    <div><button data-play="${x.id}">再生</button> <button class="danger" data-delr="${x.id}">削除</button></div></div>`});
-  $("resList").innerHTML=r;
-}
-$("origList").onclick=e=>{
-  const d=e.target.dataset;
-  if(d.new)startWork(+d.new);
-  else if(d.resume)resumeWork(+d.resume);
-  else if(d.delv)delVideo(+d.delv);
-  else if(d.delw)delWork(+d.delw);
-};
-$("resList").onclick=e=>{
-  const d=e.target.dataset;
-  if(d.play){const x=S.results.find(r=>r.id==d.play);$("pv").innerHTML=`編集結果の動画：${esc(x.name)}<br>元の動画：${esc(x.origName)}<br>（再生モック）`;$("player").style.display="flex"}
-  if(d.delr){const x=S.results.find(r=>r.id==d.delr);
-    modal(`編集結果の動画「${esc(x.name)}」を削除しますか？`,[{t:"削除する",c:"danger",f:()=>{S.results=S.results.filter(r=>r.id!=x.id);renderHome()}},{t:"キャンセル"}])}
-};
-$("pClose").onclick=()=>$("player").style.display="none";
-$("btnPick").onclick=()=>$("file").click();
-$("file").onchange=e=>{
-  const f=e.target.files[0];if(!f)return;
-  const url=URL.createObjectURL(f),vd=document.createElement("video");
-  vd.preload="metadata";
-  vd.onloadedmetadata=()=>importVideo(f.name,isFinite(vd.duration)?vd.duration:60);
-  vd.onerror=()=>{$("homeMsg").textContent="選択した動画を読み込めませんでした。編集画面は開始しません。"};
-  vd.src=url;e.target.value="";
-};
-$("btnSample").onclick=()=>importVideo("例題動画.mp4",60);
-$("btnBroken").onclick=()=>{$("homeMsg").textContent="選択した動画「壊れた動画.mp4」を読み込めませんでした。編集画面は開始しません。"};
+編集作業を開始する際に操作者が選択した元の動画。
 
-function importVideo(name,dur){
-  $("homeMsg").textContent="";
-  const go=()=>{const v={id:uid(),name,dur,imported:Date.now()};S.videos.push(v);renderHome();startWork(v.id)};
-  if(S.videos.length<LIM){go();return}
-  let h="オリジナル動画が上限（10件）です。削除する動画を選んでください。<br><small>※配下の編集作業も一緒に削除されます。</small><br>";
-  S.videos.forEach((v,i)=>{const n=S.works.filter(w=>w.videoId===v.id).length;
-    h+=`<label class="cand"><input type="radio" name="cand" value="${v.id}" ${i?"":"checked"}> ${esc(v.name)}（編集作業${n}件も削除）</label>`});
-  modal(h,[{t:"削除して取り込む",c:"danger",f:()=>{
-    const id=+document.querySelector('input[name=cand]:checked').value;
-    S.videos=S.videos.filter(v=>v.id!==id);S.works=S.works.filter(w=>w.videoId!==id);go()}},{t:"キャンセル"}]);
-}
-function delVideo(id){
-  const v=S.videos.find(x=>x.id===id),n=S.works.filter(w=>w.videoId===id).length,rn=S.results.filter(r=>r.videoId===id).length;
-  modal(`動画「${esc(v.name)}」を削除しますか？`+(n?`<br><b>配下の編集作業${n}件も一緒に削除されます。</b>`:"")+(rn?`<br>作成済みの編集結果の動画（${rn}件）は残ります。`:""),
-    [{t:"削除する",c:"danger",f:()=>{S.videos=S.videos.filter(x=>x.id!==id);S.works=S.works.filter(w=>w.videoId!==id);renderHome()}},{t:"キャンセル"}]);
-}
-function delWork(id){
-  const w=S.works.find(x=>x.id===id);
-  modal(`編集作業「${esc(w.name)}」を削除しますか？<br>オリジナル動画と編集結果の動画には影響しません。`,
-    [{t:"削除する",c:"danger",f:()=>{S.works=S.works.filter(x=>x.id!==id);renderHome()}},{t:"キャンセル"}]);
-}
+編集作業によってオリジナル動画自体を書き換えない。
 
-/* ---------- 編集開始・再開・終了 ---------- */
-function startWork(vid){
-  const v=S.videos.find(x=>x.id===vid);
-  S.cur={video:v,work:null,data:{els:[],lines:[],nid:1},dirty:false};openEditor();
-}
-function resumeWork(wid){
-  const w=S.works.find(x=>x.id===wid),v=S.videos.find(x=>x.id===w.videoId);
-  S.cur={video:v,work:w,data:JSON.parse(JSON.stringify(w.data)),dirty:false};openEditor();
-}
-function openEditor(){
-  S.dur=S.cur.video.dur;S.time=0;S.vs=0;S.ve=S.dur;S.sel=[];S.selLine=null;S.connFrom=null;S.playing=false;
-  $("home").style.display="none";$("edit").style.display="flex";closeMenu();renderAll();
-}
-function markDirty(){S.cur.dirty=true;updateHead()}
-function updateHead(){
-  $("eVideo").textContent=S.cur.video.name;
-  $("eWork").textContent=S.cur.work?S.cur.work.name:"未保存の編集作業";
-  $("dirty").textContent=S.cur.dirty?"● 未保存の変更あり":"";
-  $("vlabel").textContent="元動画："+S.cur.video.name;
-}
-function endWork(){
-  pause();S.cur=null;closeMenu();
-  $("edit").style.display="none";$("home").style.display="grid";renderHome();
-}
+### 2.2 編集作業
 
-/* ---------- 保存・出力 ---------- */
-function workLimitCheck(then){
-  if(S.works.length<LIM){then();return}
-  let h="編集作業が上限（10件）です。削除する編集作業を選んでください。<br>";
-  S.works.forEach((w,i)=>{const v=S.videos.find(x=>x.id===w.videoId);
-    h+=`<label class="cand"><input type="radio" name="cw" value="${w.id}" ${i?"":"checked"}> ${esc(w.name)}（${esc(v?v.name:"")}）</label>`});
-  modal(h,[{t:"削除して保存",c:"danger",f:()=>{
-    const id=+document.querySelector('input[name=cw]:checked').value;
-    if(S.cur.work&&S.cur.work.id===id)S.cur.work=null;
-    S.works=S.works.filter(w=>w.id!==id);then()}},{t:"キャンセル"}]);
-}
-function doSave(name,cb){
-  const w={id:uid(),videoId:S.cur.video.id,name,saved:Date.now(),data:JSON.parse(JSON.stringify(S.cur.data))};
-  S.works.push(w);S.cur.work=w;S.cur.dirty=false;updateHead();if(cb)cb();
-}
-function overwrite(){S.cur.work.saved=Date.now();S.cur.work.data=JSON.parse(JSON.stringify(S.cur.data));S.cur.dirty=false;updateHead()}
-function askName(def,ok){
-  modal(`編集作業の名前：<br><input type="text" id="nm" value="${esc(def)}" style="width:100%">`,
-    [{t:"保存",c:"primary",f:()=>{const n=$("nm").value.trim()||def;setTimeout(()=>workLimitCheck(()=>ok(n)),0)}},{t:"キャンセル"}]);
-}
-$("bSave").onclick=()=>{if(S.cur.work)overwrite();else askName(S.cur.video.name+" の編集作業",n=>doSave(n))};
-$("bSaveAs").onclick=()=>askName((S.cur.work?S.cur.work.name:S.cur.video.name+" の編集作業")+"（別）",n=>doSave(n));
-$("bEnd").onclick=()=>{
-  if(!S.cur.dirty){endWork();return}
-  modal("未保存の変更があります。保存しますか？",[
-    {t:"保存して終了",c:"primary",f:()=>{
-      if(S.cur.work){overwrite();endWork()}
-      else askName(S.cur.video.name+" の編集作業",n=>doSave(n,endWork))}},
-    {t:"保存せずに終了",f:()=>{endWork()}},
-    {t:"編集に戻る"}]);
-};
-$("bExport").onclick=()=>{
-  const def=S.cur.video.name+" 編集結果";
-  modal(`編集結果の動画の名前：<br><input type="text" id="nm" value="${esc(def)}" style="width:100%"><div class="small">※編集作業は自動では保存されません。</div>`,
-    [{t:"作成する",c:"primary",f:()=>{
-      const n=$("nm").value.trim()||def;
-      setTimeout(()=>{
-        if(S.results.length<LIM){runExport(n);return}
-        let h="編集結果の動画が上限（10件）です。削除する動画を選んでください。<br>";
-        S.results.forEach((r,i)=>{h+=`<label class="cand"><input type="radio" name="cr" value="${r.id}" ${i?"":"checked"}> ${esc(r.name)}</label>`});
-        modal(h,[{t:"削除して作成",c:"danger",f:()=>{
-          const id=+document.querySelector('input[name=cr]:checked').value;
-          S.results=S.results.filter(r=>r.id!==id);setTimeout(()=>runExport(n),0)}},{t:"キャンセル"}]);
-      },0);
-    }},{t:"キャンセル"}]);
-};
-function runExport(n){
-  modal('編集結果を動画にしています…<div id="progress"><div></div></div>',[]);
-  let p=0;const t=setInterval(()=>{
-    p+=10;const b=document.querySelector("#progress div");if(b)b.style.width=p+"%";
-    if(p>=100){clearInterval(t);
-      S.results.push({id:uid(),name:n,videoId:S.cur.video.id,origName:S.cur.video.name,created:Date.now()});
-      modal(`「${esc(n)}」を作成しました。元の編集作業とオリジナル動画は保持されています。`,[{t:"OK"}])}
-  },150);
-}
+オリジナル動画に対して、要素・接続線・表示時間・各種属性などの編集内容をまとめたもの。
 
-/* ---------- 再生 ---------- */
-let timer=null,lastTs=0;
-function play(){
-  if(S.playing)return;
-  if(S.time>=S.dur)S.time=0;
-  S.playing=true;lastTs=performance.now();timer=requestAnimationFrame(tick);
-}
-function pause(){S.playing=false;if(timer)cancelAnimationFrame(timer);timer=null}
-function tick(ts){
-  if(!S.playing)return;
-  S.time+=(ts-lastTs)/1000;lastTs=ts;
-  if($("skipChk").checked)S.cur.data.els.filter(e=>e.kind==="skip"&&S.time>=e.start&&S.time<e.end).forEach(e=>{S.time=e.end});
-  if(S.time>=S.dur){S.time=S.dur;S.playing=false}
-  followPlay();renderVideo();renderTimeline();renderPos();
-  if(S.playing)timer=requestAnimationFrame(tick);
-}
-function followPlay(){
-  if(dragHandle||userMoving)return;
-  const w=S.ve-S.vs;
-  if(w>=S.dur-1e-6)return;
-  if(S.time>S.ve-w*0.05||S.time<S.vs)setRange(S.time-w*0.2,S.time-w*0.2+w);
-}
-$("bPlay").onclick=play;$("bPause").onclick=pause;
-$("bStop").onclick=()=>{pause();S.time=0;renderAll()};
+編集途中の状態を保存し、後から再開できる。
 
-/* ---------- 要素データ ---------- */
-const getEl=id=>S.cur.data.els.find(e=>e.id===id);
-const visible=(e,t)=>t>=e.start&&t<e.end;
-function addEl(kind,x,y){
-  const d=S.cur.data;
-  const b={id:d.nid++,kind,start:S.time,end:Math.min(S.dur,S.time+DEF_DUR)};
-  if(b.end-b.start<MINDUR)b.start=Math.max(0,b.end-DEF_DUR);
-  if(kind==="comment")Object.assign(b,{x:clamp(x-70,0,VW-140),y:clamp(y-20,0,VH-40),w:140,h:40,text:"コメント",lineOn:true,lw:2,lc:"#000000",tc:"#000000",bg:"#ffffff",fillOn:true,fs:16,font:"sans-serif"});
-  if(kind==="box")Object.assign(b,{x:clamp(x-60,0,VW-120),y:clamp(y-40,0,VH-80),w:120,h:80,lw:3,lc:"#ef4444",fillOn:false,fc:"#ef4444",dash:"solid"});
-  if(kind==="zoom")Object.assign(b,{x:clamp(x-60,0,VW-120),y:clamp(y-40,0,VH-80),w:120,h:80});
-  if(kind==="skip")b.end=Math.min(S.dur,S.time+3);
-  d.els.push(b);S.sel=[b.id];S.selLine=null;markDirty();renderAll();
-}
-function delEls(ids){
-  const d=S.cur.data,lines=d.lines.filter(l=>ids.includes(l.from)||ids.includes(l.to));
-  const go=()=>{d.els=d.els.filter(e=>!ids.includes(e.id));d.lines=d.lines.filter(l=>!lines.includes(l));S.sel=[];S.selLine=null;markDirty();renderAll()};
-  if(lines.length)modal(`要素を削除します。つながっている接続線${lines.length}本も一緒に削除されます。よろしいですか？`,[{t:"削除する",c:"danger",f:go},{t:"キャンセル"}]);
-  else go();
-}
-function activeZoom(){const z=S.cur.data.els.filter(e=>e.kind==="zoom"&&visible(e,S.time));return z.length?z[z.length-1]:null}
-function zk(){const z=activeZoom();return z?Math.min(VW/z.w,VH/z.h):1}
-function tr(px,py){const z=activeZoom();if(!z)return [px,py];const k=zk();return [(px-z.x)*k+(VW-z.w*k)/2,(py-z.y)*k+(VH-z.h*k)/2]}
-function elRect(e){const [x,y]=tr(e.x,e.y),k=zk();return {x,y,w:e.w*k,h:e.h*k}}
+### 2.3 編集結果動画
 
-/* ---------- 動画領域の描画 ---------- */
-function renderVideo(){
-  const c=$("vcontent"),w=$("vwrap"),az=activeZoom(),k=zk(),d=S.cur.data;
-  if(az)c.style.transform=`translate(${(VW-az.w*k)/2-az.x*k}px,${(VH-az.h*k)/2-az.y*k}px) scale(${k})`;
-  else c.style.transform="none";
-  w.querySelectorAll(".el").forEach(n=>n.remove());
-  d.els.forEach(e=>{
-    if(e.kind==="skip"||!visible(e,S.time)||(e.kind==="zoom"&&az))return;
-    const r=elRect(e),n=document.createElement("div");
-    n.className="el"+(S.sel.includes(e.id)?" sel":"")+(S.connFrom&&S.connFrom!==e.id?" target":"");
-    n.dataset.id=e.id;
-    n.style.cssText=`left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
-    if(e.kind==="comment"){
-      n.classList.add("cm");
-      n.style.fontSize=e.fs*k+"px";n.style.fontFamily=e.font;n.style.color=e.tc;
-      n.style.background=e.fillOn?e.bg:"transparent";
-      n.style.border=e.lineOn?`${e.lw*k}px solid ${e.lc}`:"none";
-      n.textContent=e.text;
-    }else if(e.kind==="box"){
-      n.style.background=e.fillOn?e.fc+"55":"transparent";
-      n.innerHTML=`<svg width="${r.w}" height="${r.h}" style="position:absolute;left:0;top:0;overflow:visible;pointer-events:none"><rect x="${e.lw*k/2}" y="${e.lw*k/2}" width="${Math.max(1,r.w-e.lw*k)}" height="${Math.max(1,r.h-e.lw*k)}" fill="none" stroke="${e.lc}" stroke-width="${e.lw*k}" stroke-dasharray="${DASH[e.dash]}"/></svg>`;
-    }else if(e.kind==="zoom")n.classList.add("zm");
-    n.insertAdjacentHTML("beforeend",'<div class="rh"></div>');
-    w.appendChild(n);
-  });
-  const zs=d.els.filter(e=>e.kind==="zoom"&&visible(e,S.time));
-  if(S.connFrom){$("banner").style.display="block";$("banner").textContent="接続作成中：接続先の要素をクリック（何もない場所で中止）"}
-  else if(zs.length){$("banner").style.display="block";$("banner").textContent=zs.length>1?`拡大枠が${zs.length}つ重なっています：後から追加した枠を優先して表示中`:"拡大枠を表示中"}
-  else $("banner").style.display="none";
-  renderLines();
-}
+編集作業の内容を反映して作成した動画。
 
-/* ---------- 接続線 ---------- */
-function anchor(e,side,toward){
-  const r=elRect(e);
-  const P={top:[r.x+r.w/2,r.y],bottom:[r.x+r.w/2,r.y+r.h],left:[r.x,r.y+r.h/2],right:[r.x+r.w,r.y+r.h/2]};
-  if(side&&side!=="auto")return {p:P[side],s:side};
-  const dx=toward[0]-(r.x+r.w/2),dy=toward[1]-(r.y+r.h/2);
-  const s=Math.abs(dx)*r.h>Math.abs(dy)*r.w?(dx>0?"right":"left"):(dy>0?"bottom":"top");
-  return {p:P[s],s};
-}
-const centerOf=e=>{const r=elRect(e);return [r.x+r.w/2,r.y+r.h/2]};
-function segHit(p,q,r){
-  for(let i=0;i<=16;i++){const x=p[0]+(q[0]-p[0])*i/16,y=p[1]+(q[1]-p[1])*i/16;
-    if(x>r.x-2&&x<r.x+r.w+2&&y>r.y-2&&y<r.y+r.h+2)return true}
-  return false;
-}
-function lineGeom(l){
-  const a=getEl(l.from),b=getEl(l.to);
-  if(!a||!b||!visible(a,S.time)||!visible(b,S.time))return null;
-  const az=activeZoom();
-  if(az&&(a.kind==="zoom"||b.kind==="zoom"))return null;
-  const A=anchor(a,l.fs,centerOf(b)),B=anchor(b,l.ts,centerOf(a));
-  if(l.shape==="line")return [A.p,B.p];
-  const obs=S.cur.data.els.filter(e=>e.id!==a.id&&e.id!==b.id&&e.kind!=="skip"&&visible(e,S.time)&&!(e.kind==="zoom"&&az)).map(elRect);
-  const out=(p,s,d)=>({top:[p[0],p[1]-d],bottom:[p[0],p[1]+d],left:[p[0]-d,p[1]],right:[p[0]+d,p[1]]}[s]);
-  const a1=out(A.p,A.s,18),b1=out(B.p,B.s,18);
-  const horiz=Math.abs(b1[0]-a1[0])>=Math.abs(b1[1]-a1[1]);
-  const mid=[(a1[0]+b1[0])/2,(a1[1]+b1[1])/2];
-  let c1=horiz?[mid[0],a1[1]]:[a1[0],mid[1]],c2=horiz?[mid[0],b1[1]]:[b1[0],mid[1]];
-  const hit=(p,q)=>obs.some(o=>segHit(p,q,o));
-  if(hit(a1,c1)||hit(c1,c2)||hit(c2,b1)){
-    const cands=horiz?[10,VH-10].map(y=>[[a1[0],y],[b1[0],y]]):[10,VW-10].map(x=>[[x,a1[1]],[x,b1[1]]]);
-    const best=cands.find(c=>!hit(a1,c[0])&&!hit(c[0],c[1])&&!hit(c[1],b1))||cands[0];
-    c1=best[0];c2=best[1];
-  }
-  return [A.p,a1,c1,c2,b1,B.p];
-}
-function pathOf(pts,shape){
-  if(shape!=="wave")return "M"+pts.map(p=>p.join(",")).join(" L");
-  let d=`M${pts[0][0]},${pts[0][1]}`;
-  for(let i=1;i<pts.length;i++){
-    const p=pts[i-1],q=pts[i],dx=q[0]-p[0],dy=q[1]-p[1],len=Math.hypot(dx,dy)||1;
-    const n=Math.max(2,Math.round(len/14)),nx=-dy/len,ny=dx/len;
-    for(let j=1;j<=n;j++){
-      const tm=(j-.5)/n,t=j/n,amp=(j%2?1:-1)*4;
-      d+=` Q${p[0]+dx*tm+nx*amp},${p[1]+dy*tm+ny*amp} ${p[0]+dx*t},${p[1]+dy*t}`;
-    }
-  }
-  return d;
-}
-function endMark(p,q,type,col,w){
-  if(type==="none")return "";
-  const ang=Math.atan2(p[1]-q[1],p[0]-q[0]),s=8+w;
-  if(type==="arrow"){const a1=ang+2.6,a2=ang-2.6;
-    return `<polygon points="${p[0]},${p[1]} ${p[0]+s*Math.cos(a1)},${p[1]+s*Math.sin(a1)} ${p[0]+s*Math.cos(a2)},${p[1]+s*Math.sin(a2)}" fill="${col}"/>`}
-  if(type==="circle")return `<circle cx="${p[0]}" cy="${p[1]}" r="${s/2}" fill="${col}"/>`;
-  return `<rect x="${p[0]-s/2}" y="${p[1]-s/2}" width="${s}" height="${s}" fill="${col}"/>`;
-}
-function renderLines(){
-  let h="";
-  S.cur.data.lines.forEach(l=>{
-    const pts=lineGeom(l);if(!pts)return;
-    const d=pathOf(pts,l.shape),sel=S.selLine===l.id,col=sel?"#f59e0b":l.color,sw=sel?l.w+2:l.w;
-    h+=`<g><path d="${d}" fill="none" stroke="${col}" stroke-width="${sw}" stroke-dasharray="${DASH[l.dash]}"/>`
-      +endMark(pts[0],pts[1],l.startEnd,col,l.w)+endMark(pts[pts.length-1],pts[pts.length-2],l.endEnd,col,l.w)
-      +`<path class="hit" d="${d}" data-lid="${l.id}"/></g>`;
-  });
-  $("svg").innerHTML=h;
-}
-function renderAll(){if(!S.cur)return;updateHead();renderVideo();renderTimeline();renderPos()}
+オリジナル動画とは別の動画として扱う。
 
-/* ---------- 動画領域の操作 ---------- */
-let drag=null;
-const vpos=ev=>{const r=$("vwrap").getBoundingClientRect();return [ev.clientX-r.left,ev.clientY-r.top]};
-$("vwrap").addEventListener("mousedown",ev=>{
-  if(ev.button!==0)return;
-  closeMenu();
-  const lid=ev.target.dataset&&ev.target.dataset.lid,elN=ev.target.closest(".el");
-  if(S.connFrom){
-    if(elN&&+elN.dataset.id!==S.connFrom&&getEl(+elN.dataset.id).kind!=="skip"){
-      const to=+elN.dataset.id,d=S.cur.data;
-      if(d.lines.some(l=>l.from===S.connFrom&&l.to===to))alert("同じ向きの接続線がすでにあります");
-      else{d.lines.push({id:d.nid++,from:S.connFrom,to,shape:"line",dash:"solid",color:"#ffffff",w:2,startEnd:"none",endEnd:"none",fs:"auto",ts:"auto"});markDirty()}
-    }
-    S.connFrom=null;renderAll();return;
-  }
-  if(lid){S.selLine=+lid;S.sel=[];renderAll();return}
-  if(elN){
-    const id=+elN.dataset.id;
-    if(ev.shiftKey)S.sel=S.sel.includes(id)?S.sel.filter(x=>x!==id):[...S.sel,id];
-    else if(!S.sel.includes(id))S.sel=[id];
-    S.selLine=null;
-    drag={type:ev.target.classList.contains("rh")?"resize":"move",p:vpos(ev),k:zk(),
-      orig:S.sel.map(i=>{const e=getEl(i);return {id:i,x:e.x,y:e.y,w:e.w,h:e.h}})};
-    renderAll();
-  }else{S.sel=[];S.selLine=null;renderAll()}
-});
-window.addEventListener("keydown",e=>{if(e.key==="Escape"){S.connFrom=null;closeMenu();renderAll()}});
+---
 
-/* ---------- タイムライン ---------- */
-let dragHandle=false,userMoving=false,rulerDrag=false,tdrag=null,odrag=null;
-const tlW=()=>$("lanes").clientWidth;
-const t2x=t=>(t-S.vs)/(S.ve-S.vs)*tlW();
-const x2t=x=>S.vs+x/tlW()*(S.ve-S.vs);
-function setRange(s,e){const w=clamp(e-s,MINVIS,S.dur);s=clamp(s,0,S.dur-w);S.vs=s;S.ve=s+w}
-function zoomAt(f,c){
-  const w=S.ve-S.vs,nw=clamp(w/f,MINVIS,S.dur),r=(c-S.vs)/w;
-  setRange(c-r*nw,c-r*nw+nw);renderTimeline();
-}
-const zoomCenter=()=>(S.time>=S.vs&&S.time<=S.ve)?S.time:(S.vs+S.ve)/2;
-$("zIn").onclick=()=>zoomAt(1.5,zoomCenter());
-$("zOut").onclick=()=>zoomAt(1/1.5,zoomCenter());
-$("zReset").onclick=()=>{setRange(0,S.dur);renderTimeline()};
-$("zSlider").oninput=e=>{
-  const z=Math.pow(S.dur/MINVIS,+e.target.value/1000),nw=clamp(S.dur/z,MINVIS,S.dur),c=zoomCenter(),r=(c-S.vs)/(S.ve-S.vs);
-  setRange(c-r*nw,c-r*nw+nw);renderTimeline(true);
-};
-$("pLeft").onclick=()=>{const w=S.ve-S.vs;setRange(S.vs-w*.25,S.ve-w*.25);renderTimeline()};
-$("pRight").onclick=()=>{const w=S.ve-S.vs;setRange(S.vs+w*.25,S.ve+w*.25);renderTimeline()};
-$("tlmain").addEventListener("wheel",ev=>{
-  ev.preventDefault();
-  zoomAt(ev.deltaY<0?1.25:1/1.25,x2t(ev.clientX-$("lanes").getBoundingClientRect().left));
-},{passive:false});
+## 3. 初期画面
 
-function layoutLanes(){
-  const ends=[],res={};
-  [...S.cur.data.els].sort((a,b)=>a.start-b.start||a.id-b.id).forEach(e=>{
-    let i=0;while(ends[i]!==undefined&&ends[i]>e.start)i++;ends[i]=e.end;res[e.id]=i});
-  return res;
-}
-function tickStep(w){const s=[.1,.2,.5,1,2,5,10,15,30,60,120,300,600];return s.find(x=>x>=w/8)||600}
-function renderTimeline(skipSlider){
-  if(!S.cur)return;
-  const w=S.ve-S.vs,z=S.dur/w,step=tickStep(w),fine=step<1;
-  let h="";
-  for(let t=Math.ceil(S.vs/step)*step;t<=S.ve+1e-9;t+=step)h+=`<div class="tick" style="left:${t2x(t)}px">${fmtT(t,fine)}</div>`;
-  if(S.dur>=S.vs&&S.dur<=S.ve+1e-9)h+=`<div class="endmark" style="left:${Math.min(t2x(S.dur),tlW()-3)}px"><span>終了</span></div>`;
-  $("ruler").innerHTML=h;
-  const lanes=layoutLanes();let b="";
-  S.cur.data.els.forEach(e=>{
-    if(e.end<S.vs||e.start>S.ve)return;
-    const x1=t2x(e.start),x2=t2x(e.end);
-    b+=`<div class="tb${S.sel.includes(e.id)?" sel":""}" data-id="${e.id}" style="left:${x1}px;width:${Math.max(8,x2-x1)}px;top:${4+lanes[e.id]*26}px;background:${KCOL[e.kind]}"><div class="hl" data-h="l"></div>${esc(KIND[e.kind]+(e.kind==="comment"?"："+e.text:""))}<div class="hr" data-h="r"></div></div>`;
-  });
-  $("lanes").innerHTML=b;
-  const ow=$("overview").clientWidth;
-  $("ovwin").style.left=(S.vs/S.dur*ow)+"px";$("ovwin").style.width=(w/S.dur*ow)+"px";
-  $("overview").querySelectorAll(".ovitem,#ovplay").forEach(n=>n.remove());
-  S.cur.data.els.forEach(e=>{
-    const n=document.createElement("div");n.className="ovitem";
-    n.style.cssText=`left:${e.start/S.dur*ow}px;width:${Math.max(2,(e.end-e.start)/S.dur*ow)}px;top:${3+(lanes[e.id]%5)*4}px`;
-    $("overview").appendChild(n);
-  });
-  const pl=document.createElement("div");pl.id="ovplay";$("overview").appendChild(pl);
-  $("rangeInfo").textContent=`表示範囲：${fmtT(S.vs,true)} ~ ${fmtT(S.ve,true)}（幅 ${w.toFixed(2)}秒）`;
-  $("zInfo").textContent=`倍率 ${z.toFixed(z<10?1:0)}倍`+(w>=S.dur-1e-6?"（全体表示）":"");
-  if(!skipSlider)$("zSlider").value=Math.round(Math.log(z)/Math.log(S.dur/MINVIS)*1000);
-  renderPos();
-}
-function renderPos(){
-  if(!S.cur)return;
-  $("posInfo").textContent=`${fmtT(S.time,true)} / ${fmtT(S.dur,true)}`;
-  const vis=S.time>=S.vs&&S.time<=S.ve,c=$("cursor");
-  c.style.display=vis?"block":"none";
-  if(vis){
-    c.style.left=($("lanes").offsetLeft+1+t2x(S.time))+"px";
-    c.style.top=$("ruler").offsetTop-16+"px";
-    c.style.height=($("ruler").offsetHeight+$("lanes").offsetHeight+16)+"px";
-  }
-  const pl=$("ovplay");if(pl)pl.style.left=(S.time/S.dur*$("overview").clientWidth)+"px";
-}
-/* 再生位置の操作 */
-function seekFromRuler(ev){S.time=clamp(x2t(ev.clientX-$("ruler").getBoundingClientRect().left),0,S.dur);if(S.playing)lastTs=performance.now();renderVideo();renderPos()}
-$("ruler").addEventListener("mousedown",ev=>{if(ev.button!==0)return;rulerDrag=true;seekFromRuler(ev)});
-$("handle").addEventListener("mousedown",ev=>{ev.stopPropagation();ev.preventDefault();dragHandle=true});
-/* タイムライン要素の操作 */
-$("lanes").addEventListener("mousedown",ev=>{
-  if(ev.button!==0)return;
-  closeMenu();
-  const tb=ev.target.closest(".tb");
-  if(tb){
-    const id=+tb.dataset.id;
-    if(ev.shiftKey)S.sel=S.sel.includes(id)?S.sel.filter(x=>x!==id):[...S.sel,id];
-    else if(!S.sel.includes(id))S.sel=[id];
-    S.selLine=null;
-    const e=getEl(id);
-    tdrag={mode:ev.target.dataset.h||"body",id,x:ev.clientX,s:e.start,e:e.end};
-    userMoving=true;renderAll();return;
-  }
-  S.sel=[];S.selLine=null;
-  tdrag={mode:"pan",x:ev.clientX,vs:S.vs,ve:S.ve};userMoving=true;renderAll();
-});
-/* 全体帯の操作 */
-$("overview").addEventListener("mousedown",ev=>{
-  if(ev.button!==0)return;
-  const t=ev.target;
-  if(t.classList.contains("g")){odrag={mode:t.classList.contains("l")?"l":"r",x:ev.clientX,vs:S.vs,ve:S.ve};userMoving=true;return}
-  if(t.id==="ovwin"){odrag={mode:"move",x:ev.clientX,vs:S.vs,ve:S.ve};userMoving=true;return}
-  const r=$("overview").getBoundingClientRect(),c=(ev.clientX-r.left)/r.width*S.dur,w=S.ve-S.vs;
-  setRange(c-w/2,c+w/2);renderTimeline();
-});
-/* 共通 mousemove / mouseup */
-window.addEventListener("mousemove",ev=>{
-  if(!S.cur)return;
-  if(drag){
-    const p=vpos(ev),dx=(p[0]-drag.p[0])/drag.k,dy=(p[1]-drag.p[1])/drag.k;
-    drag.orig.forEach(o=>{const e=getEl(o.id);
-      if(drag.type==="move"){e.x=clamp(o.x+dx,0,VW-e.w);e.y=clamp(o.y+dy,0,VH-e.h)}
-      else{e.w=clamp(o.w+dx,20,VW-e.x);e.h=clamp(o.h+dy,16,VH-e.y)}});
-    markDirty();renderVideo();return;
-  }
-  if(dragHandle){
-    S.time=clamp(x2t(ev.clientX-$("ruler").getBoundingClientRect().left),0,S.dur);
-    if(S.playing)lastTs=performance.now();
-    renderVideo();renderPos();return;
-  }
-  if(rulerDrag){seekFromRuler(ev);return}
-  if(odrag){
-    const ow=$("overview").clientWidth,dt=(ev.clientX-odrag.x)/ow*S.dur;
-    if(odrag.mode==="move")setRange(odrag.vs+dt,odrag.ve+dt);
-    else if(odrag.mode==="l")setRange(clamp(odrag.vs+dt,0,odrag.ve-MINVIS),odrag.ve);
-    else setRange(odrag.vs,clamp(odrag.ve+dt,odrag.vs+MINVIS,S.dur));
-    renderTimeline();return;
-  }
-  if(tdrag){
-    const spp=(S.ve-S.vs)/tlW(),dt=(ev.clientX-tdrag.x)*spp;
-    if(tdrag.mode==="pan"){setRange(tdrag.vs-dt,tdrag.ve-dt);renderTimeline();return}
-    const e=getEl(tdrag.id),fine=(S.ve-S.vs)<S.dur*0.5?0.05:0.5,q=v=>Math.round(v/fine)*fine;
-    const r=$("lanes").getBoundingClientRect();
-    // 端までドラッグしたら表示範囲を自動移動
-    if(S.ve-S.vs<S.dur-1e-6){
-      const w=S.ve-S.vs;
-      if(ev.clientX>r.right-8)setRange(S.vs+w*.02,S.ve+w*.02);
-      else if(ev.clientX<r.left+8)setRange(S.vs-w*.02,S.ve-w*.02);
-    }
-    if(tdrag.mode==="body"){
-      const len=tdrag.e-tdrag.s,ns=clamp(q(tdrag.s+dt),0,S.dur-len);e.start=ns;e.end=ns+len;
-    }else if(tdrag.mode==="l")e.start=clamp(q(tdrag.s+dt),0,e.end-MINDUR);
-    else e.end=clamp(q(tdrag.e+dt),e.start+MINDUR,S.dur);
-    markDirty();renderVideo();renderTimeline();
-  }
-});
-window.addEventListener("mouseup",()=>{
-  drag=null;dragHandle=false;rulerDrag=false;tdrag=null;odrag=null;userMoving=false;
-});
+### 3.1 基本状態
 
-/* ---------- 右クリックメニュー ---------- */
-function closeMenu(){$("menu").style.display="none";$("menu").innerHTML=""}
-document.addEventListener("mousedown",ev=>{if(!ev.target.closest("#menu"))close
+- 初期画面では動画を未選択状態とする。
+- 特定の動画を自動的に編集対象として選択しない。
+- 操作者が「動画を選択」から編集対象の動画を明示的に選択する。
+- 動画を選択するまで編集画面を開始しない。
+- 例題動画を用意する場合も、操作者が明示的に選択した場合だけ編集対象とする。
+
+### 3.2 動画一覧
+
+- 初期画面では編集対象として選択できる動画を一覧表示する。
+- 一覧では、少なくとも動画名と動画の長さを確認できる。
+- オリジナル動画と編集結果動画を区別して確認できる。
+- 動画を選択すると、選択した動画を編集対象として編集画面を開始できる。
+- 動画を選択しただけでは動画の内容を変更しない。
+
+### 3.3 動画の追加
+
+- 新しいオリジナル動画を追加できる。
+- 動画追加時には、追加する動画を操作者が明示的に指定する。
+- 動画追加中は、追加処理中であることを確認できる。
+- 動画の追加に失敗した場合は、失敗したことを明示する。
+- 保存できるオリジナル動画は10件までとする。
+- 10件保存されている場合は、新しい動画を追加する前に既存動画の削除が必要であることを明示する。
+- 上限を超えて既存動画を勝手に削除しない。
+
+### 3.4 動画の削除
+
+- 初期画面から不要な動画を削除できる。
+- 動画を削除する前に確認を行う。
+- 編集作業が存在する動画を削除する場合は、関連する編集作業への影響を明示する。
+- 操作者の確認なしに動画を削除しない。
+
+---
+
+## 4. 編集作業の再開
+
+- 初期画面から保存済みの編集作業を一覧で確認できる。
+- 編集作業には、少なくとも編集作業名、対象動画名、保存日時を表示する。
+- 保存済み編集作業を選択して再開できる。
+- 編集作業を再開した場合は、その編集作業が対象としていたオリジナル動画を編集対象として表示する。
+- 保存時点の要素、接続線、表示時間、属性などを復元する。
+- 保存済み編集作業を選択せず、新しい編集作業を開始する場合は、動画を明示的に選択する。
+- 保存できる編集作業は10件までとする。
+- 10件保存されている場合は、新しい編集作業を保存する前に既存編集作業の削除が必要であることを明示する。
+- 上限を超えて既存編集作業を勝手に削除しない。
+
+---
+
+## 5. 編集作業の開始
+
+- 新しい編集作業を開始するときは、対象となるオリジナル動画を明示する。
+- 新しい編集作業では、オリジナル動画そのものを変更しない。
+- 編集作業開始時点では、動画上の既存編集要素がない状態とする。
+- 保存済み編集作業を再開した場合は、保存済みの編集状態を表示する。
+- 新しい編集作業と保存済み編集作業の再開を操作者が区別できること。
+
+---
+
+## 6. 編集画面
+
+- 動画領域とタイムライン領域を表示する。
+- 動画領域には以下を表示できる。
+  - コメント
+  - 強調枠
+  - 拡大枠
+  - 接続線
+- スキップはタイムライン上で扱い、動画領域には表示しない。
+- タイムラインには各要素の表示時間を表示する。
+- 右側に常設の汎用プロパティ欄を設けない。
+- 要素の属性変更は、対象をマウス操作して表示される操作メニューから行う。
+- 操作メニューは対象を右クリックした場合に表示する。
+- 操作メニューは選択対象に応じて内容を切り替える。
+- 操作メニューを閉じるときは、対象外をクリックするなど一般的な操作で閉じられる。
+- 選択対象が変わった場合、以前の対象用メニューを残さない。
+- 編集画面には、少なくとも「保存」「編集作業を終了する」「編集結果を動画にする」を操作できる場所を設ける。
+- 「編集作業を終了する」と「編集結果を動画にする」は別の操作として明確に区別する。
+
+---
+
+## 7. 動画の再生
+
+- 動画を再生・一時停止できる。
+- 動画の現在位置を確認できる。
+- 再生中の動画位置とタイムライン上の再生カーソルを連動させる。
+- 動画が終了すると再生を停止し、再生カーソルを動画終了位置にする。
+- 再生中でも一時停止できる。
+- タイムラインを操作して再生位置を変更できる。
+- 再生位置を変更すると動画側の再生位置も変更する。
+- 再生位置を変更しただけでは編集内容を変更しない。
+
+---
+
+## 8. タイムライン
+
+### 8.1 時間軸
+
+- タイムラインの左端を動画の再生開始位置（0秒）とする。
+- タイムラインの右端を動画の再生終了時間（動画の総時間）とする。
+- タイムライン全体で動画の最初から最後までを表現する。
+- 動画の総時間に応じて時間軸を設定する。
+- タイムライン上に時間目盛りを表示する。
+- 時間目盛りは動画の総時間に応じて読みやすい間隔で表示する。
+- タイムラインの横幅は画面内で固定された編集領域として扱う。
+- タイムラインの横幅全体を動画の0秒から終了時間までに対応させる。
+- 動画の総時間が変わらない限り、タイムラインの左端・右端が対応する時間を変更しない。
+
+### 8.2 スケール調整
+
+- 「スケール調整」はタイムラインの時間軸を拡大・縮小する操作とする。
+- スケール調整によって時間の表示を見やすく拡大・縮小できる。
+- スケール調整を行っても、動画の実時間と各要素の開始時間・終了時間の関係を変更しない。
+- スケール調整を行っても、動画の0秒と終了時間の対応関係を失わない。
+- スケール調整は表示上の倍率変更であり、動画の再生時間そのものを変更しない。
+- スケール調整によって要素の表示時間そのものが変更されたように見えないこと。
+- スケール調整によってタイムラインの横幅自体を画面外へ広げない。
+- 拡大した場合でも、タイムライン内で実時間との関係を確認できる。
+
+### 8.3 再生位置
+
+- 動画の再生位置を示すカーソルを表示する。
+- 再生カーソルと動画の再生位置を常に連動させる。
+- 動画を再生するとカーソルも連動して移動する。
+- タイムライン上をクリックまたはドラッグして再生位置を変更できる。
+- 再生位置を変更すると動画側の再生位置も変更する。
+
+### 8.4 要素の表示時間
+
+- タイムライン上で各要素の表示開始時間・終了時間を確認できる。
+- タイムライン上で各要素の表示開始時間・終了時間を変更できる。
+- 表示時間の変更を動画領域へ即時反映する。
+- 同じ時間帯に複数の要素が存在する場合、タイムライン上で要素同士が重ならないように縦方向へ自動的に並べる。
+- 同じ時間帯の要素は、時間の関係を維持したまま、それぞれの行を分けて表示する。
+- 表示時間は動画の0秒から終了時間の範囲内で設定する。
+- 開始時間と終了時間が逆転する設定はできない。
+- 表示時間が0秒以下になる設定はできない。
+
+---
+
+## 9. 要素の追加・削除
+
+### 9.1 追加
+
+- 編集画面からコメント、強調枠、拡大枠、スキップを新規追加できる。
+- 新規追加する要素の種類を操作者が明示的に選択する。
+- 新規追加した要素は、現在の再生位置付近を基準として配置する。
+- 新規追加した要素の表示時間は、動画全体を覆わない適切な初期値とする。
+- 新規追加した要素の初期サイズは、動画領域から大きくはみ出さない適切な大きさとする。
+- 新規追加した要素を自動的に動画領域外まで拡大しない。
+- 新規追加した要素は、追加後すぐに選択状態として確認できる。
+
+### 9.2 削除
+
+- 選択した要素を削除できる。
+- 削除操作の前に対象が明確に確認できる。
+- 複数選択時は選択した要素をまとめて削除できる。
+- 削除した要素をタイムラインからも削除する。
+- 削除した要素に接続線が存在する場合は、関連する接続線も削除する。
+- 削除後に残った要素の表示時間や位置を勝手に変更しない。
+
+---
+
+## 10. 要素操作
+
+### 10.1 選択
+
+- 動画領域の要素をクリックして選択できる。
+- タイムライン上の要素をクリックして選択できる。
+- 動画領域・タイムラインのどちらから選択しても同じ要素として扱う。
+- Shiftキーを併用して複数要素を選択できる。
+- 選択状態を視覚的に確認できる。
+- 接続線も要素と同様に明確に選択できる。
+- 空いている場所をクリックすると選択状態を解除できる。
+- 複数選択した場合、選択対象がすべて明確に確認できる。
+
+### 10.2 移動・サイズ変更
+
+- 動画領域上の要素をマウス操作で移動できる。
+- 要素のサイズをマウス操作で変更できる。
+- 移動・サイズ変更の結果を即時に動画領域へ反映する。
+- 要素の位置・サイズ変更によって表示時間を変更しない。
+- 新規追加した要素を不必要に大きくしない。
+- 要素のサイズ変更時も、動画領域から不必要にはみ出さない。
+- 操作者が意図的に領域外へ移動する操作については、動画領域外へ完全に見えなくなることを防ぐ。
+
+### 10.3 表示時間
+
+- タイムライン上で要素の開始時間・終了時間を変更できる。
+- 表示時間の変更を動画領域へ即時反映する。
+- 表示時間を変更しても要素の位置・サイズ・その他属性を勝手に変更しない。
+
+---
+
+## 11. 要素別操作
+
+### 11.1 コメント
+
+- 動画上にテキストとして表示する。
+- コメントを右クリックするとコメント用の操作メニューを表示する。
+- コメント用操作メニューから以下を変更できる。
+  - コメント本文
+  - 線の有り・無し
+  - 線の太さ
+  - 線の色
+  - 文字色
+  - 背景色
+  - 塗り潰しの有り・無し
+  - 文字サイズ
+  - フォント
+- コメント本文を編集できる。
+- 線の太さは数値入力だけでなく、見た目を確認できる選択肢として選べる。
+- フォントは実際の文字の見た目を確認できる選択肢として表示する。
+- 色は基本的な12色程度から選択できる。
+- 属性変更は動画上へ即時反映する。
+
+### 11.2 強調枠
+
+- 動画上の範囲を強調表示する。
+- 強調枠を右クリックすると強調枠用の操作メニューを表示する。
+- 強調枠用操作メニューから以下を変更できる。
+  - 線の太さ
+  - 塗り潰しの有り・無し
+  - 線種
+  - 線形
+- 線の太さは見た目を確認できる選択肢として表示する。
+- 線種は以下から選択できる。
+  - 実線
+  - 点線
+  - 破線
+  - 一点鎖線
+- 線形は以下から選択できる。
+  - 直線
+  - 折れ線
+  - 波線
+- 線種と線形は別々の属性として扱う。
+- 「折れ線」「波線」を選択した場合、その線の内部に別の線種を重ねて表示しない。
+- 属性変更を動画上へ即時反映する。
+
+### 11.3 拡大枠
+
+- 動画上の指定範囲を拡大表示する。
+- 拡大枠を右クリックすると拡大枠用の操作メニューを表示する。
+- 拡大枠のサイズ・位置・表示時間を変更できる。
+- 拡大表示する対象範囲を確認できる。
+- 属性変更を動画上へ即時反映する。
+
+### 11.4 スキップ
+
+- タイムライン上でスキップ範囲を表示する。
+- 開始時間・終了時間を変更できる。
+- 動画領域にはスキップ用の要素を表示しない。
+- 再生時には指定されたスキップ範囲を飛ばして再生する。
+- 編集中にスキップ範囲を変更した場合、再生時の挙動へ即時反映する。
+- スキップ範囲は他の要素の表示時間を勝手に変更しない。
+
+---
+
+## 12. 接続線
+
+### 12.1 作成
+
+- 2つの要素を指定して接続線を作成できる。
+- 接続線は動画領域上に表示する。
+- 要素ブロック間に別の補助接続線を表示しない。
+- 接続線の作成操作は、開始側の要素から終了側の要素へマウス操作で行える。
+- 接続先として指定できるのは動画上の要素とする。
+- 同じ要素同士を接続することはできない。
+- 接続線作成中は、現在どの要素から接続しようとしているかを確認できる。
+- 接続先として選択できない対象を明確に区別する。
+
+### 12.2 選択
+
+- 接続線をクリックして選択できる。
+- 接続線は通常の表示より選択しやすい判定範囲を持つ。
+- 選択時には接続線が明確に選択状態であることを確認できる。
+- 接続線を選択しても、近くの要素を誤って選択しない。
+- 接続線を右クリックした場合も接続線を対象として操作メニューを表示する。
+
+### 12.3 線形
+
+- 接続線は以下から選択できる。
+  - 直線
+  - 折れ線
+  - 波線
+- 線形の変更を動画領域へ即時反映する。
+- 折れ線・波線は接続元・接続先以外の要素の外周を横切らないように迂回して表示する。
+- 折れ線・波線の経路は、可能な限り他の要素と重ならないようにする。
+- 折れ線・波線の表示形式に、別の線種である破線を混在させない。
+
+### 12.4 線種
+
+- 接続線について線種を変更できる。
+- 線種は以下から選択できる。
+  - 実線
+  - 点線
+  - 破線
+  - 一点鎖線
+- 線種と線形は別々の属性として扱う。
+- 線形が折れ線または波線の場合でも、選択した線種だけで表示する。
+
+### 12.5 接続位置
+
+- 接続線の始点・終点を変更できる。
+- 要素の上・右・下・左などから接続位置を選択できる。
+- 接続線の終端をマウス操作して接続位置を変更できる。
+- 接続位置の変更を接続線へ即時反映する。
+- 接続元・接続先の要素を移動した場合、接続線も追従する。
+
+### 12.6 終端
+
+- 接続線の始点・終点の形状を変更できる。
+- 終端のデフォルトは矢印なしとする。
+- 必要に応じて矢印などの終端形状を選択できる。
+- 変更結果を動画領域へ即時反映する。
+
+### 12.7 削除
+
+- 接続線を選択して削除できる。
+- 接続線を削除しても接続元・接続先の要素は削除しない。
+
+---
+
+## 13. 選択対象に応じた操作メニュー
+
+- 未選択時は動画選択、新規要素追加などの基本操作を表示する。
+- 要素を右クリックすると、その要素に対応した操作メニューを表示する。
+- コメント選択時はコメントに必要な操作だけを表示する。
+- 強調枠選択時は強調枠に必要な操作だけを表示する。
+- 拡大枠選択時は拡大枠に必要な操作だけを表示する。
+- スキップ選択時はスキップに必要な操作だけを表示する。
+- 接続線選択時は線種・線形・終端・接続位置に必要な操作だけを表示する。
+- 複数選択時は複数選択に対して利用できる操作だけを表示する。
+- 選択対象が変わった場合、前の対象専用メニューを残さない。
+- 右側に常設の汎用プロパティ欄を設けない。
+- 操作メニューを閉じても、選択状態自体は維持できる。
+- 操作メニュー内の変更は、確定操作を必要とするものを除き、基本的に動画領域へ即時反映する。
+
+---
+
+## 14. 編集内容の変更状態
+
+- 編集開始後に何らかの変更を行った場合、未保存の変更があることを確認できる。
+- 保存済みの状態と未保存の状態を区別できる。
+- 未保存の変更がある状態で「編集作業を終了する」を選択した場合、保存するかどうか確認する。
+- 未保存の変更を破棄して終了する場合、変更内容を保存しない。
+- 未保存の変更を保存して終了する場合、現在の編集内容を保存する。
+- 保存せずに編集画面を離れた場合、未保存の変更を勝手に保存しない。
+
+---
+
+## 15. 編集作業の保存
+
+### 15.1 保存対象
+
+- 保存対象は「現在編集中の編集作業」とする。
+- 「現在編集中の動画」は、編集作業を開始する際に選択したオリジナル動画を指す。
+- 編集作業を保存しても、オリジナル動画自体を上書き変更しない。
+- 保存するのは、要素・接続線・表示時間・位置・サイズ・属性など、現在の編集内容とする。
+- 編集作業には識別できる名前を設定できる。
+- 新規編集作業を初めて保存するときは、編集作業名を設定する。
+- 既存の編集作業を再開して保存する場合は、その編集作業を更新する。
+- 保存操作を行ったことを確認できる。
+
+### 15.2 保存と再開
+
+- 編集途中で現在の編集作業を保存できる。
+- 保存した編集作業は初期画面から選択して再開できる。
+- 再開した場合は、保存時点の編集状態を表示する。
+- 保存した編集作業を別の編集作業として新たに作成することもできる。
+- 新しい編集作業として保存する場合、元の編集作業を変更しない。
+- 編集作業を保存することと、編集結果を動画として出力することを明確に区別する。
+
+### 15.3 編集作業の複製
+
+- 保存済み編集作業を元に、新しい編集作業を作成できる。
+- 複製した編集作業は元の編集作業とは別に扱う。
+- 複製後の編集内容を変更しても、元の編集作業を変更しない。
+
+---
+
+## 16. 編集作業の終了
+
+- 「編集作業を終了する」を実行すると、未保存の変更がある場合は保存するか確認する。
+- 保存して終了した場合、初期画面へ戻る。
+- 保存せずに終了した場合、未保存の変更を破棄して初期画面へ戻る。
+- キャンセルした場合は編集画面に戻る。
+- 初期画面では動画の選択または保存済み編集作業の再開を行える。
+
+---
+
+## 17. 編集作業の削除
+
+- 初期画面から保存済み編集作業を削除できる。
+- 削除前に対象となる編集作業を確認できる。
+- 編集作業を削除しても、対象となるオリジナル動画は削除しない。
+- 編集作業を削除しても、既に作成済みの編集結果動画は削除しない。
+- 操作者の確認なしに編集作業を削除しない。
+
+---
+
+## 18. 編集結果を動画にする
+
+- 編集作業を終了する操作と、編集結果を動画にする操作を別の操作として扱う。
+- 「編集結果を動画にする」を選択すると、現在の編集内容を反映した動画を作成する。
+- 編集結果として作成した動画は、オリジナル動画とは別の動画として扱う。
+- 編集結果を動画にした後も、元の編集作業は保持する。
+- 作成済み動画は初期画面から選択できる。
+- 編集結果動画を作成する前に、現在の編集内容が保存済みかどうか確認できる。
+- 未保存の変更がある場合は、保存してから動画を作成するか、未保存の変更を反映せずに作成するかを明確に選択できる。
+- 動画作成中は、処理中であることを確認できる。
+- 動画作成に失敗した場合は、失敗したことを明示する。
+- 作成した動画は、オリジナル動画や編集作業とは別の保存対象として扱う。
+- 保存できる編集結果動画は10件までとする。
+- 10件を超える場合は、新しい動画を保存する前に既存動画の削除を促す。
+- 既存動画を勝手に削除しない。
+
+---
+
+## 19. 編集結果動画の扱い
+
+- 編集結果動画は初期画面から確認できる。
+- 編集結果動画を選択して再生できる。
+- 編集結果動画を新たな編集対象として選択できる。
+- 編集結果動画を新たな編集対象として選択した場合、その動画を新しいオリジナル動画として扱う。
+- 元となった編集作業との関係を確認できる。
+- 編集結果動画を削除しても、元のオリジナル動画や編集作業を勝手に削除しない。
+
+---
+
+## 20. 操作の一貫性
+
+- 動画領域とタイムライン上の同じ要素は、常に同一の編集対象として扱う。
+- 動画領域で変更した内容はタイムライン側にも即時反映する。
+- タイムラインで変更した内容は動画領域側にも即時反映する。
+- 選択状態は動画領域とタイムラインで同期する。
+- 要素の位置・サイズと表示時間を混同しない。
+- タイムラインのスケール変更と動画の実時間変更を混同しない。
+- 編集作業の保存と編集結果動画の作成を混同しない。
+- オリジナル動画と編集結果動画を混同しない。
+
+---
+
+## 21. モックで確認する操作
+
+### 初期画面
+
+- 初期画面で動画が勝手に選択されていないことを確認できる。
+- 動画一覧から動画を明示的に選択できる。
+- 動画を追加できる。
+- 動画を削除できる。
+- 保存済み編集作業を確認できる。
+- 保存済み編集作業を選択して再開できる。
+- 編集結果動画を確認できる。
+
+### 編集画面
+
+- 選択した動画を編集画面に表示できる。
+- 動画を再生・一時停止できる。
+- タイムラインの再生位置を操作できる。
+- 動画の再生に合わせてタイムラインのカーソルが移動する。
+- タイムラインの左端が動画の開始位置、右端が動画の終了位置になっていることを確認できる。
+- タイムラインの時間軸を拡大・縮小できる。
+- スケール調整を行っても実時間との関係が変わらないことを確認できる。
+
+### 要素
+
+- コメントを追加できる。
+- 強調枠を追加できる。
+- 拡大枠を追加できる。
+- スキップを追加できる。
+- 要素を選択できる。
+- 複数要素を選択できる。
+- 要素を移動・サイズ変更できる。
+- 新規要素が不必要に大きなサイズで追加されないことを確認できる。
+- 要素の表示時間を変更できる。
+- 同じ時間帯の複数要素がタイムライン上で縦方向に並ぶことを確認できる。
+- 要素を削除できる。
+- 要素を右クリックして属性変更メニューを表示できる。
+- コメントの属性を変更できる。
+- 強調枠の属性を変更できる。
+- 拡大枠の属性を変更できる。
+- スキップ範囲を変更できる。
+- 選択対象に応じて操作メニューが切り替わる。
+
+### 接続線
+
+- 接続線を作成できる。
+- 接続線を選択しやすいことを確認できる。
+- 接続線を直線・折れ線・波線に変更できる。
+- 接続線の線種を変更できる。
+- 折れ線・波線が要素の外周を不自然に横切らないことを確認できる。
+- 折れ線・波線に破線など別の線種が混在しないことを確認できる。
+- 接続線の終端を変更できる。
+- 接続線のデフォルトが矢印なしであることを確認できる。
+- 接続線の接続位置を変更できる。
+- 要素移動時に接続線が追従する。
+- 接続線を削除できる。
+
+### 保存・終了
+
+- 編集内容を変更したときに未保存状態を確認できる。
+- 編集作業を保存できる。
+- 保存時に編集作業名を設定できる。
+- 保存した編集作業を初期画面から再開できる。
+- 編集作業を複製できる。
+- 編集作業を削除できる。
+- 未保存状態で編集作業を終了しようとした場合に確認できる。
+- 編集作業を終了して初期画面へ戻れる。
+
+### 編集結果動画
+
+- 編集結果を動画にする操作と編集作業を保存する操作が区別されていることを確認できる。
+- 編集結果動画を作成できる。
+- 編集結果動画を初期画面から確認できる。
+- 編集結果動画を再生できる。
+- 編集結果動画を新たな編集対象として選択できる。
+- 保存件数が10件を超える場合に削除を促すことを確認できる。
+
+---
+
+## 22. 保存件数の共通ルール
+
+- オリジナル動画、編集作業、編集結果動画は、それぞれ別々に10件まで保存できる。
+- それぞれの上限を超えて保存する場合は、該当する種類の既存データを削除する必要があることを明示する。
+- 上限に達した場合でも、別種類のデータを勝手に削除しない。
+- 操作者の確認なしにデータを削除しない。
+
+---
+
+## 23. 禁止事項
+
+- 常設の汎用プロパティ欄。
+- 動画上に表示する要素とは別の、要素ブロック間の補助接続線。
+- 編集作業を保存せずに自動的に別の編集作業として作成すること。
+- オリジナル動画を編集内容で直接上書きすること。
+- 要素に対する操作を常設ボタンとして画面上に並べること。
+- スケールに合わせてタイムライン幅そのものが画面外へ広がること。
+- 操作者の確認なしに動画、編集作業、編集結果動画を削除すること。
+- 編集作業の保存と編集結果動画の作成を同一の操作として扱うこと。
+- 編集結果動画を作成したことで元の編集作業を削除または変更すること。
+- タイムラインのスケール変更によって実際の動画時間を変更すること。
