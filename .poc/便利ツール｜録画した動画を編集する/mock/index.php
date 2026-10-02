@@ -9,8 +9,8 @@ header,.tools{display:flex;align-items:center;gap:8px;padding:7px 10px}header{he
 .video{flex:1;min-height:0;background:#05070a;padding:10px}.screen{height:100%;position:relative;background:#000;overflow:hidden}
 video{width:100%;height:100%;object-fit:contain}.layer,svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.layer{z-index:2}svg{z-index:3}
 .el{position:absolute;cursor:move;user-select:none;pointer-events:auto}.el.sel{outline:2px solid #4da3ff;outline-offset:3px}.el.target{outline:2px dashed #ffd54f;cursor:crosshair}
-.el svg.shape{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:0}
-.el .txt{position:relative;z-index:1;padding:6px 10px;overflow:hidden;width:100%;height:100%;display:flex;align-items:center}
+.el svg.shape{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+.el .txt{position:relative;padding:6px 10px;overflow:hidden;width:100%;height:100%;display:flex;align-items:center}
 .zoom{border:3px solid #54d68a;background:#54d68a18;color:#9ff0bd;text-align:center;padding:8px}
 .handle{position:absolute;width:9px;height:9px;background:#fff;border:2px solid #4da3ff;z-index:5}
 .nw{left:-5px;top:-5px;cursor:nwse-resize}.ne{right:-5px;top:-5px;cursor:nesw-resize}.sw{left:-5px;bottom:-5px;cursor:nesw-resize}.se{right:-5px;bottom:-5px;cursor:nwse-resize}
@@ -26,7 +26,7 @@ video{width:100%;height:100%;object-fit:contain}.layer,svg{position:absolute;ins
 .rows{margin:0 15px 0 95px;position:relative}.row{height:34px;position:relative;border-bottom:1px solid #242b33}
 .label{position:absolute;right:100%;width:95px;height:34px;display:flex;align-items:center;padding-left:7px;background:#161b22;font-size:10px;color:#8b949e}
 .bar{position:absolute;top:4px;height:26px;border:1px solid;border-radius:5px;display:flex;align-items:center;padding:0 12px;font-size:10px;cursor:grab;overflow:hidden;white-space:nowrap;user-select:none}
-.bar.sel{box-shadow:0 0 0 2px #4da3ff}.g{position:absolute;top:0;bottom:0;width:8px;cursor:ew-resize;background:#fff3}.g:hover{background:#fff7}.gl{left:0}.gr{right:0}
+.bar.sel{box-shadow:0 0 0 2px #4da3ff}.g{position:absolute;top:0;bottom:0;width:8px;cursor:ew-resize;background:#fff3}.gl{left:0}.gr{right:0}
 .playhead{position:absolute;top:0;bottom:0;width:2px;background:#f04444;z-index:20;cursor:ew-resize}
 .playhead::before{content:"";position:absolute;left:-7px;top:0;width:16px;height:16px;background:#f04444;border-radius:3px 3px 8px 8px}
 .playhead::after{content:"";position:absolute;left:-8px;right:-8px;top:0;bottom:0}
@@ -34,7 +34,7 @@ video{width:100%;height:100%;object-fit:contain}.layer,svg{position:absolute;ins
 .menu button{display:block;width:100%;text-align:left;margin:2px 0}.menu hr{border:0;border-top:1px solid #46515f;margin:5px 0}
 .menu .t{color:#9aa5b1;font-size:11px;margin:4px 0 2px}.opts{display:flex;flex-wrap:wrap;gap:4px}.opts button{width:auto;flex:1 1 auto;margin:0;text-align:center}
 .sw12{display:grid;grid-template-columns:repeat(6,1fr);gap:4px}.sw12 button{height:24px;padding:0;margin:0;border:2px solid #46515f}.sw12 button.cur{border-color:#fff}
-.wbtn{min-width:70px}.wbtn svg{width:50px;height:12px;display:block;margin:auto}
+.wbtn svg{width:50px;height:12px;display:block;margin:auto}
 .menu input[type=number]{width:70px;background:#11161d;color:#eee;border:1px solid #46515f;border-radius:4px;padding:4px}
 .toast{position:fixed;right:12px;bottom:12px;background:#202938;border:1px solid #46515f;padding:8px 12px;border-radius:5px;display:none;z-index:300}
 .home{position:fixed;inset:0;z-index:150;background:#11161d;overflow:auto;padding:28px 40px}
@@ -64,18 +64,16 @@ video{width:100%;height:100%;object-fit:contain}.layer,svg{position:absolute;ins
 <script>
 const $=id=>document.getElementById(id),video=$("video"),scr=$("screen"),layer=$("layer"),svg=$("svg"),menu=$("menu");
 const TYPES={comment:["コメント","#4da3ff"],highlight:["強調枠","#f04444"],zoom:["拡大枠","#54d68a"],skip:["スキップ","#ff9800"]};
-const SIDES=["top","right","bottom","left"],SJ={top:"上",right:"右",bottom:"下",left:"左"};
-const DASH={solid:"",dotted:"2 5",dashed:"10 6",dashdot:"12 5 2 5"},MAX=10;
+const SIDES=["top","right","bottom","left"],SJ={top:"上",right:"右",bottom:"下",left:"左"},MAX=10;
+const DASH={solid:[],dotted:[2,5],dashed:[10,6],dashdot:[12,5,2,5]};
 const COLORS=["#ffffff","#000000","#f04444","#ff9800","#ffeb3b","#54d68a","#009688","#4da3ff","#1e40af","#9c27b0","#e91e63","#90a4ae"];
 const FONTS=["sans-serif","serif","monospace","cursive","Georgia","Impact"],WIDTHS=[1,2,4,6,8];
 const ENDS=[["none","なし"],["arrow","矢印"],["circle","丸"],["square","四角"]],DASHES=[["solid","実線"],["dotted","点線"],["dashed","破線"],["dashdot","一点鎖線"]];
-const FORMS=[["straight","直線"],["elbow","折れ線"],["wave","波線"]],SIDEOPT=[["auto","自動"],...SIDES.map(s=>[s,SJ[s]])];
-/* メニュー定義: 要素別・線別。kind=opt(選択肢) color(12色) width(線サンプル) font(フォント見本) bool(有/無) num(数値) */
-const bool=[[1,"あり"],[0,"なし"]];
+const FORMS=[["straight","直線"],["elbow","折れ線"],["wave","波線"]],SIDEOPT=[["auto","自動"],...SIDES.map(s=>[s,SJ[s]])],BOOL=[[1,"あり"],[0,"なし"]];
+/* メニュー定義: [見出し, 属性, 種類, 選択肢] */
 const EMENU={
- comment:[["線","line","bool",bool],["線の太さ","lw","width"],["線の色","lc","color"],["文字色","fc","color"],["背景色","bg","color"],["塗り潰し","fill","bool",bool],["文字サイズ","fs","num"],["フォント","font","font"]],
- highlight:[["線の太さ","lw","width"],["塗り潰し","fill","bool",bool],["線種","dash","opt",DASHES],["線形","form","opt",FORMS]],
- zoom:[],skip:[]};
+ comment:[["線","line","opt",BOOL],["線の太さ","lw","width"],["線の色","lc","color"],["文字色","fc","color"],["背景色","bg","color"],["塗り潰し","fill","opt",BOOL],["文字サイズ","fs","num"],["フォント","font","font"]],
+ highlight:[["線の太さ","lw","width"],["塗り潰し","fill","opt",BOOL],["線種","dash","opt",DASHES],["線形","form","opt",FORMS]],zoom:[],skip:[]};
 const LMENU=[["線形","form","opt",FORMS],["線種","dash","opt",DASHES],["始点の終端","se","opt",ENDS],["終点の終端","ee","opt",ENDS],["始点の接続位置","fs","opt",SIDEOPT],["終点の接続位置","ts","opt",SIDEOPT]];
 const DEF={comment:{line:1,lw:2,lc:"#ffffff",fc:"#ffffff",bg:"#000000",fill:1,fs:18,font:"sans-serif",text:"新しいコメント"},
  highlight:{lw:4,lc:"#f04444",fill:0,dash:"solid",form:"straight"},zoom:{},skip:{}};
@@ -87,23 +85,23 @@ const fmtTick=(v,st)=>{let d=st<1?(st<.1?2:1):0;return String(Math.floor(v/60)).
 const toast=s=>{let t=$("toast");t.textContent=s;t.style.display="block";clearTimeout(t.x);t.x=setTimeout(()=>t.style.display="none",2500)};
 const now=()=>new Date().toLocaleString("ja-JP"),esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const TW=()=>Math.max(100,$("tl").clientWidth-110),active=e=>current>=e.start&&current<=e.end,byId=id=>els.find(a=>a.id==id);
-const multi=e=>e.shiftKey||e.ctrlKey||e.metaKey,touch=()=>{dirty=true;status()};
+const multi=e=>e.shiftKey||e.ctrlKey||e.metaKey,touch=()=>{dirty=true;status()},dashAttr=k=>DASH[k].length?` stroke-dasharray="${DASH[k].join(" ")}"`:"";
 function cancelConnect(){connect=null;mouse=null}
 function pick(id,e){selLine=null;selected=multi(e)?(selected.includes(id)?selected.filter(i=>i!=id):[...selected,id]):[id]}
 
-/* ダイアログ */
+/* ダイアログ・保存件数 */
 function dialog(msg,buttons,extra=""){return new Promise(res=>{
  $("modalBody").innerHTML=`<p>${msg}</p>${extra}<div class="bt">`+buttons.map((b,i)=>`<button data-i="${i}"${b.primary?' class="primary"':""}>${b.label}</button>`).join("")+"</div>";
  $("modal").style.display="grid";
  $("modalBody").onclick=e=>{let b=e.target.closest("button");if(!b)return;
-  if(b.dataset.del){res({del:b.dataset.del});$("modal").style.display="none"}
+  if(b.dataset.del){$("modal").style.display="none";res({del:b.dataset.del})}
   else if(b.dataset.i){$("modal").style.display="none";res(buttons[b.dataset.i].v)}}})}
 async function ensureRoom(kind){
  const s=store[kind];
  while(s.items.length>=MAX){
   let list=s.items.map(a=>`<div class="item"><span class="nm">${esc(a.name)}</span><span class="meta">${a.at}</span><button data-del="${a.id}">削除</button></div>`).join("");
   let r=await dialog(`${s.label}は${MAX}件までです。保存するには既存の${s.label}を削除する必要があります。削除するものを選んでください（自動では削除しません）。`,[{label:"保存をやめる",v:null}],list);
-  if(!r)return false;if(!(await removeItem(kind,r.del)))continue}
+  if(!r)return false;await removeItem(kind,r.del)}
  return true}
 async function removeItem(kind,id){
  if(kind=="orig"&&store.work.items.some(w=>w.origId==id)){toast("この動画を使っている編集作業があります。先に編集作業を削除してください");return false}
@@ -112,12 +110,12 @@ async function removeItem(kind,id){
 
 /* 初期画面 */
 function homeRender(){
- const row=(k,a,sub,btns)=>`<div class="item"><span class="nm">${esc(a.name)}</span><span class="meta">${sub}</span>${btns}<button data-rm="${k}:${a.id}">削除</button></div>`;
- const sec=(k,title,fn)=>`<h2>${title} <span class="cap">(${store[k].items.length}/${MAX}件)</span></h2>`+(store[k].items.length?store[k].items.map(fn).join(""):'<div class="empty">ありません</div>');
+ const sec=(k,title,fn)=>`<h2>${title} <span class="cap">(${store[k].items.length}/${MAX}件)</span></h2>`+(store[k].items.length?store[k].items.map(a=>{let [sub,btn]=fn(a);
+  return`<div class="item"><span class="nm">${esc(a.name)}</span><span class="meta">${sub}</span>${btn}<button data-rm="${k}:${a.id}">削除</button></div>`}).join(""):'<div class="empty">ありません</div>');
  $("lists").innerHTML=
-  sec("work","保存済みの編集作業",w=>row("work",w,`対象: ${esc((store.orig.items.find(o=>o.id==w.origId)||{}).name||"-")} ／ 保存 ${w.at}`,`<button class="primary" data-w="${w.id}">再開</button>`))+
-  sec("orig","オリジナル動画",o=>row("orig",o,o.at,`<button data-o="${o.id}">この動画で新規編集</button>`))+
-  sec("out","編集結果の動画",o=>row("out",o,`${o.at} ／ 元: ${esc(o.srcName)}`,`<button data-view="${o.id}">再生</button>`))}
+  sec("work","保存済みの編集作業",w=>[`対象: ${esc((store.orig.items.find(o=>o.id==w.origId)||{}).name||"-")} ／ 保存 ${w.at}`,`<button class="primary" data-w="${w.id}">再開</button>`])+
+  sec("orig","オリジナル動画",o=>[o.at,`<button data-o="${o.id}">この動画で新規編集</button>`])+
+  sec("out","編集結果の動画",o=>[`${o.at} ／ 元: ${esc(o.srcName)}`,`<button data-view="${o.id}">再生</button>`])}
 $("home").onclick=async e=>{
  let b=e.target.closest("button");if(!b)return;let d=b.dataset;
  if(d.w)openWork(store.work.items.find(x=>x.id==d.w));
@@ -134,15 +132,15 @@ function openEditor(o,w,s){
  curOrig=o;curWork=w;selected=[];selLine=null;current=0;cancelConnect();
  els=s?s.els:[];lines=s?s.lines:[];next=s?s.next:1;nextLine=s?s.nextLine:1;scale=s?s.scale:1;
  $("scale").value=scale;$("scaleText").textContent=scale.toFixed(1)+"×";
- video.src=o.url;video.onloadedmetadata=()=>{duration=video.duration||s&&s.duration||60;video.currentTime=0;
+ video.src=o.url;video.onloadedmetadata=()=>{duration=video.duration||60;video.currentTime=0;
   $("home").style.display="none";menu.style.display="none";dirty=false;status();render()}}
 const startEdit=o=>openEditor(o,null,null);
 function openWork(w){let o=store.orig.items.find(x=>x.id==w.origId);o?openEditor(o,w,JSON.parse(w.data)):toast("対象のオリジナル動画が見つかりません")}
 function status(){$("status").textContent=`編集中の動画: ${curOrig?curOrig.name:""} ／ ${curWork?"編集作業: "+curWork.name:"未保存の新規編集作業"}${dirty?"（未保存の変更あり）":""}`}
 
-/* 保存: 編集内容のみ保存。オリジナル動画は変更しない */
+/* 保存（編集内容のみ。オリジナル動画は変更しない） */
 async function saveWork(asNew){
- const data=JSON.stringify({els,lines,next,nextLine,scale,duration});
+ const data=JSON.stringify({els,lines,next,nextLine,scale});
  if(curWork&&!asNew){Object.assign(curWork,{data,at:now()});dirty=false;status();toast("編集作業を保存しました");return true}
  if(!(await ensureRoom("work")))return false;
  let name=prompt("編集作業の名前",curWork?curWork.name+" のコピー":curOrig.name+" の編集");if(name===null)return false;
@@ -179,25 +177,24 @@ function drawFrame(ctx,W,H,t,v){
  if(z)return ctx.drawImage(v,z.x/100*vw,z.y/100*vh,z.w/100*vw,z.h/100*vh,0,0,W,H);
  ctx.drawImage(v,ox,oy,dw,dh);
  let R=e=>[ox+e.x/100*dw,oy+e.y/100*dh,e.w/100*dw,e.h/100*dh];
- els.filter(e=>on(e)&&e.type=="highlight").forEach(e=>{let [x,y,w,h]=R(e);ctx.strokeStyle=e.lc;ctx.lineWidth=e.lw;ctx.setLineDash((DASH[e.dash]||"").split(" ").filter(Boolean).map(Number));
+ els.filter(e=>on(e)&&e.type=="highlight").forEach(e=>{let [x,y,w,h]=R(e);ctx.strokeStyle=e.lc;ctx.lineWidth=e.lw;ctx.setLineDash(DASH[e.dash]);
   ctx.beginPath();ctx.rect(x,y,w,h);if(e.fill){ctx.fillStyle=e.lc+"33";ctx.fill()}ctx.stroke();ctx.setLineDash([])});
-|  lines.forEach(L=>{let a=byId(L.from),b=byId(L.to);if(!a||!b||!on(a)||!on(b))return; |
-|   let [ax,ay,aw,ah]=R(a),[bx,by,bw,bh]=R(b);ctx.strokeStyle="#90a4ae";ctx.lineWidth=2;ctx.setLineDash((DASH[L.dash]||"").split(" ").filter(Boolean).map(Number)); |
+ lines.forEach(L=>{let a=byId(L.from),b=byId(L.to);if(!a||!b||!on(a)||!on(b))return;
+  let [ax,ay,aw,ah]=R(a),[bx,by,bw,bh]=R(b);ctx.strokeStyle="#90a4ae";ctx.lineWidth=2;ctx.setLineDash(DASH[L.dash]);
   ctx.beginPath();ctx.moveTo(ax+aw/2,ay+ah/2);ctx.lineTo(bx+bw/2,by+bh/2);ctx.stroke();ctx.setLineDash([])});
  els.filter(e=>on(e)&&e.type=="comment").forEach(e=>{let [x,y,w,h]=R(e);
   if(e.fill){ctx.fillStyle=e.bg;ctx.fillRect(x,y,w,h)}if(e.line){ctx.strokeStyle=e.lc;ctx.lineWidth=e.lw;ctx.strokeRect(x,y,w,h)}
   ctx.fillStyle=e.fc;ctx.font=e.fs*k+"px "+e.font;ctx.textBaseline="middle";ctx.fillText(e.text||"",x+8,y+h/2,w-12)})}
 
-/* 要素の図形(強調枠=線種+線形 を別属性で描画。折れ線/波線でも破線等は重ねない) */
+/* 要素の図形（線種と線形は別属性。折れ線・波線に破線を重ねない） */
+const rp=e=>{let r=scr.getBoundingClientRect();return{x:e.x/100*r.width,y:e.y/100*r.height,w:e.w/100*r.width,h:e.h/100*r.height}};
 function shapeSvg(e){
- let w=Math.max(10,rp(e).w),h=Math.max(10,rp(e).h);
- const dash=DASH[e.dash]?` stroke-dasharray="${DASH[e.dash]}"`:"";
- let pts=[{x:0,y:0},{x:w,y:0},{x:w,y:h},{x:0,y:h},{x:0,y:0}],d;
- if(e.type=="highlight"&&e.form=="elbow"){let c=Math.min(14,w/4,h/4);d=`M${c} 0L${w-c} 0L${w} ${c}L${w} ${h-c}L${w-c} ${h}L${c} ${h}L0 ${h-c}L0 ${c}Z`}
- else if(e.type=="highlight"&&e.form=="wave")d=toPath(pts,"wave");
- else d=`M${pts.map(p=>p.x+" "+p.y).join("L")}Z`;
- if(e.type=="highlight"&&e.form!="straight"&&e.form!="")return`<svg class="shape"><path d="${d}" fill="${e.fill?e.lc+"33":"none"}" stroke="${e.lc}" stroke-width="${e.lw}"${e.form=="straight"?dash:""}/></svg>`;
- return`<svg class="shape"><path d="${d}" fill="${e.fill?(e.type=="comment"?e.bg:e.lc+"33"):"none"}" stroke="${(e.type=="comment"?e.line:1)?e.lc:"none"}" stroke-width="${e.lw}"${dash}/></svg>`}
+ let {w,h}=rp(e),form=e.form||"straight",c=Math.min(14,w/4,h/4),d;
+ if(form=="elbow")d=`M${c} 0L${w-c} 0L${w} ${c}L${w} ${h-c}L${w-c} ${h}L${c} ${h}L0 ${h-c}L0 ${c}Z`;
+ else if(form=="wave")d=toPath([{x:0,y:0},{x:w,y:0},{x:w,y:h},{x:0,y:h},{x:0,y:0}],"wave");
+ else d=`M0 0L${w} 0L${w} ${h}L0 ${h}Z`;
+ let com=e.type=="comment",fill=e.fill?(com?e.bg:e.lc+"33"):"none",stroke=(com?e.line:1)?e.lc:"none";
+ return`<svg class="shape"><path d="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${e.lw}"${form=="straight"?dashAttr(e.dash||"solid"):""}/></svg>`}
 
 /* 編集画面の描画 */
 function render(){
@@ -239,7 +236,6 @@ function move(e){
 function end(){removeEventListener("pointermove",move);drag=null;render()}
 
 /* 接続線 */
-const rp=e=>{let r=scr.getBoundingClientRect();return{x:e.x/100*r.width,y:e.y/100*r.height,w:e.w/100*r.width,h:e.h/100*r.height}};
 function anchor(e,s){let r=rp(e),cx=r.x+r.w/2,cy=r.y+r.h/2;
  return s=="top"?{x:cx,y:r.y,s}:s=="bottom"?{x:cx,y:r.y+r.h,s}:s=="left"?{x:r.x,y:cy,s}:{x:r.x+r.w,y:cy,s}}
 function autoSide(a,b){let A=rp(a),B=rp(b),dx=B.x+B.w/2-A.x-A.w/2,dy=B.y+B.h/2-A.y-A.h/2;
@@ -276,7 +272,7 @@ function drawLines(){
   let au=autoSide(a,b),A=anchor(a,L.fs=="auto"?au[0]:L.fs),B=anchor(b,L.ts=="auto"?au[1]:L.ts);
   let obst=els.filter(e=>e.type!="skip"&&e!=a&&e!=b&&active(e)).map(rp),d=toPath(route(L.form,A,B,obst),L.form),sel=selLine==L.id,c=sel?"#4da3ff":"#90a4ae";
   defs+=marker(L.se,"ms"+L.id,c)+marker(L.ee,"me"+L.id,c);
-  body+=`<path class="hit" data-line="${L.id}" d="${d}"/><path class="line${sel?" sel":""}" d="${d}"${DASH[L.dash]?` stroke-dasharray="${DASH[L.dash]}"`:""}${L.se!="none"?` marker-start="url(#ms${L.id})"`:""}${L.ee!="none"?` marker-end="url(#me${L.id})"`:""}/>`;
+  body+=`<path class="hit" data-line="${L.id}" d="${d}"/><path class="line${sel?" sel":""}" d="${d}"${dashAttr(L.dash)}${L.se!="none"?` marker-start="url(#ms${L.id})"`:""}${L.ee!="none"?` marker-end="url(#me${L.id})"`:""}/>`;
   if(sel)body+=[[A,"from"],[B,"to"]].map(([p,k])=>`<circle class="endh" data-end="${k}" data-line="${L.id}" cx="${p.x}" cy="${p.y}" r="6"/>`).join("")});
  let src=connect&&byId(connect);
  if(src&&mouse&&active(src)){
@@ -292,7 +288,7 @@ function endMove(e){
  let r=scr.getBoundingClientRect(),L=lines.find(l=>l.id==endDrag.line),k=endDrag.end=="from",el=byId(k?L.from:L.to),px=e.clientX-r.left,py=e.clientY-r.top;
  L[k?"fs":"ts"]=SIDES.map(s=>({s,d:Math.hypot(anchor(el,s).x-px,anchor(el,s).y-py)})).sort((a,b)=>a.d-b.d)[0].s;touch();render()}
 
-/* 操作メニュー: 定義表から対象別に生成 */
+/* 操作メニュー（定義表から生成。再描画後も同じ位置に再表示） */
 function showMenu(x,y,h){menu.innerHTML=h;menu.style.display="block";menu.style.left=Math.min(x,innerWidth-270)+"px";menu.style.top=Math.max(5,Math.min(y,innerHeight-menu.offsetHeight-5))+"px"}
 const sample=w=>`<svg viewBox="0 0 50 12"><line x1="2" y1="6" x2="48" y2="6" stroke="#fff" stroke-width="${w}"/></svg>`;
 function group(title,key,kind,opts,cur,prefix){
@@ -300,9 +296,10 @@ function group(title,key,kind,opts,cur,prefix){
  if(kind=="color")body=`<div class="sw12">`+COLORS.map(c=>b(c,"",`background:${c}`)).join("")+"</div>";
  else if(kind=="width")body=`<div class="opts">`+WIDTHS.map(w=>b(w,sample(w))).join("")+"</div>";
  else if(kind=="font")body=`<div class="opts" style="flex-direction:column">`+FONTS.map(f=>b(f,"あいう ABC 123",`font-family:${f}`)).join("")+"</div>";
- else if(kind=="num")body=`<input type="number" min="8" max="96" value="${cur}" data-${prefix}num="${key}"> px`;
+ else if(kind=="num")body=`<input type="number" min="8" max="96" value="${cur}" data-num="${key}"> px`;
  else body=`<div class="opts">`+opts.map(([v,n])=>b(v,n)).join("")+"</div>";
  return`<hr><div class="t">${title}</div>`+body}
+const reopen=()=>mt.line?lineMenu(parseFloat(menu.style.left),parseFloat(menu.style.top),mt.line):elMenu(parseFloat(menu.style.left),parseFloat(menu.style.top));
 function elMenu(x,y){
  if(selected.length>1){mt={multi:1};return showMenu(x,y,`<b>${selected.length}件を選択中</b><hr><button data-a="del">選択した要素を削除</button>`)}
  let e=byId(selected[0]);mt={el:e.id};
@@ -316,12 +313,11 @@ function lineMenu(x,y,id){
  showMenu(x,y,"<b>接続線</b>"+LMENU.map(([t,k,kind,o])=>group(t,k,kind,o,L[k],"l")).join("")+'<hr><button data-a="dline">接続線を削除</button>')}
 scr.oncontextmenu=e=>{if(e.target.closest(".el,svg *"))return;e.preventDefault();cancelConnect();mt={x:e.clientX,y:e.clientY};
  showMenu(e.clientX,e.clientY,"<b>要素を追加</b>"+Object.entries(TYPES).map(([k,v])=>`<button data-add="${k}">${v[0]}</button>`).join(""))};
-| const conv=(k,v)=>(k=="lw"||k=="fs"||k=="line"||k=="fill")?+v:v; |
-| menu.onchange=e=>{let i=e.target.dataset.enum;if(!i)return;let x=byId(mt.el);x[i]=Math.max(8,Math.min(96,+e.target.value||18));touch();render()}; |
+menu.onchange=e=>{let k=e.target.dataset.num;if(!k)return;byId(mt.el)[k]=Math.max(8,Math.min(96,+e.target.value||18));touch();render();reopen()};
 menu.onclick=e=>{
  let b=e.target.closest("button");if(!b)return;let d=b.dataset;
- if(d.e){let x=byId(mt.el),[k,v]=d.e.split(":");x[k]=conv(k,v);touch();render();return elMenu(parseFloat(menu.style.left),parseFloat(menu.style.top))}
- if(d.l){let L=lines.find(l=>l.id==mt.line),[k,v]=d.l.split(":");L[k]=v;touch();render();return lineMenu(parseFloat(menu.style.left),parseFloat(menu.style.top),L.id)}
+ if(d.e||d.l){let o=d.e?byId(mt.el):lines.find(l=>l.id==mt.line),[k,v]=(d.e||d.l).split(":");
+  o[k]=["lw","fs","line","fill"].includes(k)&&d.e?+v:v;touch();render();return reopen()}
  if(d.a){touch();
   if(d.a=="dline"){lines=lines.filter(l=>l.id!=mt.line);selLine=null}
   else if(d.a=="del"){let ids=mt.multi?selected:[mt.el];els=els.filter(v=>!ids.includes(v.id));selected=[]}
@@ -332,9 +328,8 @@ menu.onclick=e=>{
  if(d.add){let r=scr.getBoundingClientRect();touch();
   els.push({id:next++,type:d.add,start:current,end:Math.min(duration,current+5),x:Math.max(0,Math.min(75,(mt.x-r.left)/r.width*100)),y:Math.max(0,Math.min(82,(mt.y-r.top)/r.height*100)),w:25,h:18,...DEF[d.add]});
   menu.style.display="none";render()}};
-menu.addEventListener("change",e=>{let k=e.target.dataset.enum;if(!k)return;let x=byId(mt.el);x[k]=Math.max(8,Math.min(96,+e.target.value||18));touch();render();elMenu(parseFloat(menu.style.left),parseFloat(menu.style.top))});
 
-/* タイムライン(幅は固定。スケールは目盛り間隔のみ変える) */
+/* タイムライン（幅は固定。スケールは目盛り間隔のみ変える） */
 function niceStep(min){let p=Math.pow(10,Math.floor(Math.log10(min)));return [1,2,5,10].find(k=>k*p>=min)*p}
 function assignRows(){
  let rowEnd=[],map={};
