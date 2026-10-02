@@ -35,22 +35,28 @@ h2{font-size:16px;margin:0 0 8px}
 .tl-wrap{max-width:900px;margin:0 auto;padding:0 12px 16px}
 .tl-wrap .row{margin-bottom:8px}
 .num{background:#fff;border:1px solid #d1d5db;border-radius:4px;padding:3px 8px;font-size:13px}
-.tl{position:relative;background:#fff;border:1px solid #9ca3af;border-radius:4px;overflow:hidden;width:100%;user-select:none}
+.tlrow{display:flex;gap:4px;align-items:stretch}
+.tlrow>button{padding:0 8px;font-size:16px}
+.tl{position:relative;flex:1;min-width:0;background:#fff;border:1px solid #9ca3af;border-radius:4px;overflow:hidden;user-select:none}
 .ruler{position:relative;height:28px;border-bottom:1px solid #9ca3af;background:#f9fafb;cursor:pointer}
 .tick{position:absolute;top:0;height:100%;border-left:1px solid #9ca3af}
 .tick span{position:absolute;top:2px;left:3px;font-size:11px;white-space:nowrap}
 .lanes{position:relative;height:120px;cursor:grab}
 .el{position:absolute;height:22px;border-radius:3px;color:#fff;font-size:11px;padding:2px 6px;overflow:hidden;white-space:nowrap}
-.edge{position:absolute;top:0;bottom:0;width:18px;background:rgba(245,158,11,.35);display:flex;align-items:center;justify-content:center;z-index:3}
+.edge{position:absolute;top:30px;bottom:0;width:22px;background:rgba(245,158,11,.4);border:none;border-radius:0;padding:0;z-index:3}
 .edge.l{left:0}.edge.r{right:0}
 .endmark{position:absolute;top:0;bottom:0;border-left:2px solid #dc2626;z-index:2}
 .endmark span{position:absolute;top:0;left:3px;font-size:10px;color:#dc2626;background:#fff}
 .cursor{position:absolute;top:0;bottom:0;border-left:2px solid #e11d48;z-index:4;pointer-events:none}
-.bar{position:relative;height:26px;background:#e5e7eb;border:1px solid #9ca3af;border-radius:4px;margin-top:8px}
-.bar .mk{position:absolute;top:9px;height:8px;background:rgba(100,116,139,.45)}
+.bar{position:relative;height:30px;background:#e5e7eb;border:1px solid #9ca3af;border-radius:4px;margin-top:8px;user-select:none}
+.bar .mk{position:absolute;top:11px;height:8px;background:rgba(100,116,139,.45)}
 .bar .pc{position:absolute;top:0;bottom:0;width:2px;background:rgba(225,29,72,.6)}
-.bar .view{position:absolute;top:0;bottom:0;background:rgba(37,99,235,.3);border:2px solid #2563eb;border-radius:3px;cursor:grab;min-width:6px}
+.bar .view{position:absolute;top:0;bottom:0;background:rgba(37,99,235,.25);border-top:2px solid #2563eb;border-bottom:2px solid #2563eb;cursor:grab}
+.bar .hd{position:absolute;top:-2px;bottom:-2px;width:12px;background:#2563eb;cursor:ew-resize;border-radius:3px;display:flex;align-items:center;justify-content:center}
+.bar .hd::after{content:"";width:2px;height:12px;background:#fff}
+.bar .hd.l{left:-6px}.bar .hd.r{right:-6px}
 .hint{color:#6b7280;font-size:12px;margin-top:6px}
+input[type=range]{cursor:pointer}
 </style>
 </head>
 <body>
@@ -81,15 +87,19 @@ h2{font-size:16px;margin:0 0 8px}
       <span class="num" id="posTxt"></span>
       <span class="sp"></span>
       <button id="btnOut">－</button>
-      <input type="range" id="zoom" min="0" max="100" value="0" style="width:140px">
+      <input type="range" id="zoom" min="0" max="1000" value="0" style="width:160px">
       <button id="btnIn">＋</button>
       <span class="num" id="zoomTxt"></span>
       <button id="btnFit">全体表示に戻す</button>
     </div>
     <div class="row"><span class="num" id="rangeTxt"></span></div>
-    <div class="tl" id="tl"><div class="ruler" id="ruler"></div><div class="lanes" id="lanes"></div></div>
+    <div class="tlrow">
+      <button id="btnLeft" title="表示範囲を左へ">◀</button>
+      <div class="tl" id="tl"><div class="ruler" id="ruler"></div><div class="lanes" id="lanes"></div></div>
+      <button id="btnRight" title="表示範囲を右へ">▶</button>
+    </div>
     <div class="bar" id="bar"></div>
-    <div class="hint">ホイール：拡大縮小（マウス位置中心）／ レーンのドラッグ：表示範囲の移動 ／ 目盛りのクリック・ドラッグ：再生位置の変更 ／ 下の帯：全体の長さと表示範囲</div>
+    <div class="hint">ホイール：拡大縮小（マウス位置中心）／ レーンのドラッグ・◀▶：表示範囲の移動 ／ 目盛り：再生位置の変更 ／ 下の帯：中央をドラッグで移動、左右のハンドルで表示幅を変更</div>
   </div>
 </div>
 
@@ -106,7 +116,7 @@ function z2(n){return ("0"+n).slice(-2);}
 function fmtDT(d){return d.getFullYear()+"/"+z2(d.getMonth()+1)+"/"+z2(d.getDate())+" "+z2(d.getHours())+":"+z2(d.getMinutes());}
 function fmtT(s,dec){var m=Math.floor(s/60),r=s-m*60;return m+":"+(r<10?"0":"")+r.toFixed(dec);}
 
-/* ===== データ（url を持つ動画は実ファイル、無いものは初期サンプル） ===== */
+/* ===== データ ===== */
 var videos=[],works=[],results=[];
 var v1={id:uid("v"),name:"操作手順_顧客登録.mp4",at:new Date(2026,8,20,10,0),dur:120,url:null};
 var v2={id:uid("v"),name:"障害再現_決済画面.mp4",at:new Date(2026,8,25,14,30),dur:75,url:null};
@@ -182,7 +192,7 @@ function onAction(e){
 }
 $("origList").onclick=onAction;$("resList").onclick=onAction;
 
-/* ===== 動画の取り込み：実ファイルを選択し、動画から総時間を取得する ===== */
+/* ===== 動画の取り込み ===== */
 $("btnPick").onclick=function(){$("filePick").value="";$("filePick").click();};
 $("filePick").onchange=function(){
   var f=this.files[0];if(!f)return;
@@ -241,7 +251,7 @@ $("btnEnd").onclick=function(){
   $("editor").classList.add("hidden");$("home").classList.remove("hidden");renderHome();
 };
 
-/* 再生：実動画があればその再生位置を正とし、無ければ時計で進める */
+/* 再生 */
 function stopPlay(){
   if(ed.timer){clearInterval(ed.timer);ed.timer=null;}
   if(ed.vid)ed.vid.pause();
@@ -261,7 +271,7 @@ $("btnPlay").onclick=function(){
   },50);
 };
 $("btnPause").onclick=stopPlay;
-function follow(){ /* 再生位置が範囲外に出そうなら表示範囲を追従。操作中は妨げない */
+function follow(){
   var span=ed.ve-ed.vs;
   if(userMoving||span>=ed.dur)return;
   if(ed.pos>ed.ve-span*0.05)setView(ed.pos-span*0.7);
@@ -274,7 +284,7 @@ function setView(start,span){
   span=Math.max(MIN_SPAN,Math.min(ed.dur,span));
   ed.vs=Math.max(0,Math.min(ed.dur-span,start));ed.ve=ed.vs+span;
 }
-function zoomAt(factor,t){ /* t の時間位置を固定して拡大縮小 */
+function zoomAt(factor,t){
   var span=ed.ve-ed.vs,ns=Math.max(MIN_SPAN,Math.min(ed.dur,span/factor));
   setView(t-(t-ed.vs)/span*ns,ns);
 }
@@ -284,15 +294,49 @@ function x2t(x,w){return ed.vs+x/w*(ed.ve-ed.vs);}
 $("btnIn").onclick=function(){zoomAt(1.5,center());renderTL();};
 $("btnOut").onclick=function(){zoomAt(1/1.5,center());renderTL();};
 $("btnFit").onclick=function(){setView(0,ed.dur);renderTL();};
-$("zoom").oninput=function(){
-  var sc=Math.exp(Math.log(ed.dur/MIN_SPAN)*this.value/100),c=center(),ns=ed.dur/sc;
+
+/* スライダー：倍率を対数で割り当て。操作中は値を書き戻さない */
+var sliding=false;
+function maxLog(){return Math.log(Math.max(1.0001,ed.dur/MIN_SPAN));}
+$("zoom").addEventListener("pointerdown",function(){sliding=true;});
+window.addEventListener("pointerup",function(){sliding=false;renderTL();});
+$("zoom").addEventListener("input",function(){
+  var sc=Math.exp(maxLog()*this.value/1000),c=center(),ns=ed.dur/sc;
   setView(c-(c-ed.vs)/(ed.ve-ed.vs)*ns,ns);renderTL();
-};
+});
+
 $("tl").addEventListener("wheel",function(e){
   e.preventDefault();
   var r=$("tl").getBoundingClientRect();
   zoomAt(e.deltaY<0?1.25:0.8,x2t(e.clientX-r.left,r.width));renderTL();
 },{passive:false});
+
+/* 左右移動ボタン（長押しで連続移動） */
+function pan(dir){setView(ed.vs+dir*(ed.ve-ed.vs)*0.25);renderTL();}
+function holdBtn(id,dir){
+  var el=$(id),t=null,iv=null;
+  function stop(){clearTimeout(t);clearInterval(iv);}
+  el.addEventListener("mousedown",function(){pan(dir);t=setTimeout(function(){iv=setInterval(function(){pan(dir);},80);},350);});
+  el.addEventListener("mouseup",stop);el.addEventListener("mouseleave",stop);
+}
+holdBtn("btnLeft",-1);holdBtn("btnRight",1);
+
+/* 範囲外要素への移動（端の表示をクリック） */
+function jumpEdge(dir){
+  var span=ed.ve-ed.vs,cand;
+  if(dir<0){
+    cand=ed.els.filter(function(e){return e.s<ed.vs;}).sort(function(a,b){return b.s-a.s;})[0];
+    if(cand)setView(cand.s-span*0.1);
+  }else{
+    cand=ed.els.filter(function(e){return e.e>ed.ve;}).sort(function(a,b){return a.e-b.e;})[0];
+    if(cand)setView(cand.e-span*0.9);
+  }
+  renderTL();
+}
+$("lanes").addEventListener("click",function(e){
+  var b=e.target.closest(".edge");if(!b)return;
+  jumpEdge(b.classList.contains("l")?-1:1);
+});
 
 /* 描画 */
 function niceStep(span,w){
@@ -306,7 +350,6 @@ function renderTL(){
     h+='<div class="tick" style="left:'+t2x(t,w)+'px"><span>'+fmtT(t,dec)+'</span></div>';
   $("ruler").innerHTML=h;
 
-  /* 同じ時間帯の要素は縦に並べる */
   var rows=[],lh="",lHid=false,rHid=false;
   ed.els.slice().sort(function(a,b){return a.s-b.s;}).forEach(function(el){
     var r=0;while(rows[r]!==undefined&&rows[r]>el.s)r++;
@@ -318,8 +361,8 @@ function renderTL(){
     lh+='<div class="el" style="left:'+x1+'px;width:'+Math.max(2,x2-x1)+'px;top:'+(6+r*26)+'px;background:'+el.c+'" title="'+esc(el.n)+' '+fmtT(el.s,1)+'〜'+fmtT(el.e,1)+'">'+esc(el.n)+'</div>';
   });
   if(ed.dur<=ed.ve)lh+='<div class="endmark" style="left:'+Math.min(w-2,t2x(ed.dur,w))+'px"><span>終了</span></div>';
-  if(lHid)lh+='<div class="edge l" title="左側に要素があります">◀</div>';
-  if(rHid)lh+='<div class="edge r" title="右側に要素があります">▶</div>';
+  if(lHid)lh+='<button class="edge l" title="左側の要素へ移動">◀</button>';
+  if(rHid)lh+='<button class="edge r" title="右側の要素へ移動">▶</button>';
   $("lanes").innerHTML=lh;
 
   var old=$("tl").querySelector(".cursor");if(old)old.remove();
@@ -330,39 +373,49 @@ function renderTL(){
   var bh="";
   ed.els.forEach(function(el){bh+='<div class="mk" style="left:'+el.s/ed.dur*100+'%;width:'+Math.max(0.5,(el.e-el.s)/ed.dur*100)+'%"></div>';});
   bh+='<div class="pc" style="left:'+ed.pos/ed.dur*100+'%"></div>'+
-      '<div class="view" id="barView" style="left:'+ed.vs/ed.dur*100+'%;width:'+span/ed.dur*100+'%"></div>';
+      '<div class="view" id="barView" style="left:'+ed.vs/ed.dur*100+'%;width:'+span/ed.dur*100+'%">'+
+      '<div class="hd l" data-h="l"></div><div class="hd r" data-h="r"></div></div>';
   $("bar").innerHTML=bh;
 
   var sc=ed.dur/span;
   $("rangeTxt").textContent="表示範囲: "+fmtT(ed.vs,2)+" 〜 "+fmtT(ed.ve,2)+"（幅 "+span.toFixed(2)+"秒）";
   $("posTxt").textContent="再生位置 "+fmtT(ed.pos,1)+" / 総時間 "+fmtT(ed.dur,1);
   $("zoomTxt").textContent=(Math.round(sc*10)/10)+"倍"+(sc<1.001?"（全体表示）":"");
-  $("zoom").value=Math.round(Math.log(sc)/Math.log(ed.dur/MIN_SPAN)*100);
+  if(!sliding)$("zoom").value=Math.round(Math.log(sc)/maxLog()*1000);
   if(!ed.vid)$("videoBox").textContent=fmtT(ed.pos,1);
 }
 
-/* マウス操作：再生位置の変更／表示範囲の移動／帯の操作 */
+/* マウス操作 */
 var drag=null;
 function seek(e){
   var r=$("tl").getBoundingClientRect();
   ed.pos=Math.max(0,Math.min(ed.dur,x2t(e.clientX-r.left,r.width)));
-  if(ed.vid)ed.vid.currentTime=ed.pos; /* 動画側の再生位置も変更 */
+  if(ed.vid)ed.vid.currentTime=ed.pos;
   renderTL();
 }
 $("ruler").addEventListener("mousedown",function(e){drag={k:"seek"};userMoving=true;seek(e);});
-$("lanes").addEventListener("mousedown",function(e){drag={k:"pan",x:e.clientX,vs:ed.vs};userMoving=true;});
+$("lanes").addEventListener("mousedown",function(e){
+  if(e.target.closest(".edge"))return;
+  drag={k:"pan",x:e.clientX,vs:ed.vs};userMoving=true;
+});
 $("bar").addEventListener("mousedown",function(e){
-  if(e.target.id!=="barView"){
-    var r=$("bar").getBoundingClientRect();
-    setView((e.clientX-r.left)/r.width*ed.dur-(ed.ve-ed.vs)/2);renderTL();
-  }
-  drag={k:"bar",x:e.clientX,vs:ed.vs};userMoving=true;
+  var h=e.target.getAttribute("data-h");
+  var r=$("bar").getBoundingClientRect();
+  if(h){drag={k:h==="l"?"hl":"hr",s:ed.vs,e:ed.ve};userMoving=true;e.preventDefault();return;}
+  if(!e.target.closest("#barView"))setView((e.clientX-r.left)/r.width*ed.dur-(ed.ve-ed.vs)/2);
+  drag={k:"bar",x:e.clientX,vs:ed.vs};userMoving=true;renderTL();
 });
 window.addEventListener("mousemove",function(e){
   if(!drag)return;
   if(drag.k==="seek")seek(e);
-  if(drag.k==="pan"){setView(drag.vs-(e.clientX-drag.x)/$("tl").clientWidth*(ed.ve-ed.vs));renderTL();}
-  if(drag.k==="bar"){setView(drag.vs+(e.clientX-drag.x)/$("bar").clientWidth*ed.dur);renderTL();}
+  else if(drag.k==="pan"){setView(drag.vs-(e.clientX-drag.x)/$("tl").clientWidth*(ed.ve-ed.vs));renderTL();}
+  else if(drag.k==="bar"){setView(drag.vs+(e.clientX-drag.x)/$("bar").clientWidth*ed.dur);renderTL();}
+  else{
+    var r=$("bar").getBoundingClientRect(),t=Math.max(0,Math.min(ed.dur,(e.clientX-r.left)/r.width*ed.dur));
+    if(drag.k==="hl")setView(Math.min(t,drag.e-MIN_SPAN),drag.e-Math.min(t,drag.e-MIN_SPAN));
+    else setView(drag.s,Math.max(t,drag.s+MIN_SPAN)-drag.s);
+    renderTL();
+  }
 });
 window.addEventListener("mouseup",function(){drag=null;userMoving=false;});
 window.addEventListener("resize",function(){if(!$("editor").classList.contains("hidden"))renderTL();});
