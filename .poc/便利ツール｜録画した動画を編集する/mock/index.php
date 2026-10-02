@@ -30,8 +30,8 @@ h2{font-size:16px;margin:0 0 8px}
 .modal .btns{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
 .modal label{display:block;margin:4px 0}
 .topbar{padding:8px 12px;background:#1f2937;color:#fff}
-.dirty{color:#fbbf24}
-.video{background:#000;color:#fff;height:240px;margin:12px auto;max-width:700px;display:flex;align-items:center;justify-content:center;font-size:28px;border-radius:4px}
+.video{background:#000;color:#fff;height:300px;margin:12px auto;max-width:700px;display:flex;align-items:center;justify-content:center;font-size:28px;border-radius:4px;overflow:hidden}
+.video video{width:100%;height:100%;object-fit:contain;background:#000}
 .tl-wrap{max-width:900px;margin:0 auto;padding:0 12px 16px}
 .tl-wrap .row{margin-bottom:8px}
 .num{background:#fff;border:1px solid #d1d5db;border-radius:4px;padding:3px 8px;font-size:13px}
@@ -60,6 +60,7 @@ h2{font-size:16px;margin:0 0 8px}
     <h2>動画を選択</h2>
     <p class="cnt">現在、編集対象の動画は選択されていません。</p>
     <button class="primary" id="btnPick">動画を選択</button>
+    <input type="file" id="filePick" accept="video/*" class="hidden">
   </div>
   <div class="card"><h2>オリジナル動画と編集作業 <span class="cnt" id="origCnt"></span></h2><div id="origList"></div></div>
   <div class="card"><h2>編集結果の動画 <span class="cnt" id="resCnt"></span></h2><div id="resList"></div></div>
@@ -69,11 +70,10 @@ h2{font-size:16px;margin:0 0 8px}
   <div class="topbar row">
     <b>動画: <span id="edVideo"></span></b>
     <b>編集作業: <span id="edWork"></span></b>
-    <span class="dirty hidden" id="edDirty">● 未保存の変更あり</span>
     <span class="sp"></span>
     <button id="btnEnd">編集作業を終了する</button>
   </div>
-  <div class="video" id="videoText"></div>
+  <div class="video" id="videoBox"></div>
   <div class="tl-wrap">
     <div class="row">
       <button id="btnPlay">▶ 再生</button>
@@ -106,12 +106,11 @@ function z2(n){return ("0"+n).slice(-2);}
 function fmtDT(d){return d.getFullYear()+"/"+z2(d.getMonth()+1)+"/"+z2(d.getDate())+" "+z2(d.getHours())+":"+z2(d.getMinutes());}
 function fmtT(s,dec){var m=Math.floor(s/60),r=s-m*60;return m+":"+(r<10?"0":"")+r.toFixed(dec);}
 
-/* ===== データ ===== */
+/* ===== データ（url を持つ動画は実ファイル、無いものは初期サンプル） ===== */
 var videos=[],works=[],results=[];
-var v1={id:uid("v"),name:"操作手順_顧客登録.mp4",at:new Date(2026,8,20,10,0),dur:120};
-var v2={id:uid("v"),name:"障害再現_決済画面.mp4",at:new Date(2026,8,25,14,30),dur:75};
-var v3={id:uid("v"),name:"新機能デモ.mp4",at:new Date(2026,8,28,9,15),dur:45};
-videos.push(v1,v2,v3);
+var v1={id:uid("v"),name:"操作手順_顧客登録.mp4",at:new Date(2026,8,20,10,0),dur:120,url:null};
+var v2={id:uid("v"),name:"障害再現_決済画面.mp4",at:new Date(2026,8,25,14,30),dur:75,url:null};
+videos.push(v1,v2);
 works.push(
   {id:uid("w"),videoId:v1.id,name:"顧客登録_注釈入り",saved:new Date(2026,8,21,11,0),els:[{n:"コメント1",s:5,e:20,c:"#2563eb"},{n:"強調枠1",s:10,e:40,c:"#dc2626"},{n:"拡大枠1",s:60,e:90,c:"#059669"}]},
   {id:uid("w"),videoId:v1.id,name:"顧客登録_短縮版",saved:new Date(2026,8,22,16,45),els:[{n:"コメント1",s:0,e:15,c:"#2563eb"}]},
@@ -160,6 +159,12 @@ function renderHome(){
   $("resList").innerHTML=rh;
 }
 function find(arr,id){return arr.filter(function(x){return x.id===id;})[0];}
+function removeVideo(id){
+  var v=find(videos,id);
+  if(v&&v.url)URL.revokeObjectURL(v.url);
+  videos=videos.filter(function(x){return x.id!==id;});
+  works=works.filter(function(w){return w.videoId!==id;});
+}
 function onAction(e){
   var b=e.target.closest("button[data-act]");if(!b)return;
   var id=b.getAttribute("data-id"),act=b.getAttribute("data-act");
@@ -170,53 +175,65 @@ function onAction(e){
   if(act==="delV"){
     var n=works.filter(function(w){return w.videoId===id;}).length,v=find(videos,id);
     confirmDlg("動画「"+esc(v.name)+"」を削除します。"+(n?"<br><b>配下の編集作業"+n+"件も一緒に削除されます。</b>":"")+"<br>作成済みの編集結果の動画は残ります。",function(){
-      videos=videos.filter(function(x){return x.id!==id;});works=works.filter(function(w){return w.videoId!==id;});renderHome();});
+      removeVideo(id);renderHome();});
   }
   if(act==="delR")confirmDlg("この編集結果の動画を削除します。",function(){
     results=results.filter(function(r){return r.id!==id;});renderHome();});
 }
 $("origList").onclick=onAction;$("resList").onclick=onAction;
 
-/* 動画選択：10件超過時は削除する動画を操作者が選ぶ */
-function importVideo(name,dur){
-  var v={id:uid("v"),name:name,at:new Date(),dur:dur};
-  videos.push(v);startEdit(v.id,null);
-}
-$("btnPick").onclick=function(){
-  function pick(){
-    modal('<p>取り込む動画を選択（モック）</p>'+
-      '<label><input type="radio" name="pick" value="60" checked> 操作デモ.mp4（1:00）</label>'+
-      '<label><input type="radio" name="pick" value="180"> 画面収録.mp4（3:00）</label>'+
-      '<label><input type="radio" name="pick" value="20"> 短い動画.mp4（0:20）</label>',
-      [{label:"キャンセル"},{label:"選択",cls:"primary",fn:function(){
-        var s=document.querySelector('input[name="pick"]:checked');
-        importVideo(s.parentNode.textContent.trim().replace(/（.*$/,""),+s.value);
-      }}]);
-  }
-  if(videos.length<LIMIT){pick();return;}
-  var h='<p><b>オリジナル動画は'+LIMIT+'件までです。</b>削除するものを選んでください（自動では削除しません）。</p>';
-  videos.forEach(function(v,i){
-    var n=works.filter(function(w){return w.videoId===v.id;}).length;
-    h+='<label><input type="radio" name="del" value="'+v.id+'"'+(i?'':' checked')+'> '+esc(v.name)+'（配下の編集作業'+n+'件も削除）</label>';
-  });
-  modal(h,[{label:"キャンセル"},{label:"削除して続ける",cls:"danger",fn:function(){
-    var id=document.querySelector('input[name="del"]:checked').value;
-    videos=videos.filter(function(x){return x.id!==id;});works=works.filter(function(w){return w.videoId!==id;});
-    renderHome();pick();
-  }}]);
+/* ===== 動画の取り込み：実ファイルを選択し、動画から総時間を取得する ===== */
+$("btnPick").onclick=function(){$("filePick").value="";$("filePick").click();};
+$("filePick").onchange=function(){
+  var f=this.files[0];if(!f)return;
+  var url=URL.createObjectURL(f),probe=document.createElement("video");
+  probe.preload="metadata";
+  probe.onloadedmetadata=function(){
+    if(!isFinite(probe.duration)||probe.duration<=0){
+      URL.revokeObjectURL(url);modal("<p>この動画の長さを取得できませんでした。別のファイルを選んでください。</p>",[{label:"閉じる"}]);return;
+    }
+    addVideo({id:uid("v"),name:f.name,at:new Date(),dur:probe.duration,url:url});
+  };
+  probe.onerror=function(){
+    URL.revokeObjectURL(url);modal("<p>この動画を読み込めませんでした。ブラウザが再生できる形式（MP4/WebMなど）を選んでください。</p>",[{label:"閉じる"}]);
+  };
+  probe.src=url;
 };
+function addVideo(v){
+  if(videos.length<LIMIT){videos.push(v);startEdit(v.id,null);return;}
+  var h='<p><b>オリジナル動画は'+LIMIT+'件までです。</b>削除するものを選んでください（自動では削除しません）。</p>';
+  videos.forEach(function(x,i){
+    var n=works.filter(function(w){return w.videoId===x.id;}).length;
+    h+='<label><input type="radio" name="del" value="'+x.id+'"'+(i?'':' checked')+'> '+esc(x.name)+'（配下の編集作業'+n+'件も削除）</label>';
+  });
+  modal(h,[
+    {label:"キャンセル",fn:function(){URL.revokeObjectURL(v.url);}},
+    {label:"削除して取り込む",cls:"danger",fn:function(){
+      removeVideo(document.querySelector('input[name="del"]:checked').value);
+      videos.push(v);startEdit(v.id,null);
+    }}
+  ]);
+}
 
 /* ===== 編集画面 ===== */
-var ed={dur:60,els:[],pos:0,vs:0,ve:60,timer:null,workId:null,workName:"",videoId:null};
+var ed={dur:60,els:[],pos:0,vs:0,ve:60,timer:null,vid:null};
 var userMoving=false;
 function startEdit(videoId,workId){
   var v=find(videos,videoId),w=workId?find(works,workId):null;
-  ed.videoId=videoId;ed.workId=workId;ed.workName=w?w.name:"";
   ed.dur=v.dur;ed.pos=0;ed.vs=0;ed.ve=v.dur;
-  ed.els=w?w.els:[{n:"コメント1",s:3,e:12,c:"#2563eb"},{n:"強調枠1",s:8,e:25,c:"#dc2626"},{n:"拡大枠1",s:10,e:20,c:"#059669"}];
+  ed.els=w?w.els:[
+    {n:"コメント1",s:v.dur*0.05,e:v.dur*0.2,c:"#2563eb"},
+    {n:"強調枠1",s:v.dur*0.15,e:v.dur*0.4,c:"#dc2626"},
+    {n:"拡大枠1",s:v.dur*0.18,e:v.dur*0.3,c:"#059669"}];
   $("home").classList.add("hidden");$("editor").classList.remove("hidden");
   $("edVideo").textContent=v.name;
   $("edWork").textContent=w?w.name:"未保存の編集作業";
+  var box=$("videoBox");box.innerHTML="";ed.vid=null;
+  if(v.url){
+    ed.vid=document.createElement("video");ed.vid.src=v.url;ed.vid.preload="auto";ed.vid.playsInline=true;
+    box.appendChild(ed.vid);
+    ed.vid.addEventListener("ended",function(){stopPlay();ed.pos=ed.dur;follow();renderTL();});
+  }
   renderTL();
 }
 $("btnEnd").onclick=function(){
@@ -224,14 +241,21 @@ $("btnEnd").onclick=function(){
   $("editor").classList.add("hidden");$("home").classList.remove("hidden");renderHome();
 };
 
-/* 再生 */
-function stopPlay(){if(ed.timer){clearInterval(ed.timer);ed.timer=null;}}
+/* 再生：実動画があればその再生位置を正とし、無ければ時計で進める */
+function stopPlay(){
+  if(ed.timer){clearInterval(ed.timer);ed.timer=null;}
+  if(ed.vid)ed.vid.pause();
+}
 $("btnPlay").onclick=function(){
   if(ed.timer)return;
   if(ed.pos>=ed.dur)ed.pos=0;
   var last=performance.now();
+  if(ed.vid){ed.vid.currentTime=ed.pos;ed.vid.play();}
   ed.timer=setInterval(function(){
-    var now=performance.now();ed.pos=Math.min(ed.dur,ed.pos+(now-last)/1000);last=now;
+    var now=performance.now();
+    if(ed.vid)ed.pos=Math.min(ed.dur,ed.vid.currentTime);
+    else ed.pos=Math.min(ed.dur,ed.pos+(now-last)/1000);
+    last=now;
     if(ed.pos>=ed.dur)stopPlay();
     follow();renderTL();
   },50);
@@ -284,10 +308,9 @@ function renderTL(){
 
   /* 同じ時間帯の要素は縦に並べる */
   var rows=[],lh="",lHid=false,rHid=false;
-  ed.els.map(function(el){return {el:el};}).sort(function(a,b){return a.el.s-b.el.s;}).forEach(function(p){
-    var r=0;while(rows[r]!==undefined&&rows[r]>p.el.s)r++;
-    rows[r]=p.el.e;
-    var el=p.el;
+  ed.els.slice().sort(function(a,b){return a.s-b.s;}).forEach(function(el){
+    var r=0;while(rows[r]!==undefined&&rows[r]>el.s)r++;
+    rows[r]=el.e;
     if(el.s<ed.vs)lHid=true;
     if(el.e>ed.ve)rHid=true;
     if(el.e<ed.vs||el.s>ed.ve)return;
@@ -315,12 +338,17 @@ function renderTL(){
   $("posTxt").textContent="再生位置 "+fmtT(ed.pos,1)+" / 総時間 "+fmtT(ed.dur,1);
   $("zoomTxt").textContent=(Math.round(sc*10)/10)+"倍"+(sc<1.001?"（全体表示）":"");
   $("zoom").value=Math.round(Math.log(sc)/Math.log(ed.dur/MIN_SPAN)*100);
-  $("videoText").textContent=fmtT(ed.pos,1);
+  if(!ed.vid)$("videoBox").textContent=fmtT(ed.pos,1);
 }
 
 /* マウス操作：再生位置の変更／表示範囲の移動／帯の操作 */
 var drag=null;
-function seek(e){var r=$("tl").getBoundingClientRect();ed.pos=Math.max(0,Math.min(ed.dur,x2t(e.clientX-r.left,r.width)));renderTL();}
+function seek(e){
+  var r=$("tl").getBoundingClientRect();
+  ed.pos=Math.max(0,Math.min(ed.dur,x2t(e.clientX-r.left,r.width)));
+  if(ed.vid)ed.vid.currentTime=ed.pos; /* 動画側の再生位置も変更 */
+  renderTL();
+}
 $("ruler").addEventListener("mousedown",function(e){drag={k:"seek"};userMoving=true;seek(e);});
 $("lanes").addEventListener("mousedown",function(e){drag={k:"pan",x:e.clientX,vs:ed.vs};userMoving=true;});
 $("bar").addEventListener("mousedown",function(e){
