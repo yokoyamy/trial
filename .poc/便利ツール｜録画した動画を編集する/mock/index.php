@@ -28,6 +28,7 @@ h2{font-size:16px;margin:0 0 8px}.wrap{max-width:1000px;margin:0 auto;padding:16
 .el{position:absolute;height:22px;border-radius:3px;color:#fff;font-size:11px;padding:2px 6px;overflow:hidden;white-space:nowrap}
 .end{position:absolute;top:0;bottom:0;border-left:2px solid #dc2626;font-size:10px;color:#dc2626;padding-left:3px}
 .cur{position:absolute;top:0;bottom:0;border-left:2px solid #e11d48;pointer-events:none}
+.cur i{position:absolute;top:0;left:-9px;width:16px;height:16px;background:#e11d48;border:2px solid #fff;border-radius:50%;box-shadow:0 0 2px #0006;cursor:ew-resize;pointer-events:auto}
 .bar{position:relative;height:30px;background:#e5e7eb;border:1px solid #9ca3af;border-radius:4px;margin:8px 6px 0;user-select:none}
 .mk{position:absolute;top:11px;height:8px;background:rgba(100,116,139,.45)}
 .pc{position:absolute;top:0;bottom:0;width:2px;background:rgba(225,29,72,.6)}
@@ -155,7 +156,7 @@ function draw(){
  if(ed.dur<=ed.ve)h+='<div class="end" style="left:'+Math.min(w-2,t2x(ed.dur,w))+'px">終了</div>';
  $("lanes").innerHTML=h;
  var o=$("tl").querySelector(".cur");if(o)o.remove();
- if(ed.pos>=ed.vs&&ed.pos<=ed.ve){var c=document.createElement("div");c.className="cur";c.style.left=t2x(ed.pos,w)+"px";$("tl").appendChild(c)}
+ if(ed.pos>=ed.vs&&ed.pos<=ed.ve){var c=document.createElement("div");c.className="cur";c.style.left=t2x(ed.pos,w)+"px";c.innerHTML="<i></i>";$("tl").appendChild(c)}
  h=ed.els.map(function(e){return'<div class="mk" style="left:'+e.s/ed.dur*100+'%;width:'+(e.e-e.s)/ed.dur*100+'%"></div>'}).join("");
  h+='<div class="pc" style="left:'+ed.pos/ed.dur*100+'%"></div><div class="view" style="left:'+ed.vs/ed.dur*100+'%;width:'+sp/ed.dur*100+'%"><div class="hd l" data-h="l"></div><div class="hd r" data-h="r"></div></div>';
  $("bar").innerHTML=h;
@@ -168,6 +169,7 @@ function draw(){
 
 function seek(e){var r=$("tl").getBoundingClientRect();ed.pos=Math.max(0,Math.min(ed.dur,x2t(e.clientX-r.left,r.width)));if(ed.vd)ed.vd.currentTime=ed.pos;draw()}
 $("ruler").onmousedown=function(e){drag={k:"seek"};seek(e)};
+$("tl").addEventListener("mousedown",function(e){if(e.target.tagName==="I"){drag={k:"seek"};e.preventDefault();e.stopPropagation()}},true);
 $("lanes").onmousedown=function(e){drag={k:"pan",x:e.clientX,s:ed.vs}};
 $("bar").onmousedown=function(e){var h=e.target.dataset.h,r=$("bar").getBoundingClientRect();
  if(h){drag={k:h,s:ed.vs,e:ed.ve};e.preventDefault();return}
