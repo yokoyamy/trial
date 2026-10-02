@@ -26,105 +26,104 @@ button.danger{color:#b91c1c}
 .video{height:430px;background:#111;position:relative;overflow:hidden;user-select:none}
 .video>video{width:100%;height:100%;object-fit:contain;display:block}
 #layer{position:absolute;inset:0}
-#svg{position:absolute;inset:0;width:100%;height:100%;z-index:15;overflow:visible;pointer-events:none}
-.obj{position:absolute;z-index:20;cursor:grab;user-select:none}
+#svg{position:absolute;inset:0;width:100%;height:100%;z-index:5;overflow:visible;pointer-events:none}
+.obj{position:absolute;z-index:10;cursor:grab;user-select:none}
 .obj.selected{outline:2px dashed #f59e0b}
-.obj.source{outline:3px solid #22c55e}
+.obj.source{outline:3px solid #ef4444}
 .obj.target{outline:3px dashed #38bdf8}
 .obj:active{cursor:grabbing}
-.port{position:absolute;width:14px;height:14px;border-radius:50%;background:#16a34a;border:2px solid #fff;z-index:40;display:none;cursor:crosshair}
+.port{position:absolute;width:12px;height:12px;border-radius:50%;background:#16a34a;border:2px solid #fff;z-index:20;display:none}
 .obj.selected .port{display:block}
-.port.t{left:50%;top:-7px;transform:translateX(-50%)}
-.port.r{right:-7px;top:50%;transform:translateY(-50%)}
-.port.b{left:50%;bottom:-7px;transform:translateX(-50%)}
-.port.l{left:-7px;top:50%;transform:translateY(-50%)}
-.resize{position:absolute;right:-6px;bottom:-6px;width:13px;height:13px;background:#f59e0b;cursor:nwse-resize;z-index:45}
-.line{fill:none;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
-.lineHit{fill:none;stroke:transparent;stroke-width:20;pointer-events:stroke;cursor:pointer}
-.temp{fill:none;stroke:#ef4444;stroke-width:3;stroke-dasharray:6 5;pointer-events:none}
+.port.t{left:50%;top:-6px;transform:translateX(-50%)}
+.port.r{right:-6px;top:50%;transform:translateY(-50%)}
+.port.b{left:50%;bottom:-6px;transform:translateX(-50%)}
+.port.l{left:-6px;top:50%;transform:translateY(-50%)}
+.resize{position:absolute;right:-5px;bottom:-5px;width:12px;height:12px;background:#f59e0b;cursor:nwse-resize;z-index:25}
+.line{fill:none;stroke-linecap:round;stroke-linejoin:round}
+.lineHit{fill:none;stroke:transparent;stroke-width:18;pointer-events:stroke}
+.temp{fill:none;stroke:#ef4444;stroke-width:3;stroke-linecap:round;stroke-dasharray:6 5}
 .timeline{border:1px solid #9ca3af;border-radius:5px;background:#fff;overflow:hidden}
-.tViewport{height:245px;overflow:hidden}
-.tInner{position:relative;width:100%;height:100%}
+.tViewport{height:245px;overflow-x:auto;overflow-y:auto}
+.tInner{position:relative;height:100%;min-width:100%}
 .ruler{height:34px;border-bottom:1px solid #aaa;position:relative}
-.tick{position:absolute;top:0;height:100%;border-left:1px solid #aaa;padding:4px 0 0 4px;font-size:10px;white-space:nowrap}
-.lanes{position:relative;height:210px}
+.tick{position:absolute;top:0;height:100%;border-left:1px solid #aaa;padding:4px;font-size:10px}
+.lanes{position:relative;min-height:190px}
 .clip{position:absolute;height:28px;border-radius:4px;color:#fff;padding:6px 12px;white-space:nowrap;cursor:grab;font-size:11px;overflow:visible}
 .clip.selected{outline:2px solid #f59e0b}
 .clip.skip{background:#6b7280!important}
-.ch{position:absolute;top:0;bottom:0;width:8px;background:#ffffff77;cursor:ew-resize;z-index:2}
-.ch.l{left:0}.ch.r{right:0}
+.ch{position:absolute;top:0;bottom:0;width:8px;background:#ffffff77;cursor:ew-resize}
+.ch.l{left:0}
+.ch.r{right:0}
 .playhead{position:absolute;top:0;bottom:0;width:2px;background:#e11d48;z-index:30;pointer-events:none}
 .playhead:before{content:"";position:absolute;left:-5px;top:0;width:12px;height:12px;border-radius:50%;background:#e11d48}
 .scaleWrap{display:flex;align-items:center;gap:6px}
 .scaleWrap input{width:150px}
-.menu{position:fixed;z-index:1000;width:330px;max-height:80vh;overflow:auto;background:#fff;border:1px solid #aaa;border-radius:5px;box-shadow:0 6px 20px #0003;padding:12px}
+.menu{position:fixed;z-index:1000;width:315px;max-height:80vh;overflow:auto;background:#fff;border:1px solid #aaa;border-radius:5px;box-shadow:0 6px 20px #0003;padding:12px}
 .menu h3{margin:0 0 8px;font-size:16px}
 .menu label{display:block;margin:8px 0}
 .menu input[type=text],.menu input[type=number],.menu select{width:100%;padding:5px}
 .choices{display:flex;gap:5px;flex-wrap:wrap;margin:5px 0}
-.choices button.active{background:#dbeafe;border-color:#2563eb}
 .colors{display:flex;gap:4px;flex-wrap:wrap}
 .color{width:22px;height:22px;padding:0}
 .color.active{outline:2px solid #2563eb}
 .sep{border:0;border-top:1px solid #ddd;margin:10px 0}
 .notice{background:#fef3c7;border:1px solid #f59e0b;border-radius:4px;padding:8px}
-.result{background:#ecfdf5;border:1px solid #22c55e;padding:8px;border-radius:4px;margin-top:8px}
 </style>
 </head>
 <body>
 
 <div id="home" class="wrap">
-  <div class="card">
-    <h2>動画編集</h2>
-    <p class="muted">編集対象の動画を明示的に選択してください。</p>
-    <div class="row">
-      <button id="addVideo" class="primary">動画を追加</button>
-      <input id="videoFile" type="file" accept="video/*" class="hidden">
-    </div>
-  </div>
-  <div class="card"><h3>動画一覧</h3><div id="videoList" class="list"></div></div>
-  <div class="card"><h3>保存済み編集作業</h3><div id="workList" class="list"></div></div>
-  <div class="card"><h3>編集結果動画</h3><div id="resultList" class="list"></div></div>
+<div class="card">
+<h2>動画編集</h2>
+<p class="muted">編集対象の動画を明示的に選択してください。</p>
+<div class="row">
+<button id="addVideo" class="primary">動画を追加</button>
+<input id="videoFile" type="file" accept="video/*" class="hidden">
+</div>
+</div>
+<div class="card"><h3>動画一覧</h3><div id="videoList" class="list"></div></div>
+<div class="card"><h3>保存済み編集作業</h3><div id="workList" class="list"></div></div>
+<div class="card"><h3>編集結果動画</h3><div id="resultList" class="list"></div></div>
 </div>
 
 <div id="editor" class="wrap hidden">
-  <div class="top row">
-    <b id="title"></b>
-    <span class="grow"></span>
-    <span id="dirty" class="hidden">未保存</span>
-    <button id="save">保存</button>
-    <button id="output">編集結果を動画にする</button>
-    <button id="exit">編集作業を終了する</button>
-  </div>
+<div class="top row">
+<b id="title"></b>
+<span class="grow"></span>
+<span id="dirty" class="hidden">未保存</span>
+<button id="save">保存</button>
+<button id="output">編集結果を動画にする</button>
+<button id="exit">編集作業を終了する</button>
+</div>
 
-  <div class="videoBox">
-    <div id="video" class="video"></div>
-  </div>
+<div class="videoBox">
+<div id="video" class="video"></div>
+</div>
 
-  <div class="card">
-    <div class="row">
-      <button id="play" class="primary">▶ 再生</button>
-      <button id="pause">⏸ 一時停止</button>
-      <button id="stop">■ 停止</button>
-      <span id="time" class="muted"></span>
-      <span class="grow"></span>
-      <div class="scaleWrap">
-        タイムラインスケール
-        <input id="scale" type="range" min="0.5" max="3" step="0.1" value="1">
-        <span id="scaleText">1.0x</span>
-      </div>
-    </div>
-    <p class="muted">動画領域またはタイムラインの空白部分を右クリックすると要素を追加できます。選択した要素の接続点から別の要素へドラッグすると接続線を作成できます。</p>
-  </div>
+<div class="card">
+<div class="row">
+<button id="play" class="primary">▶ 再生</button>
+<button id="pause">⏸ 一時停止</button>
+<button id="stop">■ 停止</button>
+<span id="time" class="muted"></span>
+<span class="grow"></span>
+<div class="scaleWrap">
+タイムラインスケール
+<input id="scale" type="range" min="1" max="3" step=".1" value="1">
+<span id="scaleText">1.0x</span>
+</div>
+</div>
+<p class="muted">動画領域またはタイムラインの空白部分を右クリックすると要素を追加できます。選択した要素の接続点から別の要素へドラッグすると接続線を作成できます。</p>
+</div>
 
-  <div id="timeline" class="timeline">
-    <div id="tViewport" class="tViewport">
-      <div id="tInner" class="tInner">
-        <div id="ruler" class="ruler"></div>
-        <div id="lanes" class="lanes"></div>
-      </div>
-    </div>
-  </div>
+<div id="timeline" class="timeline">
+<div id="tViewport" class="tViewport">
+<div id="tInner" class="tInner">
+<div id="ruler" class="ruler"></div>
+<div id="lanes" class="lanes"></div>
+</div>
+</div>
+</div>
 </div>
 
 <div id="popup"></div>
@@ -134,136 +133,82 @@ button.danger{color:#b91c1c}
 
 const $=id=>document.getElementById(id);
 const TYPES={comment:"コメント",highlight:"強調枠",zoom:"拡大枠",skip:"スキップ"};
-const COLORS=[
-  "#000000","#ffffff","#ef4444","#f97316","#eab308","#22c55e",
-  "#06b6d4","#3b82f6","#8b5cf6","#ec4899","#6b7280","#92400e"
-];
-
-let uid=1;
-let state=null;
-let playTimer=null;
-let connect=null;
+const COLORS=["#000000","#ffffff","#ef4444","#f97316","#eab308","#22c55e","#06b6d4","#3b82f6","#8b5cf6","#ec4899","#6b7280","#92400e"];
+let uid=1,state=null,playTimer=null,connect=null;
 
 const id=p=>p+(uid++);
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const fmt=v=>Math.floor(v/60)+":"+String(Math.floor(v%60)).padStart(2,"0");
 
-function mark(){
-  state.dirty=true;
-  $("dirty").classList.remove("hidden");
+function get(key){
+  try{return JSON.parse(localStorage.getItem(key)||"[]")}catch(e){return[]}
 }
-
-function clearPopup(){
-  $("popup").innerHTML="";
-}
-
-function object(idv){
-  return state.objects.find(o=>o.id===idv);
-}
-
-function selected(o){
-  return state.sel.includes(o.id);
-}
-
+function put(key,value){localStorage.setItem(key,JSON.stringify(value))}
+function mark(){state.dirty=true;$("dirty").classList.remove("hidden")}
+function clearPopup(){$("popup").innerHTML=""}
+function selected(o){return state.sel.includes(o.id)}
+function object(idv){return state.objects.find(o=>o.id===idv)}
+function active(o,t=state.pos){return o.type!=="skip"&&t>=o.s&&t<=o.e}
 function videoPoint(e){
   const r=$("video").getBoundingClientRect();
-  return {
-    x:clamp((e.clientX-r.left)/r.width,0,1),
-    y:clamp((e.clientY-r.top)/r.height,0,1)
-  };
+  return{x:clamp((e.clientX-r.left)/r.width,0,1),y:clamp((e.clientY-r.top)/r.height,0,1)}
 }
-
 function timePoint(e){
   const r=$("tInner").getBoundingClientRect();
-  return clamp((e.clientX-r.left)/r.width,0,1)*state.dur;
+  return clamp((e.clientX-r.left)/r.width,0,1)*state.dur
 }
-
 function setPosition(t){
   state.pos=clamp(t,0,state.dur);
   state.video.currentTime=state.pos;
   render();
 }
 
-function stopPlay(){
-  clearInterval(playTimer);
-  playTimer=null;
-  if(state?.video)state.video.pause();
-}
+$("addVideo").onclick=()=>$("videoFile").click();
 
-function findSkip(t){
-  return state.objects.find(o=>o.type==="skip"&&t>=o.s&&t<o.e);
-}
-
-function handlePlayback(){
-  if(!state||!state.video)return;
-  const v=state.video;
-  state.pos=v.currentTime;
-
-  const skip=findSkip(state.pos);
-  if(skip){
-    const end=Math.min(skip.e,state.dur);
-    v.currentTime=end;
-    state.pos=end;
-    if(!v.paused)requestAnimationFrame(()=>v.play().catch(()=>{}));
-  }
-
-  renderTimelineOnly();
-}
-
-function startPlay(){
-  if(!state)return;
-  const skip=findSkip(state.pos);
-  if(skip)setPosition(skip.e);
-
-  state.video.play().then(()=>{
-    clearInterval(playTimer);
-    playTimer=setInterval(handlePlayback,80);
-  }).catch(()=>{
-    alert("動画を再生できません。動画ファイルを選択し直してください。");
-  });
-}
+$("videoFile").onchange=e=>{
+  const f=e.target.files[0];
+  if(!f)return;
+  const v=document.createElement("video");
+  const url=URL.createObjectURL(f);
+  v.preload="metadata";
+  v.src=url;
+  v.onloadedmetadata=()=>{
+    const videos=get("videos");
+    if(videos.length>=10){
+      URL.revokeObjectURL(url);
+      alert("オリジナル動画は10件までです。既存動画を削除してください。");
+      return;
+    }
+    videos.push({id:id("v"),name:f.name,url,dur:v.duration});
+    put("videos",videos);
+    renderHome();
+  };
+};
 
 function renderHome(){
-  const videos=JSON.parse(localStorage.videos||"[]");
-  const works=JSON.parse(localStorage.works||"[]");
-  const results=JSON.parse(localStorage.results||"[]");
+  const videos=get("videos"),works=get("works"),results=get("results");
 
-  $("videoList").innerHTML=videos.length
-    ?videos.map(v=>`
-      <div class="item">
-        <b>${escapeHtml(v.name)}</b>
-        <div class="meta">${fmt(v.dur)}　オリジナル動画</div>
-        <div class="row" style="margin-top:6px">
-          <button data-open="${v.id}">新しい編集作業</button>
-          <button class="danger" data-delv="${v.id}">削除</button>
-        </div>
-      </div>`).join("")
-    :'<div class="muted">動画はありません。</div>';
+  $("videoList").innerHTML=videos.length?videos.map(v=>
+    `<div class="item"><b>${v.name}</b><div class="meta">${fmt(v.dur)}　オリジナル動画</div>
+    <div class="row" style="margin-top:6px">
+    <button data-open="${v.id}">新しい編集作業</button>
+    <button class="danger" data-delv="${v.id}">削除</button>
+    </div></div>`).join(""):"<div class=\"muted\">動画はありません。</div>";
 
-  $("workList").innerHTML=works.length
-    ?works.map(w=>`
-      <div class="item">
-        <b>${escapeHtml(w.name)}</b>
-        <div class="meta">${escapeHtml(w.videoName||"動画")}　${escapeHtml(w.saved||"")}</div>
-        <div class="row" style="margin-top:6px">
-          <button data-work="${w.id}">再開</button>
-          <button data-copy="${w.id}">複製</button>
-          <button class="danger" data-delw="${w.id}">削除</button>
-        </div>
-      </div>`).join("")
-    :'<div class="muted">保存済み編集作業はありません。</div>';
+  $("workList").innerHTML=works.length?works.map(w=>
+    `<div class="item"><b>${w.name}</b><div class="meta">${w.videoName}　${w.saved}</div>
+    <div class="row" style="margin-top:6px">
+    <button data-work="${w.id}">再開</button>
+    <button data-copy="${w.id}">複製</button>
+    <button class="danger" data-delw="${w.id}">削除</button>
+    </div></div>`).join(""):"<div class=\"muted\">保存済み編集作業はありません。</div>";
 
-  $("resultList").innerHTML=results.length
-    ?results.map(r=>`
-      <div class="item">
-        <b>${escapeHtml(r.name)}</b>
-        <div class="meta">${escapeHtml(r.source||"")}</div>
-        <div class="row" style="margin-top:6px">
-          <button data-result="${r.id}">確認</button>
-          <button class="danger" data-delr="${r.id}">削除</button>
-        </div>
-      </div>`).join("")
-    :'<div class="muted">編集結果動画はありません。</div>';
+  $("resultList").innerHTML=results.length?results.map(r=>
+    `<div class="item"><b>${r.name}</b><div class="meta">${r.source}</div>
+    <div class="row" style="margin-top:6px">
+    <button data-result="${r.id}">確認</button>
+    <button class="danger" data-delr="${r.id}">削除</button>
+    </div></div>`).join(""):"<div class=\"muted\">編集結果動画はありません。</div>";
 
   document.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>startNew(b.dataset.open));
   document.querySelectorAll("[data-work]").forEach(b=>b.onclick=()=>resumeWork(b.dataset.work));
@@ -274,124 +219,93 @@ function renderHome(){
   document.querySelectorAll("[data-result]").forEach(b=>b.onclick=()=>previewResult(b.dataset.result));
 }
 
-function escapeHtml(v){
-  return String(v??"").replace(/[&<>"']/g,c=>({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-  }[c]));
-}
-
 function startNew(vid){
-  const v=JSON.parse(localStorage.videos||"[]").find(x=>x.id===vid);
-  if(v)openEditor(v,{
-    id:null,
-    name:"新しい編集作業",
-    objects:[],
-    lines:[]
-  });
+  const v=get("videos").find(x=>x.id===vid);
+  if(v)openEditor(v,{id:null,name:"新しい編集作業",objects:[],lines:[]});
 }
-
 function resumeWork(wid){
-  const w=JSON.parse(localStorage.works||"[]").find(x=>x.id===wid);
+  const w=get("works").find(x=>x.id===wid);
   if(!w)return;
-  const v=JSON.parse(localStorage.videos||"[]").find(x=>x.id===w.videoId);
+  const v=get("videos").find(x=>x.id===w.videoId);
   if(v)openEditor(v,w);
 }
-
 function copyWork(wid){
-  const ws=JSON.parse(localStorage.works||"[]");
-  const w=ws.find(x=>x.id===wid);
+  const ws=get("works"),w=ws.find(x=>x.id===wid);
   if(!w)return;
-  if(ws.length>=10){
-    alert("編集作業は10件までです。既存の編集作業を削除してください。");
-    return;
-  }
+  if(ws.length>=10){alert("編集作業は10件までです。");return}
   const copy=JSON.parse(JSON.stringify(w));
   copy.id=id("w");
   copy.name=w.name+" のコピー";
   copy.saved=new Date().toLocaleString("ja-JP");
   ws.push(copy);
-  localStorage.works=JSON.stringify(ws);
+  put("works",ws);
   renderHome();
 }
-
 function deleteVideo(vid){
   if(!confirm("この動画を削除しますか？"))return;
-  const ws=JSON.parse(localStorage.works||"[]");
+  const ws=get("works");
   if(ws.some(w=>w.videoId===vid)&&!confirm("関連する編集作業があります。影響を確認したうえで削除しますか？"))return;
-  localStorage.videos=JSON.stringify(JSON.parse(localStorage.videos||"[]").filter(v=>v.id!==vid));
+  put("videos",get("videos").filter(v=>v.id!==vid));
   renderHome();
 }
-
 function deleteWork(wid){
   if(!confirm("この編集作業を削除しますか？"))return;
-  localStorage.works=JSON.stringify(JSON.parse(localStorage.works||"[]").filter(w=>w.id!==wid));
+  put("works",get("works").filter(w=>w.id!==wid));
   renderHome();
 }
-
 function deleteResult(rid){
   if(!confirm("この編集結果動画を削除しますか？"))return;
-  localStorage.results=JSON.stringify(JSON.parse(localStorage.results||"[]").filter(r=>r.id!==rid));
+  put("results",get("results").filter(r=>r.id!==rid));
   renderHome();
 }
-
 function previewResult(rid){
-  const r=JSON.parse(localStorage.results||"[]").find(x=>x.id===rid);
-  if(r?.url){
+  const r=get("results").find(x=>x.id===rid);
+  if(r&&r.url){
     const w=window.open("");
     if(w)w.document.write(`<video controls autoplay style="max-width:100%" src="${r.url}"></video>`);
   }else alert("このモックでは結果動画の実ファイル生成は行いません。");
 }
 
 function openEditor(v,w){
-  stopPlay();
-
   state={
-    videoId:v.id,
-    videoName:v.name,
-    name:w.name,
-    dur:Number(v.dur)||0,
-    url:v.url,
-    objects:JSON.parse(JSON.stringify(w.objects||[])),
-    lines:JSON.parse(JSON.stringify(w.lines||[])),
-    sel:[],
-    line:null,
-    pos:0,
-    scale:1,
-    dirty:false,
-    workId:w.id||null
+    videoId:v.id,name:w.name,dur:v.dur,url:v.url,
+    objects:w.objects||[],lines:w.lines||[],sel:[],line:null,
+    pos:0,scale:1,dirty:false,workId:w.id
   };
 
   $("home").classList.add("hidden");
   $("editor").classList.remove("hidden");
   $("title").textContent=v.name+" ／ "+w.name;
-  $("dirty").classList.add("hidden");
 
-  $("video").innerHTML='<video preload="auto" playsinline></video><div id="layer"><svg id="svg"></svg></div>';
+  $("video").innerHTML='<video preload="auto"></video><div id="layer"><svg id="svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div>';
   state.video=$("video").querySelector("video");
   state.video.src=v.url;
   state.video.load();
 
   state.video.onloadedmetadata=()=>{
-    if(Number.isFinite(state.video.duration)&&state.video.duration>0){
-      state.dur=state.video.duration;
-      state.pos=clamp(state.pos,0,state.dur);
-      render();
-    }
+    state.dur=state.video.duration||state.dur;
+    render();
   };
-
-  state.video.ontimeupdate=handlePlayback;
-
   state.video.onended=()=>{
     stopPlay();
     state.pos=state.dur;
     render();
   };
-
+  state.video.ontimeupdate=()=>{
+    if(!state.video.seeking){
+      state.pos=state.video.currentTime;
+      renderObjects();
+      renderLines();
+      renderTimelineOnly();
+    }
+  };
+  state.video.onerror=()=>alert("動画を読み込めませんでした。動画ファイルを選び直してください。");
   render();
 }
 
 function closeEditor(){
   stopPlay();
+  clearPopup();
   state=null;
   $("editor").classList.add("hidden");
   $("home").classList.remove("hidden");
@@ -405,30 +319,22 @@ function render(){
   renderTimeline();
   updateTime();
 }
-
 function updateTime(){
   $("time").textContent=fmt(state.pos)+" / "+fmt(state.dur);
 }
 
 function renderObjects(){
-  const layer=$("layer");
-  const svg=$("svg");
-
-  Array.from(layer.children).forEach(x=>{
-    if(x!==svg)x.remove();
-  });
+  const layer=$("layer"),svg=$("svg");
+  Array.from(layer.children).forEach(x=>{if(x!==svg)x.remove()});
 
   state.objects.forEach(o=>{
-    if(o.type==="skip")return;
-    if(state.pos<o.s||state.pos>=o.e)return;
+    if(o.type==="skip"||!active(o))return;
 
     const d=document.createElement("div");
-    d.className="obj"
-      +(selected(o)?" selected":"")
-      +(connect?.from===o.id?" source":"")
-      +(connect?.target===o.id?" target":"");
+    d.className="obj"+(selected(o)?" selected":"")+
+      (connect&&connect.from===o.id?" source":"")+
+      (connect&&connect.target===o.id?" target":"");
     d.dataset.id=o.id;
-
     d.style.left=o.x*100+"%";
     d.style.top=o.y*100+"%";
     d.style.width=o.w*100+"%";
@@ -440,9 +346,7 @@ function renderObjects(){
       d.style.fontSize=o.a.size+"px";
       d.style.fontFamily=o.a.font;
       d.style.background=o.a.fill?o.a.bg:"transparent";
-      d.style.border=o.a.border
-        ?`${o.a.borderWidth}px solid ${o.a.borderColor}`
-        :"none";
+      d.style.border=o.a.border?`${o.a.borderWidth}px solid ${o.a.borderColor}`:"none";
       d.style.padding="5px";
     }
 
@@ -452,9 +356,9 @@ function renderObjects(){
     }
 
     if(o.type==="zoom"){
-      d.style.border="3px solid #059669";
-      d.style.background="#05966922";
-      d.innerHTML=`<span style="background:#059669;color:#fff;padding:2px 5px">${o.a.zoom}倍</span>`;
+      d.style.border="3px solid #ef4444";
+      d.style.background="#ef444422";
+      d.innerHTML=`<span style="background:#ef4444;color:#fff;padding:2px 5px">${o.a.zoom}倍</span>`;
     }
 
     if(selected(o)){
@@ -464,12 +368,10 @@ function renderObjects(){
         p.dataset.port=s;
         d.appendChild(p);
       });
-
       const r=document.createElement("i");
       r.className="resize";
       d.appendChild(r);
     }
-
     layer.appendChild(d);
   });
 }
@@ -480,7 +382,6 @@ function anchor(o,s){
   if(s==="b")return{x:o.x+o.w/2,y:o.y+o.h};
   return{x:o.x,y:o.y+o.h/2};
 }
-
 function side(o,p){
   const a={
     t:Math.abs(p.y-o.y),
@@ -490,64 +391,43 @@ function side(o,p){
   };
   return Object.keys(a).sort((x,y)=>a[x]-a[y])[0];
 }
-
-function blockedSegment(a,b,ignore){
-  return state.objects.some(o=>{
-    if(o.type==="skip"||o.id===ignore.from||o.id===ignore.to)return false;
-    const minX=Math.min(a.x,b.x);
-    const maxX=Math.max(a.x,b.x);
-    const minY=Math.min(a.y,b.y);
-    const maxY=Math.max(a.y,b.y);
-    return maxX>=o.x&&minX<=o.x+o.w&&maxY>=o.y&&minY<=o.y+o.h;
-  });
+function blocked(a,b,skip){
+  return state.objects.filter(o=>
+    o.id!==skip.from&&o.id!==skip.to&&o.type!=="skip"&&active(o)
+  ).some(o=>
+    Math.max(a.x,b.x)>=o.x-.01&&
+    Math.min(a.x,b.x)<=o.x+o.w+.01&&
+    Math.max(a.y,b.y)>=o.y-.01&&
+    Math.min(a.y,b.y)<=o.y+o.h+.01
+  );
 }
 
 function pathFor(l){
-  const a=object(l.from);
-  const b=object(l.to);
-  if(!a||!b)return"";
+  const a=object(l.from),b=object(l.to);
+  if(!a||!b||!active(a)||!active(b))return "";
+  const p=anchor(a,l.fs),q=anchor(b,l.ts);
 
-  const p=anchor(a,l.fs);
-  const q=anchor(b,l.ts);
-
-  if(l.shape==="直線"){
+  if(l.shape==="直線")
     return `M${p.x*100} ${p.y*100} L${q.x*100} ${q.y*100}`;
-  }
 
   if(l.shape==="波線"){
     let d=`M${p.x*100} ${p.y*100}`;
-    const dx=q.x-p.x;
-    const dy=q.y-p.y;
-    const len=Math.hypot(dx,dy)||1;
-    const nx=-dy/len*.018;
-    const ny=dx/len*.018;
-
-    for(let i=1;i<=32;i++){
-      const t=i/32;
-      const o=i%2?1:-1;
+    const dx=q.x-p.x,dy=q.y-p.y,len=Math.hypot(dx,dy)||1;
+    const nx=-dy/len*.018,ny=dx/len*.018;
+    for(let i=1;i<=24;i++){
+      const t=i/24,o=i%2?1:-1;
       d+=` L${(p.x+dx*t+nx*o)*100} ${(p.y+dy*t+ny*o)*100}`;
     }
     return d;
   }
 
-  const mx=(p.x+q.x)/2;
-  const my=(p.y+q.y)/2;
-
-  const candidates=[
+  const mx=(p.x+q.x)/2,my=(p.y+q.y)/2;
+  const routes=[
     [p,{x:mx,y:p.y},{x:mx,y:q.y},q],
     [p,{x:p.x,y:my},{x:q.x,y:my},q]
   ];
-
-  const best=candidates.find(points=>{
-    for(let i=0;i<points.length-1;i++){
-      if(blockedSegment(points[i],points[i+1],l))return false;
-    }
-    return true;
-  })||candidates[0];
-
-  return best.map((x,i)=>
-    (i?"L":"M")+x.x*100+" "+x.y*100
-  ).join(" ");
+  const best=routes.find(v=>v.slice(0,-1).every((x,i)=>!blocked(x,v[i+1],l)))||routes[0];
+  return best.map((x,i)=>(i?"L":"M")+x.x*100+" "+x.y*100).join(" ");
 }
 
 function renderLines(){
@@ -555,16 +435,6 @@ function renderLines(){
   while(svg.firstChild)svg.firstChild.remove();
 
   state.lines.forEach(l=>{
-    const from=object(l.from);
-    const to=object(l.to);
-    if(!from||!to)return;
-
-    const visibleFrom=state.pos>=from.s&&state.pos<from.e;
-    const visibleTo=state.pos>=to.s&&state.pos<to.e;
-
-    /* 接続元・接続先のどちらかが非表示なら線も消す */
-    if(!visibleFrom||!visibleTo)return;
-
     const d=pathFor(l);
     if(!d)return;
 
@@ -577,22 +447,17 @@ function renderLines(){
     hit.dataset.line=l.id;
 
     p.setAttribute("d",d);
-    p.setAttribute("stroke",l.color);
-    p.setAttribute("stroke-width",l.width);
-    p.setAttribute("stroke-dasharray",l.dash);
+    p.setAttribute("stroke",l.color||"#ef4444");
+    p.setAttribute("stroke-width",l.width||3);
+    p.setAttribute("stroke-dasharray",l.dash||"");
     p.classList.add("line");
 
-    if(state.line===l.id){
-      p.setAttribute("stroke","#f59e0b");
-      p.setAttribute("stroke-width",Number(l.width)+2);
-    }
+    if(state.line===l.id)p.setAttribute("stroke","#f59e0b");
 
     if(l.end==="arrow"){
-      const defs=document.createElementNS("http://www.w3.org/2000/svg","defs");
       const marker=document.createElementNS("http://www.w3.org/2000/svg","marker");
-      const markerId="arrow_"+l.id;
-
-      marker.setAttribute("id",markerId);
+      const mid="a"+l.id;
+      marker.id=mid;
       marker.setAttribute("viewBox","0 0 10 10");
       marker.setAttribute("refX","9");
       marker.setAttribute("refY","5");
@@ -602,12 +467,13 @@ function renderLines(){
 
       const z=document.createElementNS("http://www.w3.org/2000/svg","path");
       z.setAttribute("d","M0 0L10 5L0 10Z");
-      z.setAttribute("fill",l.color);
-
+      z.setAttribute("fill",l.color||"#ef4444");
       marker.appendChild(z);
+
+      const defs=document.createElementNS("http://www.w3.org/2000/svg","defs");
       defs.appendChild(marker);
       g.appendChild(defs);
-      p.setAttribute("marker-end",`url(#${markerId})`);
+      p.setAttribute("marker-end",`url(#${mid})`);
     }
 
     g.appendChild(hit);
@@ -618,77 +484,60 @@ function renderLines(){
   if(connect){
     const p=document.createElementNS("http://www.w3.org/2000/svg","path");
     p.classList.add("temp");
-    p.setAttribute(
-      "d",
-      `M${connect.start.x*100} ${connect.start.y*100} L${connect.cur.x*100} ${connect.cur.y*100}`
-    );
+    p.setAttribute("d",`M${connect.start.x*100} ${connect.start.y*100} L${connect.cur.x*100} ${connect.cur.y*100}`);
     svg.appendChild(p);
   }
 }
 
 function renderTimelineOnly(){
   const ph=document.querySelector(".playhead");
-  if(ph)ph.style.left=(state.pos/state.dur*100)+"%";
+  if(ph)ph.style.left=state.pos/state.dur*100+"%";
   updateTime();
 }
 
-function niceStep(duration,scale){
-  const base=duration<=30?5:duration<=120?10:duration<=300?30:duration<=900?60:300;
-  return base/scale;
-}
-
 function renderTimeline(){
-  if(!state||!state.dur)return;
+  const vp=$("tViewport"),inner=$("tInner");
+  const width=Math.max(100,state.scale*100);
+  inner.style.width=width+"%";
 
-  const ruler=$("ruler");
-  const lanes=$("lanes");
-
+  const ruler=$("ruler"),lanes=$("lanes");
   ruler.innerHTML="";
-  lanes.innerHTML="";
 
-  const step=niceStep(state.dur,state.scale);
+  let step=5;
+  if(state.dur>30)step=10;
+  if(state.dur>120)step=30;
+  if(state.dur>300)step=60;
 
-  for(let t=0;t<=state.dur+0.0001;t+=step){
+  for(let t=0;t<=state.dur;t+=step){
     const x=document.createElement("i");
     x.className="tick";
-    x.style.left=(t/state.dur*100)+"%";
-    x.textContent=fmt(Math.min(t,state.dur));
+    x.style.left=t/state.dur*100+"%";
+    x.textContent=fmt(t);
     ruler.appendChild(x);
   }
 
   const rows=[];
+  lanes.innerHTML="";
 
   state.objects.forEach(o=>{
     let row=0;
-
-    while(rows[row]!=null&&rows[row]>o.s){
-      row++;
-    }
-
+    while(rows[row]!=null&&rows[row]>o.s)row++;
     rows[row]=o.e;
 
     const c=document.createElement("div");
-    c.className="clip"
-      +(selected(o)?" selected":"")
-      +(o.type==="skip"?" skip":"");
-
+    c.className="clip"+(selected(o)?" selected":"")+(o.type==="skip"?" skip":"");
     c.dataset.id=o.id;
-    c.style.left=(o.s/state.dur*100)+"%";
-    c.style.width=Math.max((o.e-o.s)/state.dur*100,1)+"%";
-    c.style.top=(8+row*32)+"px";
-
-    c.style.background=
-      o.type==="skip"?"#6b7280":
+    c.style.left=o.s/state.dur*100+"%";
+    c.style.width=Math.max((o.e-o.s)/state.dur*100,.8)+"%";
+    c.style.top=8+row*32+"px";
+    c.style.background=o.type==="skip"?"#6b7280":
       o.type==="comment"?"#2563eb":
-      o.type==="highlight"?"#ef4444":"#059669";
-
+      o.type==="highlight"?"#ef4444":"#ef4444";
     c.textContent=TYPES[o.type]+" "+fmt(o.s)+"-"+fmt(o.e);
 
-    const l=document.createElement("i");
-    const r=document.createElement("i");
+    const l=document.createElement("i"),r=document.createElement("i");
     l.className="ch l";
     r.className="ch r";
-
     c.prepend(l);
     c.appendChild(r);
     lanes.appendChild(c);
@@ -696,63 +545,31 @@ function renderTimeline(){
 
   const ph=document.createElement("div");
   ph.className="playhead";
-  ph.style.left=(state.pos/state.dur*100)+"%";
+  ph.style.left=state.pos/state.dur*100+"%";
   lanes.appendChild(ph);
 
   $("scaleText").textContent=state.scale.toFixed(1)+"x";
 }
 
 function addObject(type,t,p){
-  const length=Math.min(5,state.dur);
-  const s=clamp(t,0,Math.max(0,state.dur-length));
-
+  const s=clamp(t,0,Math.max(0,state.dur-5));
   const o={
-    id:id("e"),
-    type,
-    s,
-    e:Math.min(state.dur,s+length),
-    x:clamp(p.x-.16,0,.68),
-    y:clamp(p.y-.1,0,.7),
-    w:.32,
-    h:.2,
-    a:{}
+    id:id("e"),type,s,e:Math.min(state.dur,s+5),
+    x:clamp(p.x-.16,0,.68),y:clamp(p.y-.1,0,.7),
+    w:.32,h:.2,a:{}
   };
 
-  if(type==="comment"){
-    o.a={
-      text:"コメント",
-      border:true,
-      borderWidth:2,
-      borderColor:"#2563eb",
-      textColor:"#000000",
-      fill:true,
-      bg:"#ffffff",
-      size:18,
-      font:"Arial"
-    };
-  }
+  if(type==="comment")
+    o.a={text:"コメント",border:true,borderWidth:2,borderColor:"#2563eb",textColor:"#000",fill:true,bg:"#fff",size:18,font:"Arial"};
 
-  if(type==="highlight"){
-    o.a={
-      width:3,
-      color:"#ef4444",
-      fill:true,
-      fillColor:"#ef444455",
-      style:"solid",
-      shape:"直線"
-    };
-  }
+  if(type==="highlight")
+    o.a={width:3,color:"#ef4444",fill:true,fillColor:"#ef444455",style:"solid",shape:"直線"};
 
-  if(type==="zoom"){
+  if(type==="zoom")
     o.a={zoom:1.5};
-  }
 
-  if(type==="skip"){
-    o.w=0;
-    o.h=0;
-    o.x=0;
-    o.y=0;
-  }
+  if(type==="skip")
+    o.x=0,o.y=0,o.w=1,o.h=.1;
 
   state.objects.push(o);
   state.sel=[o.id];
@@ -763,215 +580,85 @@ function addObject(type,t,p){
 }
 
 function addMenu(x,y,t,p){
-  menu(x,y,`
-    <h3>要素を追加</h3>
-    <div class="muted">開始位置 ${fmt(t)}</div>
-    <div class="choices">
-      <button data-add="comment">コメント</button>
-      <button data-add="highlight">強調枠</button>
-      <button data-add="zoom">拡大枠</button>
-      <button data-add="skip">スキップ</button>
-    </div>
-  `);
-
-  document.querySelectorAll("[data-add]").forEach(b=>{
-    b.onclick=()=>addObject(b.dataset.add,t,p);
-  });
+  menu(x,y,`<h3>要素を追加</h3>
+  <div class="muted">開始位置 ${fmt(t)}</div>
+  <div class="choices">
+  <button data-add="comment">コメント</button>
+  <button data-add="highlight">強調枠</button>
+  <button data-add="zoom">拡大枠</button>
+  <button data-add="skip">スキップ</button>
+  </div>`);
+  document.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>addObject(b.dataset.add,t,p));
 }
 
 function menu(x,y,html){
   clearPopup();
   $("popup").innerHTML=`<div class="menu">${html}</div>`;
-
   const m=$("popup").firstElementChild;
-  m.style.left=Math.max(8,Math.min(x,innerWidth-m.offsetWidth-8))+"px";
-  m.style.top=Math.max(8,Math.min(y,innerHeight-m.offsetHeight-8))+"px";
+  m.style.left=Math.min(x,innerWidth-m.offsetWidth-8)+"px";
+  m.style.top=Math.min(y,innerHeight-m.offsetHeight-8)+"px";
 }
 
 function colorButtons(prop,current){
-  return COLORS.map(c=>`
-    <button
-      class="color ${c.toLowerCase()===String(current||"").toLowerCase()?"active":""}"
-      data-cprop="${prop}"
-      data-c="${c}"
-      title="${c}"
-      style="background:${c}">
-    </button>
-  `).join("");
+  return COLORS.map(c=>`<button class="color ${c===current?"active":""}" data-cprop="${prop}" data-c="${c}" style="background:${c}"></button>`).join("");
 }
 
 function elementMenu(x,y,o){
   let h=`<h3>${TYPES[o.type]}</h3>`;
 
-  h+=`
-    <label>開始時間
-      <input id="start" type="number" min="0" max="${state.dur}" step="0.1" value="${o.s}">
-    </label>
-    <label>終了時間
-      <input id="endTime" type="number" min="0" max="${state.dur}" step="0.1" value="${o.e}">
-    </label>
-  `;
+  if(o.type==="comment")
+    h+=`<label>本文<input id="text" type="text" value="${o.a.text.replace(/"/g,"&quot;")}"></label>
+    <label>文字サイズ<input id="size" type="number" min="8" max="72" value="${o.a.size}"></label>
+    <label>フォント<select id="font"><option>Arial</option><option>serif</option><option>sans-serif</option><option>monospace</option></select></label>
+    <label>線<input id="border" type="checkbox" ${o.a.border?"checked":""}></label>
+    <label>塗り潰し<input id="fill" type="checkbox" ${o.a.fill?"checked":""}></label>
+    <div>文字色</div><div class="colors">${colorButtons("textColor",o.a.textColor)}</div>
+    <div>線色</div><div class="colors">${colorButtons("borderColor",o.a.borderColor)}</div>
+    <div>背景色</div><div class="colors">${colorButtons("bg",o.a.bg)}</div>`;
 
-  if(o.type==="comment"){
-    h+=`
-      <label>本文<input id="text" type="text" value="${escapeHtml(o.a.text)}"></label>
-      <label>文字サイズ<input id="size" type="number" min="8" max="72" value="${o.a.size}"></label>
-      <label>フォント
-        <select id="font">
-          <option ${o.a.font==="Arial"?"selected":""}>Arial</option>
-          <option ${o.a.font==="serif"?"selected":""}>serif</option>
-          <option ${o.a.font==="sans-serif"?"selected":""}>sans-serif</option>
-          <option ${o.a.font==="monospace"?"selected":""}>monospace</option>
-        </select>
-      </label>
-      <label>線<input id="border" type="checkbox" ${o.a.border?"checked":""}></label>
-      <div>線の太さ</div>
-      <div class="choices">${[1,2,3,5].map(v=>`
-        <button data-border-width="${v}" class="${o.a.borderWidth===v?"active":""}">${v}px</button>
-      `).join("")}</div>
-      <label>塗り潰し<input id="fill" type="checkbox" ${o.a.fill?"checked":""}></label>
-      <div>文字色</div>
-      <div class="colors">${colorButtons("textColor",o.a.textColor)}</div>
-      <div>線色</div>
-      <div class="colors">${colorButtons("borderColor",o.a.borderColor)}</div>
-      <div>背景色</div>
-      <div class="colors">${colorButtons("bg",o.a.bg)}</div>
-    `;
-  }
+  if(o.type==="highlight")
+    h+=`<div>線の太さ</div><div class="choices">${[2,3,5,8].map(v=>`<button data-width="${v}">${v}px</button>`).join("")}</div>
+    <div>線種</div><div class="choices">${[["solid","実線"],["dotted","点線"],["dashed","破線"],["dashdot","一点鎖線"]].map(v=>`<button data-hstyle="${v[0]}">${v[1]}</button>`).join("")}</div>
+    <div>線形</div><div class="choices">${["直線","折れ線","波線"].map(v=>`<button data-hshape="${v}">${v}</button>`).join("")}</div>
+    <label>塗り潰し<input id="hfill" type="checkbox" ${o.a.fill?"checked":""}></label>
+    <label>塗り潰し色<input id="hcolor" type="color" value="${o.a.fillColor.substring(0,7)}"></label>
+    <div>線色</div><div class="colors">${colorButtons("color",o.a.color)}</div>`;
 
-  if(o.type==="highlight"){
-    h+=`
-      <div>線の太さ</div>
-      <div class="choices">
-        ${[2,3,5,8].map(v=>`
-          <button data-width="${v}" class="${o.a.width===v?"active":""}">${v}px</button>
-        `).join("")}
-      </div>
-      <div>線種</div>
-      <div class="choices">
-        ${[
-          ["solid","実線"],
-          ["dotted","点線"],
-          ["dashed","破線"],
-          ["dashdot","一点鎖線"]
-        ].map(v=>`
-          <button data-hstyle="${v[0]}" class="${o.a.style===v[0]?"active":""}">${v[1]}</button>
-        `).join("")}
-      </div>
-      <div>線形</div>
-      <div class="choices">
-        ${["直線","折れ線","波線"].map(v=>`
-          <button data-hshape="${v}" class="${o.a.shape===v?"active":""}">${v}</button>
-        `).join("")}
-      </div>
-      <label>塗り潰し<input id="hfill" type="checkbox" ${o.a.fill?"checked":""}></label>
-      <div>塗り潰し色</div>
-      <div class="colors">${colorButtons("fillColor",o.a.fillColor)}</div>
-      <div>線色</div>
-      <div class="colors">${colorButtons("color",o.a.color)}</div>
-    `;
-  }
+  if(o.type==="zoom")
+    h+=`<label>拡大倍率<select id="zoom">
+    <option value="1.25">1.25倍</option><option value="1.5">1.5倍</option>
+    <option value="2">2倍</option><option value="3">3倍</option></select></label>`;
 
-  if(o.type==="zoom"){
-    h+=`
-      <label>拡大倍率
-        <select id="zoom">
-          ${["1.25","1.5","2","3"].map(v=>`
-            <option value="${v}" ${Number(o.a.zoom)===Number(v)?"selected":""}>${v}倍</option>
-          `).join("")}
-        </select>
-      </label>
-    `;
-  }
-
-  if(o.type==="skip"){
-    h+=`<div class="notice">スキップは動画領域には表示されません。再生時はこの範囲を飛ばします。</div>`;
-  }
+  if(o.type==="skip")
+    h+=`<div class="notice">スキップは動画領域には表示されません。</div>`;
 
   h+=`<hr class="sep"><button id="del" class="danger">この要素を削除</button>`;
-
   menu(x,y,h);
 
-  $("start").onchange=e=>{
-    o.s=clamp(Number(e.target.value)||0,0,o.e-.1);
-    mark();render();
-  };
+  $("text")?.addEventListener("input",e=>{o.a.text=e.target.value;mark();render()});
+  $("size")?.addEventListener("change",e=>{o.a.size=+e.target.value;mark();render()});
+  $("font")?.addEventListener("change",e=>{o.a.font=e.target.value;mark();render()});
+  $("border")?.addEventListener("change",e=>{o.a.border=e.target.checked;mark();render()});
+  $("fill")?.addEventListener("change",e=>{o.a.fill=e.target.checked;mark();render()});
+  $("hfill")?.addEventListener("change",e=>{o.a.fill=e.target.checked;mark();render()});
+  $("hcolor")?.addEventListener("input",e=>{o.a.fillColor=e.target.value+"55";mark();render()});
+  $("zoom")?.addEventListener("change",e=>{o.a.zoom=+e.target.value;mark();render()});
 
-  $("endTime").onchange=e=>{
-    o.e=clamp(Number(e.target.value)||0,o.s+.1,state.dur);
-    mark();render();
-  };
-
-  $("text")?.addEventListener("input",e=>{
-    o.a.text=e.target.value;mark();render();
+  document.querySelectorAll("[data-cprop]").forEach(b=>b.onclick=()=>{
+    o.a[b.dataset.cprop]=b.dataset.c;
+    mark();render();elementMenu(x,y,o);
   });
-
-  $("size")?.addEventListener("change",e=>{
-    o.a.size=clamp(+e.target.value,8,72);mark();render();
+  document.querySelectorAll("[data-width]").forEach(b=>b.onclick=()=>{
+    o.a.width=+b.dataset.width;
+    mark();render();elementMenu(x,y,o);
   });
-
-  $("font")?.addEventListener("change",e=>{
-    o.a.font=e.target.value;mark();render();
+  document.querySelectorAll("[data-hstyle]").forEach(b=>b.onclick=()=>{
+    o.a.style=b.dataset.hstyle;
+    mark();render();elementMenu(x,y,o);
   });
-
-  $("border")?.addEventListener("change",e=>{
-    o.a.border=e.target.checked;mark();render();
-  });
-
-  $("fill")?.addEventListener("change",e=>{
-    o.a.fill=e.target.checked;mark();render();
-  });
-
-  $("hfill")?.addEventListener("change",e=>{
-    o.a.fill=e.target.checked;mark();render();
-  });
-
-  $("zoom")?.addEventListener("change",e=>{
-    o.a.zoom=+e.target.value;mark();render();
-  });
-
-  document.querySelectorAll("[data-border-width]").forEach(b=>{
-    b.onclick=()=>{
-      o.a.borderWidth=+b.dataset.borderWidth;
-      mark();render();elementMenu(x,y,o);
-    };
-  });
-
-  document.querySelectorAll("[data-cprop]").forEach(b=>{
-    b.onclick=()=>{
-      const prop=b.dataset.cprop;
-      let color=b.dataset.c;
-
-      if(prop==="fillColor"){
-        color=color+"55";
-      }
-
-      o.a[prop]=color;
-      mark();
-      render();
-      elementMenu(x,y,o);
-    };
-  });
-
-  document.querySelectorAll("[data-width]").forEach(b=>{
-    b.onclick=()=>{
-      o.a.width=+b.dataset.width;
-      mark();render();elementMenu(x,y,o);
-    };
-  });
-
-  document.querySelectorAll("[data-hstyle]").forEach(b=>{
-    b.onclick=()=>{
-      o.a.style=b.dataset.hstyle;
-      mark();render();elementMenu(x,y,o);
-    };
-  });
-
-  document.querySelectorAll("[data-hshape]").forEach(b=>{
-    b.onclick=()=>{
-      o.a.shape=b.dataset.hshape;
-      mark();render();elementMenu(x,y,o);
-    };
+  document.querySelectorAll("[data-hshape]").forEach(b=>b.onclick=()=>{
+    o.a.shape=b.dataset.hshape;
+    mark();render();elementMenu(x,y,o);
   });
 
   $("del").onclick=()=>{
@@ -988,111 +675,37 @@ function elementMenu(x,y,o){
 function lineMenu(x,y,l){
   const sides=[["t","上"],["r","右"],["b","下"],["l","左"]];
 
-  menu(x,y,`
-    <h3>接続線</h3>
+  menu(x,y,`<h3>接続線</h3>
+  <div>線形</div>
+  <div class="choices">${["直線","折れ線","波線"].map(v=>`<button data-shape="${v}">${v}</button>`).join("")}</div>
+  <div>線種</div>
+  <div class="choices">${[["","実線"],["2 5","点線"],["8 5","破線"],["10 5 2 5","一点鎖線"]].map(v=>`<button data-dash="${v[0]}">${v[1]}</button>`).join("")}</div>
+  <label>太さ<select id="lw"><option>2</option><option selected>3</option><option>5</option><option>8</option></select></label>
+  <div>接続元</div>
+  <div class="choices">${sides.map(v=>`<button data-fs="${v[0]}">${v[1]}</button>`).join("")}</div>
+  <div>接続先</div>
+  <div class="choices">${sides.map(v=>`<button data-ts="${v[0]}">${v[1]}</button>`).join("")}</div>
+  <label>終端<select id="end"><option value="none">なし</option><option value="arrow">矢印</option></select></label>
+  <div>色</div><div class="colors">${colorButtons("color",l.color)}</div>
+  <hr class="sep"><button id="dell" class="danger">接続線を削除</button>`);
 
-    <div>線形</div>
-    <div class="choices">
-      ${["直線","折れ線","波線"].map(v=>`
-        <button data-shape="${v}" class="${l.shape===v?"active":""}">${v}</button>
-      `).join("")}
-    </div>
-
-    <div>線種</div>
-    <div class="choices">
-      ${[
-        ["","実線"],
-        ["2 5","点線"],
-        ["8 5","破線"],
-        ["10 5 2 5","一点鎖線"]
-      ].map(v=>`
-        <button data-dash="${v[0]}" class="${l.dash===v[0]?"active":""}">${v[1]}</button>
-      `).join("")}
-    </div>
-
-    <div>太さ</div>
-    <div class="choices">
-      ${[2,3,5,8].map(v=>`
-        <button data-lw="${v}" class="${l.width===v?"active":""}">${v}px</button>
-      `).join("")}
-    </div>
-
-    <div>色</div>
-    <div class="colors">${colorButtons("color",l.color)}</div>
-
-    <div>接続元</div>
-    <div class="choices">
-      ${sides.map(v=>`
-        <button data-fs="${v[0]}" class="${l.fs===v[0]?"active":""}">${v[1]}</button>
-      `).join("")}
-    </div>
-
-    <div>接続先</div>
-    <div class="choices">
-      ${sides.map(v=>`
-        <button data-ts="${v[0]}" class="${l.ts===v[0]?"active":""}">${v[1]}</button>
-      `).join("")}
-    </div>
-
-    <label>終端
-      <select id="lineEnd">
-        <option value="none" ${l.end==="none"?"selected":""}>なし</option>
-        <option value="arrow" ${l.end==="arrow"?"selected":""}>矢印</option>
-      </select>
-    </label>
-
-    <hr class="sep">
-    <button id="dell" class="danger">接続線を削除</button>
-  `);
-
-  document.querySelectorAll("[data-shape]").forEach(b=>{
-    b.onclick=()=>{
-      l.shape=b.dataset.shape;
-      mark();render();lineMenu(x,y,l);
-    };
+  document.querySelectorAll("[data-shape]").forEach(b=>b.onclick=()=>{
+    l.shape=b.dataset.shape;mark();render();lineMenu(x,y,l);
   });
-
-  document.querySelectorAll("[data-dash]").forEach(b=>{
-    b.onclick=()=>{
-      l.dash=b.dataset.dash;
-      mark();render();lineMenu(x,y,l);
-    };
+  document.querySelectorAll("[data-dash]").forEach(b=>b.onclick=()=>{
+    l.dash=b.dataset.dash;mark();render();lineMenu(x,y,l);
   });
-
-  document.querySelectorAll("[data-lw]").forEach(b=>{
-    b.onclick=()=>{
-      l.width=+b.dataset.lw;
-      mark();render();lineMenu(x,y,l);
-    };
+  document.querySelectorAll("[data-fs]").forEach(b=>b.onclick=()=>{
+    l.fs=b.dataset.fs;mark();render();lineMenu(x,y,l);
   });
-
-  document.querySelectorAll("[data-fs]").forEach(b=>{
-    b.onclick=()=>{
-      l.fs=b.dataset.fs;
-      mark();render();lineMenu(x,y,l);
-    };
+  document.querySelectorAll("[data-ts]").forEach(b=>b.onclick=()=>{
+    l.ts=b.dataset.ts;mark();render();lineMenu(x,y,l);
   });
-
-  document.querySelectorAll("[data-ts]").forEach(b=>{
-    b.onclick=()=>{
-      l.ts=b.dataset.ts;
-      mark();render();lineMenu(x,y,l);
-    };
+  document.querySelectorAll("[data-cprop]").forEach(b=>b.onclick=()=>{
+    l[b.dataset.cprop]=b.dataset.c;mark();render();lineMenu(x,y,l);
   });
-
-  document.querySelectorAll("[data-cprop]").forEach(b=>{
-    b.onclick=()=>{
-      l[b.dataset.cprop]=b.dataset.c;
-      mark();render();lineMenu(x,y,l);
-    };
-  });
-
-  $("lineEnd").onchange=e=>{
-    l.end=e.target.value;
-    mark();
-    render();
-  };
-
+  $("lw").onchange=e=>{l.width=+e.target.value;mark();render()};
+  $("end").onchange=e=>{l.end=e.target.value;mark();render()};
   $("dell").onclick=()=>{
     state.lines=state.lines.filter(v=>v.id!==l.id);
     state.line=null;
@@ -1102,10 +715,6 @@ function lineMenu(x,y,l){
   };
 }
 
-function objectLine(idv){
-  return state.lines.find(l=>l.id===idv);
-}
-
 $("video").addEventListener("contextmenu",e=>{
   e.preventDefault();
 
@@ -1113,10 +722,12 @@ $("video").addEventListener("contextmenu",e=>{
   const obj=e.target.closest(".obj");
 
   if(line){
+    const l=state.lines.find(v=>v.id===line.dataset.line);
+    if(!l)return;
     state.sel=[];
-    state.line=line.dataset.line;
+    state.line=l.id;
     render();
-    lineMenu(e.clientX,e.clientY,objectLine(line.dataset.line));
+    lineMenu(e.clientX,e.clientY,l);
     return;
   }
 
@@ -1129,9 +740,6 @@ $("video").addEventListener("contextmenu",e=>{
     return;
   }
 
-  state.sel=[];
-  state.line=null;
-  render();
   addMenu(e.clientX,e.clientY,state.pos,videoPoint(e));
 });
 
@@ -1141,26 +749,27 @@ $("video").addEventListener("pointerdown",e=>{
   const port=e.target.closest(".port");
 
   if(port){
-    const objEl=e.target.closest(".obj");
-    const source=object(objEl.dataset.id);
+    const n=e.target.closest(".obj");
+    const o=object(n.dataset.id);
 
     connect={
-      from:source.id,
-      start:anchor(source,port.dataset.port),
-      cur:anchor(source,port.dataset.port),
+      from:o.id,
+      start:anchor(o,port.dataset.port),
+      cur:anchor(o,port.dataset.port),
       target:null
     };
 
+    render();
+
     const move=ev=>{
+      if(!connect)return;
       connect.cur=videoPoint(ev);
 
-      const targetEl=document.elementsFromPoint(ev.clientX,ev.clientY)
+      const targetNode=document.elementsFromPoint(ev.clientX,ev.clientY)
         .find(x=>x.classList?.contains("obj"));
 
-      connect.target=
-        targetEl&&targetEl.dataset.id!==source.id
-          ?object(targetEl.dataset.id)
-          :null;
+      connect.target=targetNode&&targetNode.dataset.id!==o.id
+        ?object(targetNode.dataset.id):null;
 
       renderObjects();
       renderLines();
@@ -1171,14 +780,14 @@ $("video").addEventListener("pointerdown",e=>{
       window.removeEventListener("pointerup",up);
 
       if(connect?.target){
-        const target=connect.target;
+        const t=connect.target;
 
         state.lines.push({
           id:id("l"),
-          from:source.id,
-          to:target.id,
+          from:o.id,
+          to:t.id,
           fs:port.dataset.port,
-          ts:side(target,connect.cur),
+          ts:side(t,connect.cur),
           shape:"直線",
           dash:"",
           width:3,
@@ -1202,34 +811,23 @@ $("video").addEventListener("pointerdown",e=>{
 
   const resize=e.target.closest(".resize");
   const n=e.target.closest(".obj");
-
   if(!n)return;
 
   const o=object(n.dataset.id);
-
   state.sel=e.shiftKey
-    ?(state.sel.includes(o.id)
-      ?state.sel.filter(v=>v!==o.id)
-      :[...state.sel,o.id])
+    ?(state.sel.includes(o.id)?state.sel.filter(v=>v!==o.id):[...state.sel,o.id])
     :[o.id];
 
   state.line=null;
   render();
 
-  if(resize){
-    resizeObject(o,e);
-    return;
-  }
-
+  if(resize){resizeObject(o,e);return}
   moveObject(o,e);
 });
 
 function moveObject(o,e){
   const r=$("video").getBoundingClientRect();
-  const sx=e.clientX;
-  const sy=e.clientY;
-  const ox=o.x;
-  const oy=o.y;
+  const sx=e.clientX,sy=e.clientY,ox=o.x,oy=o.y;
 
   const mv=ev=>{
     o.x=clamp(ox+(ev.clientX-sx)/r.width,0,1-o.w);
@@ -1249,10 +847,7 @@ function moveObject(o,e){
 
 function resizeObject(o,e){
   const r=$("video").getBoundingClientRect();
-  const sx=e.clientX;
-  const sy=e.clientY;
-  const ow=o.w;
-  const oh=o.h;
+  const sx=e.clientX,sy=e.clientY,ow=o.w,oh=o.h;
 
   const mv=ev=>{
     o.w=clamp(ow+(ev.clientX-sx)/r.width,.05,1-o.x);
@@ -1279,37 +874,25 @@ $("lanes").addEventListener("pointerdown",e=>{
   }
 
   const o=object(c.dataset.id);
-
   state.sel=e.shiftKey
-    ?(state.sel.includes(o.id)
-      ?state.sel.filter(v=>v!==o.id)
-      :[...state.sel,o.id])
+    ?(state.sel.includes(o.id)?state.sel.filter(v=>v!==o.id):[...state.sel,o.id])
     :[o.id];
 
   state.line=null;
   render();
 
   const h=e.target.closest(".ch");
-
-  if(h){
-    resizeTime(o,h.classList.contains("l"),e);
-    return;
-  }
-
+  if(h){resizeTime(o,h.classList.contains("l"),e);return}
   moveTime(o,e);
 });
 
 function timelineSeek(e){
   const r=$("tInner").getBoundingClientRect();
-  setPosition(
-    clamp((e.clientX-r.left)/r.width,0,1)*state.dur
-  );
+  setPosition(clamp((e.clientX-r.left)/r.width,0,1)*state.dur);
 
   const mv=ev=>{
     const q=$("tInner").getBoundingClientRect();
-    setPosition(
-      clamp((ev.clientX-q.left)/q.width,0,1)*state.dur
-    );
+    setPosition(clamp((ev.clientX-q.left)/q.width,0,1)*state.dur);
   };
 
   const up=()=>{
@@ -1323,15 +906,12 @@ function timelineSeek(e){
 
 function moveTime(o,e){
   const r=$("tInner").getBoundingClientRect();
-  const sx=e.clientX;
-  const os=o.s;
-  const oe=o.e;
-  const duration=oe-os;
+  const sx=e.clientX,os=o.s,oe=o.e,d=oe-os;
 
   const mv=ev=>{
-    const delta=(ev.clientX-sx)/r.width*state.dur;
-    o.s=clamp(os+delta,0,state.dur-duration);
-    o.e=o.s+duration;
+    const dt=(ev.clientX-sx)/r.width*state.dur;
+    o.s=clamp(os+dt,0,state.dur-d);
+    o.e=o.s+d;
     mark();
     render();
   };
@@ -1347,19 +927,12 @@ function moveTime(o,e){
 
 function resizeTime(o,left,e){
   const r=$("tInner").getBoundingClientRect();
-  const sx=e.clientX;
-  const os=o.s;
-  const oe=o.e;
+  const sx=e.clientX,os=o.s,oe=o.e;
 
   const mv=ev=>{
-    const delta=(ev.clientX-sx)/r.width*state.dur;
-
-    if(left){
-      o.s=clamp(os+delta,0,oe-.1);
-    }else{
-      o.e=clamp(oe+delta,o.s+.1,state.dur);
-    }
-
+    const dt=(ev.clientX-sx)/r.width*state.dur;
+    if(left)o.s=clamp(os+dt,0,oe-.1);
+    else o.e=clamp(oe+dt,o.s+.1,state.dur);
     mark();
     render();
   };
@@ -1373,157 +946,170 @@ function resizeTime(o,left,e){
   window.addEventListener("pointerup",up);
 }
 
-$("addVideo").onclick=()=>$("videoFile").click();
+$("timeline").addEventListener("contextmenu",e=>{
+  e.preventDefault();
+  const c=e.target.closest(".clip");
 
-$("videoFile").onchange=e=>{
-  const f=e.target.files[0];
-  if(!f)return;
+  if(c){
+    const o=object(c.dataset.id);
+    state.sel=[o.id];
+    state.line=null;
+    render();
+    elementMenu(e.clientX,e.clientY,o);
+  }else{
+    addMenu(e.clientX,e.clientY,timePoint(e),{x:.25,y:.25});
+  }
+});
 
-  const videos=JSON.parse(localStorage.videos||"[]");
+$("ruler").addEventListener("pointerdown",timelineSeek);
 
-  if(videos.length>=10){
-    alert("オリジナル動画は10件までです。既存動画を削除してください。");
-    e.target.value="";
+$("scale").oninput=e=>{
+  const vp=$("tViewport");
+  const oldScale=state.scale;
+  const centerTime=(vp.scrollLeft+vp.clientWidth/2)/(Math.max(100,oldScale*100)/100)/vp.clientWidth*state.dur;
+
+  state.scale=+e.target.value;
+  renderTimeline();
+
+  const newWidth=vp.clientWidth*state.scale;
+  vp.scrollLeft=Math.max(0,centerTime/state.dur*newWidth-vp.clientWidth/2);
+};
+
+$("play").onclick=async()=>{
+  if(playTimer)return;
+
+  try{
+    state.video.load();
+    state.video.currentTime=state.pos;
+    await state.video.play();
+  }catch(err){
+    alert("動画を再生できませんでした。動画ファイルが読み込まれているか確認してください。");
     return;
   }
 
-  const url=URL.createObjectURL(f);
-  const v=document.createElement("video");
+  playTimer=setInterval(()=>{
+    if(!state||!state.video)return;
 
-  v.preload="metadata";
-  v.src=url;
+    state.pos=state.video.currentTime;
 
-  v.onloadedmetadata=()=>{
-    videos.push({
-      id:id("v"),
-      name:f.name,
-      url,
-      dur:v.duration
-    });
+    const s=state.objects.find(o=>
+      o.type==="skip"&&state.pos>=o.s&&state.pos<o.e
+    );
 
-    /*
-     * このモックではアップロードした動画を同一ページ内で
-     * 編集対象として扱う。blob URL を保存して再読み込み後も
-     * 利用できるものとはしない。
-     */
-    localStorage.videos=JSON.stringify(videos);
-    renderHome();
-    e.target.value="";
-  };
+    if(s){
+      state.pos=s.e;
+      state.video.currentTime=s.e;
+    }
+
+    renderObjects();
+    renderLines();
+    renderTimelineOnly();
+  },50);
 };
 
-$("play").onclick=startPlay;
 $("pause").onclick=()=>stopPlay();
 
 $("stop").onclick=()=>{
   stopPlay();
-  if(state){
-    state.pos=0;
-    state.video.currentTime=0;
-    render();
-  }
+  state.video.pause();
+  state.pos=0;
+  state.video.currentTime=0;
+  render();
 };
 
-$("scale").oninput=e=>{
-  state.scale=Number(e.target.value);
-  renderTimeline();
-};
+function stopPlay(){
+  if(playTimer){
+    clearInterval(playTimer);
+    playTimer=null;
+  }
+  if(state?.video)state.video.pause();
+}
 
 $("save").onclick=()=>{
-  if(!state)return;
+  const ws=get("works");
+  let name=state.workId
+    ?(ws.find(w=>w.id===state.workId)||{}).name
+    :prompt("編集作業名を入力してください","編集作業");
 
-  const ws=JSON.parse(localStorage.works||"[]");
+  if(name===null||name===undefined)return;
 
-  let name=state.name;
-
-  if(!state.workId){
-    name=prompt("編集作業名を入力してください。",name);
-    if(!name)return;
-  }
+  const videoName=$("title").textContent.split(" ／ ")[0];
 
   const data={
     id:state.workId||id("w"),
     name,
     videoId:state.videoId,
-    videoName:state.videoName,
+    videoName,
+    saved:new Date().toLocaleString("ja-JP"),
     objects:JSON.parse(JSON.stringify(state.objects)),
-    lines:JSON.parse(JSON.stringify(state.lines)),
-    saved:new Date().toLocaleString("ja-JP")
+    lines:JSON.parse(JSON.stringify(state.lines))
   };
 
-  if(!state.workId){
-    if(ws.length>=10){
-      alert("編集作業は10件までです。既存の編集作業を削除してください。");
-      return;
-    }
-    ws.push(data);
-    state.workId=data.id;
-    state.name=name;
-  }else{
-    const i=ws.findIndex(w=>w.id===state.workId);
-    if(i>=0)ws[i]=data;
-    else ws.push(data);
-  }
+  const i=ws.findIndex(w=>w.id===data.id);
 
-  localStorage.works=JSON.stringify(ws);
-  state.dirty=false;
-  $("dirty").classList.add("hidden");
-  $("title").textContent=state.videoName+" ／ "+state.name;
-  alert("編集作業を保存しました。");
-};
-
-$("exit").onclick=()=>{
-  if(!state)return;
-
-  if(state.dirty){
-    const choice=confirm(
-      "未保存の変更があります。\nOK：保存して終了\nキャンセル：保存せず終了"
-    );
-
-    if(choice){
-      $("save").click();
-      if(state?.dirty)return;
-    }
-  }
-
-  closeEditor();
-};
-
-$("output").onclick=()=>{
-  if(!state)return;
-
-  const results=JSON.parse(localStorage.results||"[]");
-
-  if(results.length>=10){
-    alert("編集結果動画は10件までです。既存の動画を削除してください。");
+  if(i<0&&ws.length>=10){
+    alert("編集作業は10件までです。既存編集作業を削除してください。");
     return;
   }
 
-  if(state.dirty){
-    const save=confirm(
-      "未保存の変更があります。\nOK：保存してから作成\nキャンセル：現在の保存済み内容で作成"
-    );
+  if(i<0)ws.push(data);
+  else ws[i]=data;
 
-    if(save){
-      $("save").click();
-      if(state.dirty)return;
-    }
+  put("works",ws);
+  state.workId=data.id;
+  state.dirty=false;
+  $("dirty").classList.add("hidden");
+  $("title").textContent=videoName+" ／ "+data.name;
+  alert("保存しました。");
+};
+
+$("output").onclick=()=>{
+  if(state.dirty){
+    const r=confirm("未保存の変更があります。保存してから作成しますか？");
+    if(!r)return;
+    $("save").click();
   }
 
-  const r={
-    id:id("r"),
-    name:state.name+" の編集結果",
-    source:state.videoName,
-    url:state.url
-  };
+  const rs=get("results");
 
-  results.push(r);
-  localStorage.results=JSON.stringify(results);
-  alert("編集結果動画を作成しました。");
+  if(rs.length>=10){
+    alert("編集結果動画は10件までです。既存動画を削除してください。");
+    return;
+  }
+
+  rs.push({
+    id:id("r"),
+    name:$("title").textContent+" 編集結果",
+    source:$("title").textContent,
+    url:state.url
+  });
+
+  put("results",rs);
+  alert("編集結果動画を作成しました。モックでは元動画を結果動画として確認できます。");
+};
+
+$("exit").onclick=()=>{
+  if(state.dirty){
+    const r=confirm("未保存の変更があります。保存して終了しますか？");
+    if(r){
+      $("save").click();
+    }else if(!confirm("保存せずに終了しますか？")){
+      return;
+    }
+  }
+  closeEditor();
 };
 
 document.addEventListener("pointerdown",e=>{
   if(!e.target.closest(".menu"))clearPopup();
+});
+
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"){
+    connect=null;
+    clearPopup();
+    if(state)render();
+  }
 });
 
 renderHome();
