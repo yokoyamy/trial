@@ -6,1736 +6,310 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>録画動画編集モック</title>
 <style>
-*{box-sizing:border-box}
-html,body{
-  margin:0;width:100%;height:100%;overflow:hidden;
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP",sans-serif;
-  color:#e8edf5;background:#0d1117
-}
-button,input,select{font:inherit}
-button{cursor:pointer}
-.app{height:100%;display:flex;flex-direction:column}
-
-.header{
-  height:54px;flex:none;display:flex;align-items:center;gap:8px;
-  padding:0 12px;background:#161b22;border-bottom:1px solid #30363d
-}
-.title{font-weight:700;margin-right:8px;white-space:nowrap}
-.btn{
-  border:1px solid #3b4654;background:#242c36;color:#e8edf5;
-  border-radius:6px;padding:7px 11px
-}
-.btn:hover{background:#303a47}
-.primary{background:#1769aa;border-color:#2387d9}
-.status{margin-left:auto;color:#9aa5b1;font-size:12px;white-space:nowrap}
-
-.main{min-height:0;flex:1;display:flex;flex-direction:column}
-.video-area{
-  min-height:0;flex:1;background:#05070a;
-  display:flex;align-items:center;justify-content:center;padding:12px
-}
-.video-wrap{
-  position:relative;width:min(1200px,100%);height:100%;
-  background:#000;overflow:hidden;border:1px solid #222
-}
-video{width:100%;height:100%;object-fit:contain;display:block}
-.svg-layer{
-  position:absolute;inset:0;width:100%;height:100%;
-  overflow:visible;z-index:10;pointer-events:none
-}
-.connection-hit{
-  fill:none;stroke:transparent;stroke-width:18;
-  vector-effect:non-scaling-stroke;pointer-events:stroke;cursor:pointer
-}
-.connection{
-  fill:none;stroke:#90a4ae;stroke-width:2;
-  vector-effect:non-scaling-stroke;pointer-events:none
-}
-.connection.selected{stroke:#4da3ff;stroke-width:3}
-
-.overlay{
-  position:absolute;inset:0;z-index:20;pointer-events:none
-}
-.element{
-  position:absolute;pointer-events:auto;user-select:none;
-  touch-action:none;min-width:45px;min-height:28px;cursor:move
-}
-.element.selected{outline:2px solid #4da3ff;outline-offset:3px}
-.element.multi{outline:2px solid #ffc107;outline-offset:3px}
-.element.active-dim{opacity:.35}
-
-.element-body{
-  width:100%;height:100%;
-  display:flex;align-items:center;justify-content:center;
-  overflow:hidden
-}
-.comment .element-body{
-  color:#fff;text-shadow:0 1px 4px #000;
-  font-size:18px;padding:4px;background:#0005
-}
-.highlight .element-body{
-  border:4px solid #f04444;background:transparent
-}
-.highlight.round .element-body{border-radius:18px}
-.highlight.circle .element-body{border-radius:50%}
-.zoombox .element-body{
-  border:3px solid #54d68a;background:#ffffff18;
-  box-shadow:0 0 0 9999px #0002
-}
-.handle{
-  position:absolute;width:10px;height:10px;background:#fff;
-  border:2px solid #4da3ff;z-index:5
-}
-.nw{left:-5px;top:-5px;cursor:nwse-resize}
-.ne{right:-5px;top:-5px;cursor:nesw-resize}
-.sw{left:-5px;bottom:-5px;cursor:nesw-resize}
-.se{right:-5px;bottom:-5px;cursor:nwse-resize}
-
-.hint{
-  position:absolute;left:50%;top:50%;
-  transform:translate(-50%,-50%);
-  color:#66717f;text-align:center;pointer-events:none;
-  line-height:1.8
-}
-
-.timeline{
-  height:285px;flex:none;background:#11161d;
-  border-top:1px solid #30363d;display:flex;flex-direction:column
-}
-.timeline-toolbar{
-  height:44px;flex:none;display:flex;align-items:center;gap:8px;
-  padding:5px 9px;border-bottom:1px solid #30363d
-}
-.time{
-  font-variant-numeric:tabular-nums;min-width:170px;color:#dbeafe
-}
-.scale{
-  margin-left:auto;display:flex;align-items:center;gap:7px;
-  color:#8b949e;font-size:12px
-}
-.scale input{width:130px}
-
-.timeline-scroll{
-  min-height:0;flex:1;overflow:auto
-}
-.timeline-content{
-  position:relative;min-width:700px;height:100%
-}
-.axis{
-  height:32px;position:relative;margin-left:110px;
-  background:#171d25;border-bottom:1px solid #30363d
-}
-.tick{
-  position:absolute;top:0;height:100%;
-  border-left:1px solid #343b45;color:#7d8590;
-  font-size:10px;padding:4px 0 0 3px
-}
-.rows{margin-left:110px}
-.row{
-  height:48px;position:relative;
-  border-bottom:1px solid #242b33
-}
-.row-label{
-  position:absolute;right:100%;top:0;width:110px;height:48px;
-  display:flex;align-items:center;padding:0 8px;gap:6px;
-  background:#161b22;border-right:1px solid #30363d;
-  font-size:11px
-}
-.dot{width:8px;height:8px;border-radius:50%;flex:none}
-.lane{height:100%;position:relative}
-.bar{
-  position:absolute;top:8px;height:32px;border-radius:5px;
-  border:1px solid currentColor;display:flex;
-  align-items:center;cursor:grab;user-select:none;
-  touch-action:none;overflow:visible
-}
-.bar.selected{box-shadow:0 0 0 2px #4da3ff}
-.bar.multi{box-shadow:0 0 0 2px #ffc107}
-.bar span{
-  font-size:10px;padding:0 7px;white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis
-}
-.bar-handle{
-  position:absolute;top:0;height:100%;width:8px;
-  cursor:ew-resize;z-index:2
-}
-.bar-handle.left{left:-4px}
-.bar-handle.right{right:-4px}
-
-.playhead{
-  position:absolute;top:32px;bottom:0;width:2px;
-  background:#f04444;z-index:100;pointer-events:none
-}
-.playhead:before{
-  content:"";position:absolute;top:-2px;left:-5px;
-  width:12px;height:12px;background:#f04444;
-  clip-path:polygon(0 0,100% 0,50% 100%)
-}
-
-.menu{
-  position:fixed;z-index:1000;display:none;
-  min-width:220px;max-width:260px;
-  background:#1c2531;border:1px solid #46515f;
-  border-radius:7px;box-shadow:0 12px 30px #0009;padding:5px
-}
-.menu-title{
-  font-size:11px;color:#8b949e;padding:6px 8px
-}
-.menu button{
-  display:block;width:100%;text-align:left;border:0;
-  background:transparent;color:#e8edf5;padding:8px;border-radius:4px
-}
-.menu button:hover{background:#2b3745}
-.menu hr{border:0;border-top:1px solid #303b48;margin:4px 0}
-.menu select{
-  width:100%;background:#242c36;color:#fff;
-  border:1px solid #46515f;padding:6px;border-radius:4px
-}
-
-.toast{
-  position:fixed;right:15px;bottom:15px;
-  background:#202938;border:1px solid #46515f;
-  border-radius:6px;padding:9px 13px;display:none;z-index:2000
-}
-
-@media(max-width:800px){
-  .title{display:none}
-  .timeline{height:240px}
-  .status{display:none}
-}
+*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;background:#11161d;color:#eee;font-family:Arial,"Noto Sans JP",sans-serif}
+button,input,select{font:inherit}.app{height:100%;display:flex;flex-direction:column}
+header{height:52px;display:flex;align-items:center;gap:7px;padding:7px 10px;background:#161b22;border-bottom:1px solid #30363d}
+button{border:1px solid #46515f;background:#242c36;color:#eee;border-radius:5px;padding:6px 10px;cursor:pointer}
+button:hover{background:#303b48}.primary{background:#1769aa}.status{margin-left:auto;color:#9aa5b1;font-size:12px}
+.main{flex:1;min-height:0;display:flex;flex-direction:column}.video{flex:1;min-height:0;background:#05070a;padding:10px}
+.screen{height:100%;position:relative;background:#000;overflow:hidden}
+video{width:100%;height:100%;object-fit:contain}.layer{position:absolute;inset:0}
+.el{position:absolute;cursor:move;user-select:none;min-width:40px;min-height:25px}
+.el.sel{outline:2px solid #4da3ff;outline-offset:3px}.comment{padding:7px 10px;color:#fff;background:#0009}
+.highlight{border:4px solid #f04444}.highlight.round{border-radius:18px}.highlight.circle{border-radius:50%}
+.zoom{border:3px solid #54d68a;background:#54d68a18}
+.handle{position:absolute;width:9px;height:9px;background:#fff;border:2px solid #4da3ff}
+.nw{left:-5px;top:-5px;cursor:nwse-resize}.ne{right:-5px;top:-5px;cursor:nesw-resize}
+.sw{left:-5px;bottom:-5px;cursor:nesw-resize}.se{right:-5px;bottom:-5px;cursor:nwse-resize}
+svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.linehit{pointer-events:stroke;stroke:transparent;stroke-width:18;fill:none;cursor:pointer}.line{fill:none;stroke:#90a4ae;stroke-width:2}
+.line.sel{stroke:#4da3ff;stroke-width:3}.hint{position:absolute;inset:0;display:grid;place-items:center;color:#657080;text-align:center}
+.timeline{height:270px;flex:none;border-top:1px solid #30363d;background:#11161d}
+.tools{height:42px;display:flex;align-items:center;gap:8px;padding:5px 9px;border-bottom:1px solid #30363d}
+.time{min-width:165px}.zoomctl{margin-left:auto;color:#8b949e;font-size:12px}.zoomctl input{width:120px}
+.scroll{height:calc(100% - 42px);overflow:auto}.tl{position:relative;min-width:800px;height:100%}
+.axis{height:30px;margin-left:95px;position:relative;border-bottom:1px solid #30363d}.tick{position:absolute;height:100%;border-left:1px solid #343b45;color:#7d8590;font-size:10px;padding-left:3px}
+.rows{margin-left:95px}.row{height:45px;position:relative;border-bottom:1px solid #242b33}.label{position:absolute;right:100%;width:95px;height:45px;display:flex;align-items:center;padding-left:7px;background:#161b22;font-size:11px}
+.bar{position:absolute;top:7px;height:31px;border:1px solid currentColor;border-radius:5px;display:flex;align-items:center;padding:0 7px;font-size:10px;cursor:grab}
+.bar.sel{box-shadow:0 0 0 2px #4da3ff}.playhead{position:absolute;top:30px;bottom:0;width:2px;background:#f04444;z-index:20;pointer-events:none}
+.menu{position:fixed;display:none;z-index:100;background:#1c2531;border:1px solid #46515f;border-radius:6px;padding:5px;min-width:210px;box-shadow:0 10px 30px #0009}
+.menu button,.menu select{display:block;width:100%;margin:2px 0;text-align:left}.menu select{background:#242c36;color:#fff;border:1px solid #46515f;padding:6px}
+.toast{position:fixed;right:12px;bottom:12px;background:#202938;border:1px solid #46515f;padding:8px 12px;border-radius:5px;display:none}
 </style>
 </head>
-
 <body>
 <div class="app">
-
-<header class="header">
-  <div class="title">動画編集・注釈</div>
-
-  <button class="btn primary" id="loadBtn">動画を選択</button>
-  <input id="fileInput" type="file" accept="video/*" hidden>
-
-  <button class="btn" id="playBtn">▶ 再生</button>
-  <button class="btn" id="stopBtn">■ 停止</button>
-
-  <div class="status" id="status">動画を選択してください</div>
+<header>
+  <b>録画動画編集</b>
+  <button class="primary" id="pick">動画を選択</button>
+  <input id="file" type="file" accept="video/*" hidden>
+  <button id="play">▶ 再生</button>
+  <button id="stop">■ 停止</button>
+  <span class="status" id="status">動画を選択してください</span>
 </header>
 
-<main class="main">
-
-<section class="video-area">
-  <div class="video-wrap" id="videoWrap">
-
-    <video id="video" playsinline preload="metadata"></video>
-
-    <svg id="svg" class="svg-layer">
+<div class="main">
+<div class="video">
+  <div class="screen" id="screen">
+    <video id="video" playsinline></video>
+    <svg id="svg">
       <defs>
-        <marker id="arrowEnd" markerWidth="9" markerHeight="9"
-                refX="8" refY="4.5" orient="auto">
-          <path d="M0,0 L9,4.5 L0,9 Z" fill="#90a4ae"></path>
+        <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+          <path d="M0 0L8 4L0 8Z" fill="#90a4ae"/>
         </marker>
-        <marker id="arrowEndSelected" markerWidth="9" markerHeight="9"
-                refX="8" refY="4.5" orient="auto">
-          <path d="M0,0 L9,4.5 L0,9 Z" fill="#4da3ff"></path>
-        </marker>
-        <marker id="arrowStart" markerWidth="9" markerHeight="9"
-                refX="1" refY="4.5" orient="auto">
-          <path d="M9,0 L0,4.5 L9,9 Z" fill="#90a4ae"></path>
-        </marker>
-        <marker id="arrowStartSelected" markerWidth="9" markerHeight="9"
-                refX="1" refY="4.5" orient="auto">
-          <path d="M9,0 L0,4.5 L9,9 Z" fill="#4da3ff"></path>
+        <marker id="arrowSel" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+          <path d="M0 0L8 4L0 8Z" fill="#4da3ff"/>
         </marker>
       </defs>
     </svg>
-
-    <div id="overlay" class="overlay"></div>
-
-    <div id="hint" class="hint">
-      動画を選択してください<br>
-      読み込み後、動画上で右クリックすると要素を追加できます
-    </div>
-
+    <div class="layer" id="layer"></div>
+    <div class="hint" id="hint">動画を選択してください<br>動画上で右クリックすると要素を追加できます</div>
   </div>
-</section>
-
-<section class="timeline">
-
-  <div class="timeline-toolbar">
-    <div class="time" id="time">00:00.000 / 00:00.000</div>
-
-    <div class="scale">
-      時間軸
-      <input id="scale" type="range" min="0.5" max="4" step="0.1" value="1">
-      <span id="scaleText">1.0×</span>
-    </div>
-  </div>
-
-  <div class="timeline-scroll" id="timelineScroll">
-    <div class="timeline-content" id="timelineContent">
-
-      <div class="axis" id="axis"></div>
-
-      <div class="rows">
-
-        <div class="row">
-          <div class="row-label">
-            <span class="dot" style="background:#4da3ff"></span>
-            コメント
-          </div>
-          <div class="lane" id="lane-comment"></div>
-        </div>
-
-        <div class="row">
-          <div class="row-label">
-            <span class="dot" style="background:#f04444"></span>
-            強調枠
-          </div>
-          <div class="lane" id="lane-highlight"></div>
-        </div>
-
-        <div class="row">
-          <div class="row-label">
-            <span class="dot" style="background:#54d68a"></span>
-            拡大枠
-          </div>
-          <div class="lane" id="lane-zoombox"></div>
-        </div>
-
-        <div class="row">
-          <div class="row-label">
-            <span class="dot" style="background:#ff9800"></span>
-            スキップ
-          </div>
-          <div class="lane" id="lane-skip"></div>
-        </div>
-
-      </div>
-
-      <div class="playhead" id="playhead"></div>
-    </div>
-  </div>
-
-</section>
-</main>
 </div>
 
-<div id="menu" class="menu"></div>
-<div id="toast" class="toast"></div>
+<div class="timeline">
+  <div class="tools">
+    <span class="time" id="time">00:00.000 / 00:00.000</span>
+    <span class="zoomctl">時間軸
+      <input id="scale" type="range" min=".5" max="4" step=".1" value="1">
+      <span id="scaleText">1.0×</span>
+    </span>
+  </div>
+  <div class="scroll" id="scroll">
+    <div class="tl" id="tl">
+      <div class="axis" id="axis"></div>
+      <div class="rows">
+        <div class="row"><div class="label">● コメント</div><div id="comment"></div></div>
+        <div class="row"><div class="label">● 強調枠</div><div id="highlight"></div></div>
+        <div class="row"><div class="label">● 拡大枠</div><div id="zoom"></div></div>
+        <div class="row"><div class="label">● スキップ</div><div id="skip"></div></div>
+      </div>
+      <div class="playhead" id="head"></div>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<div class="menu" id="menu"></div>
+<div class="toast" id="toast"></div>
 
 <script>
-const $ = id => document.getElementById(id);
+const $=id=>document.getElementById(id);
+const video=$("video"),screen=$("screen"),layer=$("layer"),svg=$("svg");
+let duration=60,current=0,scale=1,selected=[],menuTarget=null,drag=null,next=5;
+const color={comment:"#4da3ff",highlight:"#f04444",zoom:"#54d68a",skip:"#ff9800"};
 
-const video = $("video");
-const wrap = $("videoWrap");
-const overlay = $("overlay");
-const svg = $("svg");
-const hint = $("hint");
-const menu = $("menu");
-const toast = $("toast");
-const axis = $("axis");
-const timelineContent = $("timelineContent");
-const timelineScroll = $("timelineScroll");
-const playhead = $("playhead");
-
-let duration = 60;
-let current = 0;
-let scale = 1;
-let selected = [];
-let connections = [];
-let nextId = 5;
-let drag = null;
-let menuTarget = null;
-let objectUrl = null;
-
-/* モック用初期データ */
-const elements = [
-  {
-    id:1,
-    type:"comment",
-    label:"コメント",
-    start:5,
-    end:18,
-    x:18,
-    y:15,
-    w:190,
-    h:55,
-    text:"ここを確認してください"
-  },
-  {
-    id:2,
-    type:"highlight",
-    label:"強調枠",
-    start:8,
-    end:24,
-    x:52,
-    y:34,
-    w:230,
-    h:130,
-    shape:"rect"
-  },
-  {
-    id:3,
-    type:"zoombox",
-    label:"拡大枠",
-    start:20,
-    end:35,
-    x:20,
-    y:58,
-    w:180,
-    h:100
-  },
-  {
-    id:4,
-    type:"skip",
-    label:"スキップ",
-    start:38,
-    end:45,
-    x:0,
-    y:0,
-    w:0,
-    h:0
-  }
+let els=[
+ {id:1,type:"comment",label:"コメント",start:5,end:18,x:18,y:15,w:25,h:9,text:"ここを確認してください"},
+ {id:2,type:"highlight",label:"強調枠",start:8,end:24,x:52,y:34,w:25,h:24,shape:"rect"},
+ {id:3,type:"zoom",label:"拡大枠",start:20,end:35,x:20,y:58,w:22,h:18},
+ {id:4,type:"skip",label:"スキップ",start:38,end:45}
 ];
+let lines=[];
 
-const colors = {
-  comment:"#4da3ff",
-  highlight:"#f04444",
-  zoombox:"#54d68a",
-  skip:"#ff9800"
+function fmt(v){
+ let m=Math.floor(v/60),s=(v%60).toFixed(3);
+ return String(m).padStart(2,"0")+":"+s.padStart(6,"0");
+}
+function width(){return Math.max(700,$("scroll").clientWidth-15)*scale}
+function toast(s){$("toast").textContent=s;$("toast").style.display="block";clearTimeout(toast.t);toast.t=setTimeout(()=>$("toast").style.display="none",1600)}
+function seek(t){
+ current=Math.max(0,Math.min(duration,t));
+ if(video.src)video.currentTime=current;
+ render();timeline();
+}
+function active(e){return current>=e.start&&current<=e.end}
+function render(){
+ layer.innerHTML="";
+ els.filter(e=>e.type!="skip"&&active(e)).forEach(e=>{
+  let d=document.createElement("div");
+  d.className="el "+e.type+(selected.includes(e.id)?" sel":"")+(e.shape=="round"?" round":"")+(e.shape=="circle"?" circle":"");
+  d.dataset.id=e.id;
+  d.style.cssText=`left:${e.x}%;top:${e.y}%;width:${e.w}%;height:${e.h}%`;
+  if(e.type=="comment")d.textContent=e.text;
+  if(e.type=="zoom"){d.textContent="拡大表示範囲";d.style.color="#9ff0bd";d.style.textAlign="center";d.style.padding="8px"}
+  ["nw","ne","sw","se"].forEach(p=>{let h=document.createElement("i");h.className="handle "+p;h.dataset.resize=p;d.append(h)});
+  d.onpointerdown=moveStart;
+  d.onclick=e=>{e.stopPropagation();select(+d.dataset.id,e)};
+  d.oncontextmenu=e=>{e.preventDefault();e.stopPropagation();select(+d.dataset.id,e);elementMenu(e.clientX,e.clientY,+d.dataset.id)};
+  layer.append(d);
+ });
+ drawLines();
+}
+function select(id,e){
+ if(e&&(e.shiftKey||e.ctrlKey||e.metaKey))selected=selected.includes(id)?selected.filter(x=>x!=id):[...selected,id];
+ else selected=[id];
+ lines.forEach(l=>l.sel=false);render();timeline();
+}
+function clear(){
+ selected=[];lines.forEach(l=>l.sel=false);menu.style.display="none";render();timeline();
+}
+screen.onclick=e=>{if(!e.target.closest(".el"))clear()};
+
+function moveStart(e){
+ if(e.button!==0)return;
+ let obj=els.find(x=>x.id==e.currentTarget.dataset.id);if(!obj)return;
+ if(!selected.includes(obj.id))select(obj.id,e);
+ let resize=e.target.dataset.resize;
+ let base={};selected.forEach(id=>{let x=els.find(a=>a.id==id);if(x)base[id]={x:x.x,y:x.y,w:x.w,h:x.h}});
+ drag={obj,resize,sx:e.clientX,sy:e.clientY,base};
+ addEventListener("pointermove",moving);
+ addEventListener("pointerup",moveEnd,{once:true});
+}
+function moving(e){
+ if(!drag)return;
+ let r=screen.getBoundingClientRect(),dx=(e.clientX-drag.sx)/r.width*100,dy=(e.clientY-drag.sy)/r.height*100;
+ if(!drag.resize)selected.forEach(id=>{
+  let x=els.find(a=>a.id==id),b=drag.base[id];if(!x||x.type=="skip")return;
+  x.x=Math.max(0,Math.min(100-x.w,b.x+dx));x.y=Math.max(0,Math.min(100-x.h,b.y+dy));
+ });
+ else{
+  let x=drag.obj,b=drag.base[x.id],p=drag.resize;
+  if(p.includes("e"))x.w=Math.max(5,Math.min(100-x.x,b.w+dx));
+  if(p.includes("s"))x.h=Math.max(5,Math.min(100-x.y,b.h+dy));
+  if(p.includes("w")){x.x=Math.max(0,b.x+dx);x.w=Math.max(5,b.w-dx)}
+  if(p.includes("n")){x.y=Math.max(0,b.y+dy);x.h=Math.max(5,b.h-dy)}
+ }
+ render();
+}
+function moveEnd(){drag=null;removeEventListener("pointermove",moving);timeline()}
+
+function timeline(){
+ ["comment","highlight","zoom","skip"].forEach(type=>{
+  let box=$(type);box.innerHTML="";
+  els.filter(e=>e.type==type).forEach(e=>{
+   let b=document.createElement("div");b.className="bar"+(selected.includes(e.id)?" sel":"");
+   b.style.left=e.start/duration*width()+"px";b.style.width=Math.max(24,(e.end-e.start)/duration*width())+"px";
+   b.style.color=color[type];b.style.background=color[type]+"44";b.textContent=e.label;
+   b.onclick=x=>{x.stopPropagation();select(e.id,x)};
+   b.onpointerdown=x=>{if(x.button===0)barDrag(x,e)};
+   box.append(b);
+  });
+ });
+ $("tl").style.width=width()+95+"px";
+ $("head").style.left=95+current/duration*width()+"px";
+ $("time").textContent=fmt(current)+" / "+fmt(duration);
+}
+function barDrag(ev,e){
+ let sx=ev.clientX,ss=e.start,len=e.end-e.start;
+ function mv(x){let d=(x.clientX-sx)/width()*duration,n=Math.max(0,Math.min(duration-len,ss+d));e.start=n;e.end=n+len;timeline();render()}
+ function up(){removeEventListener("pointermove",mv);removeEventListener("pointerup",up)}
+ addEventListener("pointermove",mv);addEventListener("pointerup",up);
+}
+
+function drawLines(){
+ svg.querySelectorAll(".line,.linehit").forEach(x=>x.remove());
+ lines.forEach(l=>{
+  let a=els.find(x=>x.id==l.from),b=els.find(x=>x.id==l.to);if(!a||!b)return;
+  let p1=point(a,l.fp),p2=point(b,l.tp),d;
+  if(l.shape=="orthogonal"){let mx=(p1[0]+p2[0])/2;d=`M${p1[0]} ${p1[1]} L${mx} ${p1[1]} L${mx} ${p2[1]} L${p2[0]} ${p2[1]}`}
+  else d=`M${p1[0]} ${p1[1]} L${p2[0]} ${p2[1]}`;
+  let h=document.createElementNS("http://www.w3.org/2000/svg","path");
+  h.setAttribute("d",d);h.classList.add("linehit");h.onclick=e=>{e.stopPropagation();lineSelect(l.id)};
+  svg.append(h);
+  let q=document.createElementNS("http://www.w3.org/2000/svg","path");
+  q.setAttribute("d",d);q.classList.add("line"+(l.sel?" sel":""));
+  q.setAttribute("stroke-dasharray",l.style=="dashed"?"8 5":l.style=="dotted"?"2 5":l.style=="dashdot"?"8 4 2 4":"none");
+  if(l.endArrow)q.setAttribute("marker-end",l.sel?"url(#arrowSel)":"url(#arrow)");
+  svg.append(q);
+ });
+}
+function point(e,p){
+ let m={t:[e.x+e.w/2,e.y],r:[e.x+e.w,e.y+e.h/2],b:[e.x+e.w/2,e.y+e.h],l:[e.x,e.y+e.h/2]};
+ return m[p]||m.r;
+}
+function lineSelect(id){selected=[];lines.forEach(l=>l.sel=l.id==id);render();timeline();let l=lines.find(x=>x.id==id);lineMenu(innerWidth/2,innerHeight/2,l)}
+
+function elementMenu(x,y,id){
+ let e=els.find(a=>a.id==id),h=`<b>${e.label}</b>`;
+ if(e.type=="comment")h+=`<button data-a="text">コメント変更</button><button data-a="font">文字サイズ</button><button data-a="bg">背景色</button>`;
+ if(e.type=="highlight")h+=`<button data-a="rect">直線</button><button data-a="round">角丸</button><button data-a="circle">円形</button><button data-a="fill">塗り潰し</button>`;
+ if(e.type=="zoom")h+=`<button data-a="connect">接続線を作成</button>`;
+ h+=`<button data-a="delete">削除</button>`;
+ openMenu(x,y,h,{type:"element",id});
+}
+function lineMenu(x,y,l){
+ openMenu(x,y,`<b>接続線</b>
+ <select id="ls"><option value="solid">実線</option><option value="dotted">点線</option><option value="dashed">破線</option><option value="dashdot">一点鎖線</option></select>
+ <button data-a="straight">直線</button><button data-a="orthogonal">折れ線</button><button data-a="arrow">終点矢印</button><button data-a="deleteLine">削除</button>`,{type:"line",id:l.id});
+ setTimeout(()=>{$("ls").value=l.style;$("ls").onchange=e=>{l.style=e.target.value;drawLines()}},0);
+}
+function openMenu(x,y,html,target){menu.innerHTML=html;menu.style.display="block";menu.style.left=Math.min(x,innerWidth-220)+"px";menu.style.top=Math.min(y,innerHeight-250)+"px";menuTarget=target}
+const menu=$("menu");
+menu.onclick=e=>{
+ let a=e.target.dataset.a;if(!a||!menuTarget)return;
+ if(menuTarget.type=="element"){
+  let x=els.find(v=>v.id==menuTarget.id);
+  if(a=="text"){let v=prompt("コメント",x.text);if(v!==null)x.text=v}
+  if(a=="rect"||a=="round"||a=="circle")x.shape=a;
+  if(a=="font"){x.font=(x.font||18)+2}
+  if(a=="bg")x.bg=x.bg=="#fff3"?"#0009":"#fff3";
+  if(a=="fill")x.fill=!x.fill;
+  if(a=="delete"){els=els.filter(v=>v.id!=x.id);lines=lines.filter(v=>v.from!=x.id&&v.to!=x.id);selected=[]}
+  if(a=="connect"){connectMode=x.id;toast("接続先の要素をクリックしてください")}
+ }else{
+  let l=lines.find(v=>v.id==menuTarget.id);
+  if(a=="straight")l.shape="straight";
+  if(a=="orthogonal")l.shape="orthogonal";
+  if(a=="arrow")l.endArrow=!l.endArrow;
+  if(a=="deleteLine")lines=lines.filter(v=>v.id!=l.id);
+ }
+ menu.style.display="none";render();timeline();
 };
+document.addEventListener("click",e=>{if(!menu.contains(e.target))menu.style.display="none"});
 
-/* ------------------------------
-   共通
------------------------------- */
-
-function toastMsg(message){
-  toast.textContent = message;
-  toast.style.display = "block";
-  clearTimeout(toastMsg.timer);
-  toastMsg.timer = setTimeout(()=>{
-    toast.style.display = "none";
-  },1800);
-}
-
-function fmt(t){
-  t = Math.max(0, Number(t) || 0);
-  const m = Math.floor(t / 60);
-  const s = t % 60;
-  return String(m).padStart(2,"0") + ":" +
-         s.toFixed(3).padStart(6,"0");
-}
-
-function activeElements(){
-  return elements.filter(e =>
-    current >= e.start && current <= e.end
-  );
-}
-
-function videoPosition(e){
-  return {
-    left:e.x + "%",
-    top:e.y + "%",
-    width:e.w + "%",
-    height:e.h + "%"
-  };
-}
-
-/* ------------------------------
-   動画
------------------------------- */
-
-$("loadBtn").addEventListener("click",()=>{
-  $("fileInput").click();
+let connectMode=null;
+layer.addEventListener("click",e=>{
+ if(!connectMode)return;
+ let d=e.target.closest(".el");if(!d)return;
+ let to=+d.dataset.id;if(to==connectMode)return;
+ lines.push({id:next++,from:connectMode,to,fp:"r",tp:"l",shape:"straight",style:"solid",endArrow:false,sel:false});
+ connectMode=null;render();toast("接続線を作成しました");
 });
 
-$("fileInput").addEventListener("change",e=>{
-  const file = e.target.files[0];
-  if(!file) return;
-
-  if(objectUrl){
-    URL.revokeObjectURL(objectUrl);
-  }
-
-  objectUrl = URL.createObjectURL(file);
-  video.src = objectUrl;
-  video.load();
-
-  statusMessage("動画を読み込み中...");
-});
-
-video.addEventListener("loadedmetadata",()=>{
-  duration = Number.isFinite(video.duration) ? video.duration : 60;
-  current = 0;
-
-  hint.style.display = "none";
-  statusMessage("動画を読み込みました");
-
-  renderAxis();
-  renderTimeline();
-  updatePlayhead();
-  renderOverlay();
-});
-
-video.addEventListener("timeupdate",()=>{
-  current = video.currentTime;
-  renderOverlay();
-  updatePlayhead();
-});
-
-video.addEventListener("ended",()=>{
-  current = duration;
-  $("playBtn").textContent = "▶ 再生";
-  renderOverlay();
-  updatePlayhead();
-});
-
-$("playBtn").addEventListener("click",()=>{
-  if(!video.src){
-    toastMsg("先に動画を選択してください");
-    return;
-  }
-
-  if(video.paused){
-    video.play();
-    $("playBtn").textContent = "❚❚ 一時停止";
-  }else{
-    video.pause();
-    $("playBtn").textContent = "▶ 再生";
-  }
-});
-
-$("stopBtn").addEventListener("click",()=>{
-  if(!video.src) return;
-
-  video.pause();
-  video.currentTime = 0;
-  current = 0;
-  $("playBtn").textContent = "▶ 再生";
-  updatePlayhead();
-  renderOverlay();
-});
-
-function statusMessage(message){
-  $("status").textContent = message;
-}
-
-/* ------------------------------
-   再生位置
------------------------------- */
-
-function timelineWidth(){
-  const base = Math.max(900, timelineScroll.clientWidth - 20);
-  return base * scale;
-}
-
-function updateTimelineWidth(){
-  const width = timelineWidth();
-  timelineContent.style.width = (width + 110) + "px";
-}
-
-function renderAxis(){
-  updateTimelineWidth();
-
-  axis.innerHTML = "";
-
-  const width = timelineWidth();
-  const step = duration <= 30 ? 5 :
-               duration <= 120 ? 10 :
-               duration <= 600 ? 30 : 60;
-
-  for(let t=0;t<=duration;t+=step){
-    const tick = document.createElement("div");
-    tick.className = "tick";
-    tick.style.left = (t / duration * width) + "px";
-    tick.textContent = fmt(t).slice(0,5);
-    axis.appendChild(tick);
-  }
-
-  if(duration > 0){
-    const endTick = document.createElement("div");
-    endTick.className = "tick";
-    endTick.style.left = width + "px";
-    endTick.textContent = fmt(duration).slice(0,5);
-    axis.appendChild(endTick);
-  }
-}
-
-function setCurrentTime(t){
-  current = Math.max(0,Math.min(duration,Number(t) || 0));
-
-  if(video.src){
-    try{
-      video.currentTime = current;
-    }catch(e){}
-  }
-
-  updatePlayhead();
-  renderOverlay();
-}
-
-function updatePlayhead(){
-  const width = timelineWidth();
-
-  const x = 110 + (
-    duration > 0 ? current / duration * width : 0
-  );
-
-  playhead.style.left = x + "px";
-  $("time").textContent =
-    fmt(current) + " / " + fmt(duration);
-}
-
-/* タイムラインの空白部分をクリック */
-timelineContent.addEventListener("click",e=>{
-  if(e.target.closest(".bar")) return;
-
-  const rect = timelineContent.getBoundingClientRect();
-  const x = e.clientX - rect.left - 110;
-
-  if(x >= 0 && x <= timelineWidth()){
-    setCurrentTime(x / timelineWidth() * duration);
-  }
-});
-
-/* ------------------------------
-   オーバーレイ
------------------------------- */
-
-function renderOverlay(){
-  overlay.innerHTML = "";
-
-  activeElements().forEach(e=>{
-    if(e.type === "skip") return;
-
-    const d = document.createElement("div");
-
-    d.className =
-      "element " + e.type +
-      (selected.includes(e.id) ? " selected" : "") +
-      (
-        selected.length > 1 && selected.includes(e.id)
-        ? " multi"
-        : ""
-      );
-
-    d.dataset.id = e.id;
-
-    Object.assign(d.style,videoPosition(e));
-
-    if(current < e.start || current > e.end){
-      d.classList.add("active-dim");
-    }
-
-    if(e.type === "highlight"){
-      d.classList.add(e.shape || "rect");
-    }
-
-    const body = document.createElement("div");
-    body.className = "element-body";
-
-    if(e.type === "comment"){
-      body.textContent = e.text;
-    }
-
-    if(e.type === "zoombox"){
-      body.textContent = "拡大表示範囲";
-      body.style.color = "#9ff0bd";
-      body.style.fontSize = "12px";
-    }
-
-    d.appendChild(body);
-
-    ["nw","ne","sw","se"].forEach(pos=>{
-      const h = document.createElement("div");
-      h.className = "handle " + pos;
-      h.dataset.resize = pos;
-      d.appendChild(h);
-    });
-
-    d.addEventListener("pointerdown",startElement);
-
-    d.addEventListener("click",e2=>{
-      e2.stopPropagation();
-      selectElement(Number(d.dataset.id),e2);
-    });
-
-    d.addEventListener("contextmenu",e2=>{
-      e2.preventDefault();
-      e2.stopPropagation();
-
-      const id = Number(d.dataset.id);
-
-      if(!selected.includes(id)){
-        selectElement(id,e2);
-      }
-
-      showElementMenu(e2.clientX,e2.clientY,id);
-    });
-
-    overlay.appendChild(d);
-  });
-
-  renderConnections();
-}
-
-/* 動画上の空白をクリック */
-wrap.addEventListener("click",e=>{
-  if(e.target.closest(".element")) return;
-  if(e.target.closest(".connection-hit")) return;
-
-  clearSelection();
-});
-
-function selectElement(id,event){
-  const multi =
-    event &&
-    (event.shiftKey || event.ctrlKey || event.metaKey);
-
-  if(multi){
-    selected = selected.includes(id)
-      ? selected.filter(x=>x !== id)
-      : [...selected,id];
-  }else{
-    selected = [id];
-  }
-
-  clearConnectionSelection();
-  renderOverlay();
-  renderTimeline();
-}
-
-function clearSelection(){
-  selected = [];
-  clearConnectionSelection();
-  menu.style.display = "none";
-  renderOverlay();
-  renderTimeline();
-}
-
-function clearConnectionSelection(){
-  connections.forEach(c=>c.selected=false);
-}
-
-/* ------------------------------
-   要素移動・サイズ変更
------------------------------- */
-
-function startElement(ev){
-  if(ev.button !== 0) return;
-
-  const el = elements.find(
-    x => x.id === Number(ev.currentTarget.dataset.id)
-  );
-
-  if(!el) return;
-
-  ev.stopPropagation();
-
-  const resize = ev.target.dataset.resize || null;
-
-  if(!selected.includes(el.id)){
-    selectElement(el.id,ev);
-  }
-
-  const basePositions = {};
-
-  selected.forEach(id=>{
-    const e = elements.find(x=>x.id===id);
-    if(e){
-      basePositions[id] = {
-        x:e.x,y:e.y,w:e.w,h:e.h
-      };
-    }
-  });
-
-  drag = {
-    kind:resize ? "resize" : "move",
-    el,
-    resize,
-    x:ev.clientX,
-    y:ev.clientY,
-    ox:el.x,
-    oy:el.y,
-    ow:el.w,
-    oh:el.h,
-    basePositions
-  };
-
-  window.addEventListener("pointermove",moveElement);
-  window.addEventListener("pointerup",endElementDrag,{once:true});
-}
-
-function moveElement(ev){
-  if(!drag) return;
-
-  const r = wrap.getBoundingClientRect();
-
-  const dx = (ev.clientX - drag.x) / r.width * 100;
-  const dy = (ev.clientY - drag.y) / r.height * 100;
-
-  if(drag.kind === "move"){
-
-    selected.forEach(id=>{
-      const e = elements.find(x=>x.id===id);
-      const base = drag.basePositions[id];
-
-      if(!e || !base || e.type==="skip") return;
-
-      e.x = Math.max(
-        0,
-        Math.min(100 - e.w,base.x + dx)
-      );
-
-      e.y = Math.max(
-        0,
-        Math.min(100 - e.h,base.y + dy)
-      );
-    });
-
-  }else{
-
-    const e = drag.el;
-
-    let x = drag.ox;
-    let y = drag.oy;
-    let w = drag.ow;
-    let h = drag.oh;
-
-    if(drag.resize.includes("e")){
-      w = Math.max(5,drag.ow + dx);
-    }
-
-    if(drag.resize.includes("s")){
-      h = Math.max(5,drag.oh + dy);
-    }
-
-    if(drag.resize.includes("w")){
-      x = drag.ox + dx;
-      w = drag.ow - dx;
-    }
-
-    if(drag.resize.includes("n")){
-      y = drag.oy + dy;
-      h = drag.oh - dy;
-    }
-
-    e.x = Math.max(0,Math.min(95,x));
-    e.y = Math.max(0,Math.min(95,y));
-    e.w = Math.max(5,Math.min(100-e.x,w));
-    e.h = Math.max(5,Math.min(100-e.y,h));
-  }
-
-  renderOverlay();
-}
-
-function endElementDrag(){
-  drag = null;
-  window.removeEventListener("pointermove",moveElement);
-  renderTimeline();
-}
-
-/* ------------------------------
-   タイムライン
------------------------------- */
-
-function renderTimeline(){
-  ["comment","highlight","zoombox","skip"].forEach(type=>{
-    const lane = $("lane-" + type);
-    lane.innerHTML = "";
-
-    elements
-      .filter(e=>e.type===type)
-      .forEach(e=>{
-        const bar = document.createElement("div");
-
-        bar.className =
-          "bar " +
-          (selected.includes(e.id) ? "selected " : "") +
-          (
-            selected.length > 1 && selected.includes(e.id)
-            ? "multi"
-            : ""
-          );
-
-        const width = timelineWidth();
-        const start = Number(e.start);
-        const end = Number(e.end);
-
-        bar.style.left =
-          (start / duration * width) + "px";
-
-        bar.style.width =
-          Math.max(
-            20,
-            (end-start) / duration * width
-          ) + "px";
-
-        bar.style.background =
-          colors[type] + "55";
-
-        bar.style.color = colors[type];
-
-        const label = document.createElement("span");
-        label.textContent = e.label;
-        bar.appendChild(label);
-
-        const left = document.createElement("div");
-        left.className = "bar-handle left";
-
-        const right = document.createElement("div");
-        right.className = "bar-handle right";
-
-        bar.appendChild(left);
-        bar.appendChild(right);
-
-        bar.addEventListener("click",ev=>{
-          ev.stopPropagation();
-          selectElement(e.id,ev);
-        });
-
-        bar.addEventListener("pointerdown",ev=>{
-          if(ev.button !== 0) return;
-
-          ev.stopPropagation();
-
-          if(ev.target.classList.contains("bar-handle")){
-            startTimeResize(ev,e);
-            return;
-          }
-
-          selectElement(e,ev);
-
-          startBarMove(ev,e);
-        });
-
-        lane.appendChild(bar);
-      });
-  });
-
-  updateTimelineWidth();
-  updatePlayhead();
-}
-
-function startBarMove(ev,e){
-  const width = timelineWidth();
-
-  const startX = ev.clientX;
-  const originalStart = e.start;
-  const length = e.end - e.start;
-
-  function move(event){
-    const delta =
-      (event.clientX - startX) / width * duration;
-
-    const ns = Math.max(
-      0,
-      Math.min(duration-length,originalStart+delta)
-    );
-
-    e.start = Number(ns.toFixed(2));
-    e.end = Number((ns+length).toFixed(2));
-
-    renderTimeline();
-    renderOverlay();
-  }
-
-  function up(){
-    document.removeEventListener("pointermove",move);
-    document.removeEventListener("pointerup",up);
-  }
-
-  document.addEventListener("pointermove",move);
-  document.addEventListener("pointerup",up);
-}
-
-function startTimeResize(ev,e){
-  const width = timelineWidth();
-  const startX = ev.clientX;
-
-  const originalStart = e.start;
-  const originalEnd = e.end;
-
-  const isLeft =
-    ev.target.classList.contains("left");
-
-  function move(event){
-
-    const delta =
-      (event.clientX - startX) / width * duration;
-
-    if(isLeft){
-      e.start = Number(
-        Math.max(
-          0,
-          Math.min(
-            originalEnd - .1,
-            originalStart + delta
-          )
-        ).toFixed(2)
-      );
-    }else{
-      e.end = Number(
-        Math.min(
-          duration,
-          Math.max(
-            originalStart + .1,
-            originalEnd + delta
-          )
-        ).toFixed(2)
-      );
-    }
-
-    renderTimeline();
-    renderOverlay();
-  }
-
-  function up(){
-    document.removeEventListener("pointermove",move);
-    document.removeEventListener("pointerup",up);
-  }
-
-  document.addEventListener("pointermove",move);
-  document.addEventListener("pointerup",up);
-}
-
-/* ------------------------------
-   接続線
------------------------------- */
-
-function connectionPoint(e,pos){
-  const x=e.x;
-  const y=e.y;
-  const w=e.w;
-  const h=e.h;
-
-  const map={
-    tl:[x,y],
-    t:[x+w/2,y],
-    tr:[x+w,y],
-    l:[x,y+h/2],
-    r:[x+w,y+h/2],
-    bl:[x,y+h],
-    b:[x+w/2,y+h],
-    br:[x+w,y+h]
-  };
-
-  return map[pos] || map.r;
-}
-
-function renderConnections(){
-  svg.querySelectorAll(".connection-hit,.connection")
-     .forEach(x=>x.remove());
-
-  connections.forEach(c=>{
-
-    const a = elements.find(e=>e.id===c.from);
-    const b = elements.find(e=>e.id===c.to);
-
-    if(!a || !b) return;
-
-    const p1 = connectionPoint(a,c.fromPos);
-    const p2 = connectionPoint(b,c.toPos);
-
-    let d = "";
-
-    if(c.style==="orthogonal"){
-
-      const mx = (p1[0]+p2[0])/2;
-
-      d =
-        `M ${p1[0]} ${p1[1]}
-         L ${mx} ${p1[1]}
-         L ${mx} ${p2[1]}
-         L ${p2[0]} ${p2[1]}`;
-
-    }else if(c.style==="wave"){
-
-      const dx = p2[0]-p1[0];
-      const dy = p2[1]-p1[1];
-
-      const len = Math.sqrt(dx*dx+dy*dy) || 1;
-
-      const nx = -dy/len * 2;
-      const ny = dx/len * 2;
-
-      d = `M ${p1[0]} ${p1[1]}`;
-
-      for(let i=1;i<=16;i++){
-        const t=i/16;
-        const wave=Math.sin(t*Math.PI*8);
-
-        d +=
-          ` L ${p1[0]+dx*t+nx*wave}
-             ${p1[1]+dy*t+ny*wave}`;
-      }
-
-    }else{
-
-      d =
-        `M ${p1[0]} ${p1[1]}
-         L ${p2[0]} ${p2[1]}`;
-    }
-
-    const hit =
-      document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "path"
-      );
-
-    hit.setAttribute("class","connection-hit");
-    hit.setAttribute("d",d);
-    hit.dataset.cid=c.id;
-
-    hit.addEventListener("click",ev=>{
-      ev.stopPropagation();
-      selectConnection(c.id);
-    });
-
-    hit.addEventListener("contextmenu",ev=>{
-      ev.preventDefault();
-      ev.stopPropagation();
-      selectConnection(c.id);
-      showConnectionMenu(ev.clientX,ev.clientY,c.id);
-    });
-
-    svg.appendChild(hit);
-
-    const line =
-      document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "path"
-      );
-
-    line.setAttribute(
-      "class",
-      "connection" + (c.selected ? " selected" : "")
-    );
-
-    line.setAttribute("d",d);
-
-    if(c.style==="dashed"){
-      line.setAttribute("stroke-dasharray","8 6");
-    }
-
-    if(c.style==="dotted"){
-      line.setAttribute("stroke-dasharray","2 5");
-    }
-
-    if(c.fromArrow){
-      line.setAttribute(
-        "marker-start",
-        c.selected
-          ? "url(#arrowStartSelected)"
-          : "url(#arrowStart)"
-      );
-    }
-
-    if(c.toArrow){
-      line.setAttribute(
-        "marker-end",
-        c.selected
-          ? "url(#arrowEndSelected)"
-          : "url(#arrowEnd)"
-      );
-    }
-
-    svg.appendChild(line);
-
-    if(c.selected){
-      addConnectionHandle(c,p1,"from");
-      addConnectionHandle(c,p2,"to");
-    }
-  });
-}
-
-function addConnectionHandle(c,p,end){
-  const h =
-    document.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "circle"
-    );
-
-  h.setAttribute("cx",p[0]);
-  h.setAttribute("cy",p[1]);
-  h.setAttribute("r","2.4");
-  h.setAttribute("fill","#fff");
-  h.setAttribute("stroke","#4da3ff");
-  h.setAttribute("stroke-width","1.5");
-  h.style.cursor="crosshair";
-  h.style.pointerEvents="auto";
-
-  h.addEventListener("pointerdown",ev=>{
-    ev.stopPropagation();
-    startConnectionHandle(ev,c,end);
-  });
-
-  svg.appendChild(h);
-}
-
-function selectConnection(id){
-  connections.forEach(c=>{
-    c.selected = c.id===id;
-  });
-
-  selected = [];
-
-  renderOverlay();
-  renderTimeline();
-}
-
-function startConnectionHandle(ev,c,end){
-  drag = {
-    kind:"connection",
-    c,
-    end
-  };
-
-  window.addEventListener("pointermove",moveConnection);
-  window.addEventListener("pointerup",endConnection,{once:true});
-}
-
-function moveConnection(ev){
-  if(!drag || drag.kind!=="connection") return;
-
-  const r = wrap.getBoundingClientRect();
-
-  const x =
-    (ev.clientX-r.left)/r.width*100;
-
-  const y =
-    (ev.clientY-r.top)/r.height*100;
-
-  const target = elements
-    .filter(e=>e.type!=="skip")
-    .find(e=>
-      x>=e.x &&
-      x<=e.x+e.w &&
-      y>=e.y &&
-      y<=e.y+e.h
-    );
-
-  if(!target) return;
-
-  const relx=(x-target.x)/target.w;
-  const rely=(y-target.y)/target.h;
-
-  let pos;
-
-  if(rely<.25){
-    pos=relx<.33?"tl":relx>.66?"tr":"t";
-  }else if(rely>.75){
-    pos=relx<.33?"bl":relx>.66?"br":"b";
-  }else{
-    pos=relx<.5?"l":"r";
-  }
-
-  if(drag.end==="from"){
-    drag.c.from=target.id;
-    drag.c.fromPos=pos;
-  }else{
-    drag.c.to=target.id;
-    drag.c.toPos=pos;
-  }
-
-  renderConnections();
-}
-
-function endConnection(){
-  drag = null;
-  window.removeEventListener("pointermove",moveConnection);
-}
-
-/* ------------------------------
-   要素追加
------------------------------- */
-
-function addElement(type,x,y){
-
-  const r = wrap.getBoundingClientRect();
-
-  const px =
-    ((x-r.left)/r.width*100);
-
-  const py =
-    ((y-r.top)/r.height*100);
-
-  const data = {
-    id:nextId++,
-    type,
-    label:
-      type==="comment" ? "コメント" :
-      type==="highlight" ? "強調枠" :
-      type==="zoombox" ? "拡大枠" : "スキップ",
-
-    start:Math.max(0,Math.min(duration-5,current)),
-    end:Math.min(duration,current+5),
-
-    x:Math.max(0,Math.min(75,px)),
-    y:Math.max(0,Math.min(75,py)),
-    w:type==="comment"?190:180,
-    h:type==="comment"?55:100
-  };
-
-  if(type==="highlight"){
-    data.shape="rect";
-    data.w=230;
-    data.h=130;
-  }
-
-  if(type==="skip"){
-    data.x=0;
-    data.y=0;
-    data.w=0;
-    data.h=0;
-  }
-
-  if(type==="comment"){
-    data.text="新しいコメント";
-  }
-
-  elements.push(data);
-
-  selected=[data.id];
-
-  renderOverlay();
-  renderTimeline();
-
-  toastMsg(data.label+"を追加しました");
-}
-
-/* ------------------------------
-   メニュー
------------------------------- */
-
-function openMenu(x,y,html){
-  menu.innerHTML=html;
-  menu.style.display="block";
-
-  menu.style.left =
-    Math.min(x,innerWidth-240) + "px";
-
-  menu.style.top =
-    Math.min(y,innerHeight-280) + "px";
-}
-
-function showElementMenu(x,y,id){
-
-  const e = elements.find(v=>v.id===id);
-  if(!e) return;
-
-  menuTarget = {
-    type:"element",
-    id
-  };
-
-  let html =
-    `<div class="menu-title">${e.label} の操作</div>`;
-
-  if(e.type==="comment"){
-    html += `
-      <button data-action="editComment">
-        コメントを変更
-      </button>
-    `;
-  }
-
-  if(e.type==="highlight"){
-    html += `
-      <button data-action="shapeRect">四角形</button>
-      <button data-action="shapeRound">角丸</button>
-      <button data-action="shapeCircle">円形</button>
-    `;
-  }
-
-  if(e.type==="zoombox"){
-    html += `
-      <button data-action="connectFrom">
-        接続線を作成
-      </button>
-    `;
-  }
-
-  if(selected.length>=2){
-    html += `
-      <hr>
-      <button data-action="connect">
-        選択した要素を接続
-      </button>
-    `;
-  }
-
-  html += `
-    <hr>
-    <button data-action="delete">削除</button>
-  `;
-
-  openMenu(x,y,html);
-}
-
-function showConnectionMenu(x,y,id){
-
-  const c = connections.find(v=>v.id===id);
-  if(!c) return;
-
-  menuTarget = {
-    type:"connection",
-    id
-  };
-
-  const html = `
-    <div class="menu-title">接続線の操作</div>
-
-    <select id="lineStyle">
-      <option value="solid"
-        ${c.style==="solid"?"selected":""}>
-        直線
-      </option>
-      <option value="orthogonal"
-        ${c.style==="orthogonal"?"selected":""}>
-        折れ線
-      </option>
-      <option value="wave"
-        ${c.style==="wave"?"selected":""}>
-        波線
-      </option>
-      <option value="dashed"
-        ${c.style==="dashed"?"selected":""}>
-        破線
-      </option>
-      <option value="dotted"
-        ${c.style==="dotted"?"selected":""}>
-        点線
-      </option>
-    </select>
-
-    <hr>
-
-    <button data-action="toggleFromArrow">
-      始点の終端：${c.fromArrow?"矢印":"なし"}
-    </button>
-
-    <button data-action="toggleToArrow">
-      終点の終端：${c.toArrow?"矢印":"なし"}
-    </button>
-
-    <button data-action="deleteConnection">
-      接続線を削除
-    </button>
-  `;
-
-  openMenu(x,y,html);
-
-  setTimeout(()=>{
-    const s=$("lineStyle");
-
-    if(s){
-      s.onchange=()=>{
-        c.style=s.value;
-        renderConnections();
-      };
-    }
-  },0);
-}
-
-menu.addEventListener("click",ev=>{
-
-  const action = ev.target.dataset.action;
-
-  if(!action || !menuTarget) return;
-
-  if(menuTarget.type==="element"){
-
-    const e =
-      elements.find(v=>v.id===menuTarget.id);
-
-    if(!e) return;
-
-    if(action==="shapeRect"){
-      e.shape="rect";
-    }
-
-    if(action==="shapeRound"){
-      e.shape="round";
-    }
-
-    if(action==="shapeCircle"){
-      e.shape="circle";
-    }
-
-    if(action==="editComment"){
-      const value =
-        prompt("コメント",e.text);
-
-      if(value!==null){
-        e.text=value;
-      }
-    }
-
-    if(action==="connect"){
-      if(selected.length>=2){
-
-        const from=selected[0];
-        const to=selected[1];
-
-        if(from!==to){
-
-          connections.push({
-            id:nextId++,
-            from,
-            to,
-            fromPos:"r",
-            toPos:"l",
-            style:"solid",
-            fromArrow:false,
-            toArrow:false,
-            selected:false
-          });
-
-          selected=[];
-          toastMsg("接続線を作成しました");
-        }
-      }
-    }
-
-    if(action==="connectFrom"){
-      startConnectMode(e.id);
-    }
-
-    if(action==="delete"){
-      deleteElement(e.id);
-    }
-
-    renderOverlay();
-    renderTimeline();
-  }
-
-  if(menuTarget.type==="connection"){
-
-    const c =
-      connections.find(v=>v.id===menuTarget.id);
-
-    if(!c) return;
-
-    if(action==="toggleFromArrow"){
-      c.fromArrow=!c.fromArrow;
-    }
-
-    if(action==="toggleToArrow"){
-      c.toArrow=!c.toArrow;
-    }
-
-    if(action==="deleteConnection"){
-      connections =
-        connections.filter(v=>v.id!==c.id);
-
-      selected=[];
-    }
-
-    renderConnections();
-  }
-
-  menu.style.display="none";
-});
-
-document.addEventListener("pointerdown",ev=>{
-  if(!menu.contains(ev.target)){
-    menu.style.display="none";
-  }
-});
-
-/* ------------------------------
-   接続線作成モード
------------------------------- */
-
-let connectMode = false;
-let connectFrom = null;
-
-function startConnectMode(id){
-  connectMode=true;
-  connectFrom=id;
-
-  toastMsg(
-    "接続先の要素をクリックしてください"
-  );
-}
-
-function handleConnectClick(id){
-  if(!connectMode) return;
-
-  if(connectFrom===id){
-    connectMode=false;
-    connectFrom=null;
-    return;
-  }
-
-  connections.push({
-    id:nextId++,
-    from:connectFrom,
-    to:id,
-    fromPos:"r",
-    toPos:"l",
-    style:"solid",
-    fromArrow:false,
-    toArrow:false,
-    selected:false
-  });
-
-  connectMode=false;
-  connectFrom=null;
-
-  renderOverlay();
-  renderTimeline();
-
-  toastMsg("接続線を作成しました");
-}
-
-/* ------------------------------
-   要素削除
------------------------------- */
-
-function deleteElement(id){
-
-  const index =
-    elements.findIndex(e=>e.id===id);
-
-  if(index<0) return;
-
-  elements.splice(index,1);
-
-  connections =
-    connections.filter(c=>
-      c.from!==id && c.to!==id
-    );
-
-  selected =
-    selected.filter(x=>x!==id);
-
-  toastMsg("要素を削除しました");
-}
-
-/* ------------------------------
-   要素クリック時の接続処理
------------------------------- */
-
-overlay.addEventListener("click",e=>{
-  const el=e.target.closest(".element");
-  if(!el) return;
-
-  if(connectMode){
-    e.stopPropagation();
-
-    handleConnectClick(
-      Number(el.dataset.id)
-    );
-  }
-});
-
-/* ------------------------------
-   動画上の右クリック
------------------------------- */
-
-wrap.addEventListener("contextmenu",e=>{
-  if(e.target.closest(".element")) return;
-  if(e.target.closest(".connection-hit")) return;
-
-  e.preventDefault();
-
-  menuTarget=null;
-
-  const html = `
-    <div class="menu-title">要素を追加</div>
-    <button data-add="comment">＋ コメント</button>
-    <button data-add="highlight">＋ 強調枠</button>
-    <button data-add="zoombox">＋ 拡大枠</button>
-    <button data-add="skip">＋ スキップ</button>
-  `;
-
-  openMenu(e.clientX,e.clientY,html);
-});
-
+screen.oncontextmenu=e=>{
+ if(e.target.closest(".el")||e.target.closest(".linehit"))return;
+ e.preventDefault();
+ openMenu(e.clientX,e.clientY,`<b>要素を追加</b>
+ <button data-add="comment">コメント</button>
+ <button data-add="highlight">強調枠</button>
+ <button data-add="zoom">拡大枠</button>
+ <button data-add="skip">スキップ</button>`,{type:"add",x:e.clientX,y:e.clientY});
+};
 menu.addEventListener("click",e=>{
-  const type=e.target.dataset.add;
-  if(!type) return;
-
-  const x=parseFloat(menu.style.left);
-  const y=parseFloat(menu.style.top);
-
-  menu.style.display="none";
-
-  addElement(type,x,y);
+ let t=e.target.dataset.add;if(!t)return;
+ let r=screen.getBoundingClientRect(),x=(menuTarget.x-r.left)/r.width*100,y=(menuTarget.y-r.top)/r.height*100;
+ let n={id:next++,type:t,label:t=="comment"?"コメント":t=="highlight"?"強調枠":t=="zoom"?"拡大枠":"スキップ",start:current,end:Math.min(duration,current+5),x:Math.max(0,Math.min(75,x)),y:Math.max(0,Math.min(75,y)),w:t=="highlight"?25:22,h:t=="comment"?9:18,text:"新しいコメント",shape:"rect"};
+ els.push(n);selected=[n.id];menu.style.display="none";render();timeline();
 });
 
-/* ------------------------------
-   時間軸拡大縮小
------------------------------- */
-
-$("scale").addEventListener("input",e=>{
-  scale=Number(e.target.value);
-
-  $("scaleText").textContent =
-    scale.toFixed(1) + "×";
-
-  renderAxis();
-  renderTimeline();
+$("pick").onclick=()=>$("file").click();
+$("file").onchange=e=>{
+ let f=e.target.files[0];if(!f)return;
+ video.src=URL.createObjectURL(f);video.onloadedmetadata=()=>{duration=video.duration;$("hint").style.display="none";render();timeline();};
+ $("status").textContent=f.name;
+};
+$("play").onclick=()=>{
+ if(!video.src)return toast("先に動画を選択してください");
+ video.paused?(video.play(),$("play").textContent="❚❚ 一時停止"):(video.pause(),$("play").textContent="▶ 再生");
+};
+$("stop").onclick=()=>{if(video.src){video.pause();video.currentTime=0;$("play").textContent="▶ 再生"}};
+video.ontimeupdate=()=>{current=video.currentTime;render();timeline()};
+$("scale").oninput=e=>{scale=+e.target.value;$("scaleText").textContent=scale.toFixed(1)+"×";timeline()};
+$("tl").onclick=e=>{
+ if(e.target.closest(".bar"))return;
+ let r=$("tl").getBoundingClientRect(),x=e.clientX-r.left-95;
+ if(x>=0)seek(x/width()*duration);
+};
+addEventListener("keydown",e=>{
+ if(e.key=="Escape"){connectMode=null;menu.style.display="none"}
+ if((e.key=="Delete"||e.key=="Backspace")&&selected.length){
+  els=els.filter(x=>!selected.includes(x.id));lines=lines.filter(x=>!selected.includes(x.from)&&!selected.includes(x.to));selected=[];render();timeline();
+ }
 });
+addEventListener("resize",()=>timeline());
 
-/* ------------------------------
-   キーボード
------------------------------- */
-
-document.addEventListener("keydown",e=>{
-
-  if(e.key==="Escape"){
-    connectMode=false;
-    connectFrom=null;
-    menu.style.display="none";
-    toastMsg("操作をキャンセルしました");
-  }
-
-  if(
-    (e.key==="Delete" || e.key==="Backspace") &&
-    selected.length
-  ){
-    [...selected].forEach(id=>{
-      deleteElement(id);
-    });
-
-    renderOverlay();
-    renderTimeline();
-  }
-});
-
-/* ------------------------------
-   リサイズ
------------------------------- */
-
-window.addEventListener("resize",()=>{
-  renderAxis();
-  renderTimeline();
-  renderOverlay();
-});
-
-/* ------------------------------
-   初期状態
------------------------------- */
-
-function initMock(){
-
-  /* モックでは動画未選択でも
-     編集操作を確認できるよう60秒で表示 */
-
-  duration=60;
-  current=0;
-
-  renderAxis();
-  renderTimeline();
-  renderOverlay();
-  updatePlayhead();
-}
-
-initMock();
+render();timeline();
 </script>
-
 </body>
 </html>
