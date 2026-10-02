@@ -9,527 +9,603 @@ declare(strict_types=1);
 <title>動画編集</title>
 <style>
 *{box-sizing:border-box}
-html,body{margin:0;width:100%;height:100%;font-family:Arial,"Noto Sans JP",sans-serif;color:#222;background:#f5f6f8}
-button,input{font:inherit}
-button{cursor:pointer}
-.app{height:100vh;display:flex;flex-direction:column;overflow:hidden}
-.header{height:56px;display:flex;align-items:center;padding:0 18px;background:#fff;border-bottom:1px solid #ddd;gap:14px;flex:none}
+html,body{margin:0;height:100%;font-family:Arial,"Noto Sans JP",sans-serif;color:#222}
+button{font:inherit;cursor:pointer}
+:root{--accent:#2864d7;--border:#d9dde4;--bg:#f5f6f8}
+.app{height:100vh;display:flex;flex-direction:column;background:var(--bg);overflow:hidden}
+.header{height:56px;flex:none;background:#fff;border-bottom:1px solid var(--border);
+ display:flex;align-items:center;padding:0 18px}
 .title{font-size:18px;font-weight:700}
-.header .status{margin-left:auto;color:#666;font-size:13px}
-.primary{border:0;border-radius:6px;background:#2864d7;color:#fff;padding:9px 15px;font-weight:700}
-.main{flex:1;min-height:0;display:flex;flex-direction:column;padding:10px;gap:10px}
-.preview{height:42%;min-height:230px;background:#111;border-radius:7px;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+.header-actions{margin-left:auto;display:flex;align-items:center;gap:12px}
+.selected-video{font-size:13px;color:#666}
+.primary{border:0;border-radius:6px;background:var(--accent);color:#fff;padding:9px 16px;font-weight:700}
+.main{flex:1;min-height:0;padding:12px;display:flex;flex-direction:column;gap:12px}
+.preview{height:38%;min-height:220px;background:#111;border-radius:8px;position:relative;
+ display:flex;align-items:center;justify-content:center;overflow:hidden}
 .preview video{width:100%;height:100%;object-fit:contain;background:#111}
-.preview-empty{color:#aaa;font-size:14px}
-.video-name{position:absolute;top:10px;left:10px;background:#000b;color:#fff;border-radius:4px;padding:5px 8px;font-size:12px;display:none}
-.editor{flex:1;min-height:0;background:#fff;border:1px solid #ddd;border-radius:7px;display:flex;flex-direction:column;overflow:hidden}
-.editor-head{height:44px;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid #e2e2e2;flex:none}
-.editor-help{font-size:12px;color:#666}
-.editor-state{margin-left:auto;font-size:12px;color:#2864d7}
-.work-area{position:relative;flex:1;min-height:180px;overflow:auto;background:#fafafa}
-.objects{position:relative;width:100%;height:100%;min-height:300px}
-.connections{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:1}
-.element{position:absolute;width:140px;min-height:58px;padding:10px;background:#fff;border:2px solid #2864d7;border-radius:7px;box-shadow:0 2px 5px #0001;cursor:move;user-select:none;z-index:2}
-.element.selected{outline:2px solid #2864d7;outline-offset:3px}
+.preview.empty{color:#aaa}
+.video-label{position:absolute;left:10px;top:10px;background:#000b;color:#fff;
+ padding:5px 8px;border-radius:4px;font-size:12px;display:none}
+.editor{flex:1;min-height:0;background:#fff;border:1px solid var(--border);border-radius:8px;
+ display:flex;flex-direction:column;overflow:hidden}
+.editor-head{height:46px;flex:none;border-bottom:1px solid var(--border);
+ display:flex;align-items:center;padding:0 12px;gap:8px}
+.editor-head button{border:1px solid #ccd1d9;background:#fff;border-radius:5px;padding:6px 11px}
+.editor-head button.active{border-color:var(--accent);background:#eef4ff;color:var(--accent)}
+.help{margin-left:auto;font-size:12px;color:#777}
+.stage-wrap{flex:1;min-height:180px;overflow:auto;background:#fafbfc}
+.stage{position:relative;min-width:100%;min-height:100%;height:100%;
+ background-image:linear-gradient(#e9edf2 1px,transparent 1px),
+ linear-gradient(90deg,#e9edf2 1px,transparent 1px);
+ background-size:24px 24px}
+.connections{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
+.element{position:absolute;width:150px;min-height:62px;padding:10px 28px 10px 11px;
+ background:#fff;border:2px solid var(--accent);border-radius:7px;z-index:2;
+ box-shadow:0 2px 7px #0001;user-select:none;cursor:move}
+.element.selected{outline:2px solid var(--accent);outline-offset:3px}
+.element.hidden{display:none}
 .element-name{font-size:13px;font-weight:700}
-.element-time{margin-top:5px;color:#777;font-size:11px}
-.element-delete{position:absolute;right:4px;top:2px;border:0;background:none;color:#777;padding:0;font-size:16px}
-.context{position:fixed;display:none;z-index:50;width:170px;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 5px 18px #0003;padding:4px}
-.context button{width:100%;border:0;background:#fff;text-align:left;padding:9px;border-radius:4px}
-.context button:hover{background:#eef4ff;color:#2454c5}
-.timeline{height:125px;flex:none;border-top:1px solid #ddd;padding:8px 12px;background:#fff}
-.timeline-head{height:28px;display:flex;align-items:center}
+.element-time{font-size:11px;color:#777;margin-top:5px}
+.element-delete{position:absolute;right:5px;top:3px;border:0;background:transparent;
+ color:#888;font-size:16px;padding:0}
+.element-delete:hover{color:#d22}
+.timeline{height:108px;flex:none;border-top:1px solid var(--border);padding:8px 12px;background:#fff}
+.timeline-head{height:24px;display:flex;align-items:center}
 .time{font-size:12px;color:#555}
 .scale{margin-left:auto;display:flex;align-items:center;gap:6px}
-.scale button{width:28px;height:25px;border:1px solid #ccc;background:#fff;border-radius:4px}
-.scale span{width:65px;text-align:center;font-size:12px}
-.ruler-wrap{height:76px;overflow-x:auto;overflow-y:hidden;margin-top:3px}
-.ruler{height:70px;position:relative;min-width:100%;border-top:1px solid #999}
-.tick{position:absolute;top:0;height:70px;border-left:1px solid #bbb}
-.tick span{position:absolute;top:5px;left:4px;white-space:nowrap;font-size:10px;color:#666}
-.playhead{position:absolute;top:0;height:70px;width:2px;background:#df3b3b;z-index:5;pointer-events:none}
-.scrub{position:absolute;inset:0;cursor:pointer}
-.modal{position:fixed;inset:0;background:#0007;display:none;align-items:center;justify-content:center;z-index:30}
+.scale button{width:28px;height:25px;border:1px solid #ccd1d9;background:#fff;border-radius:4px}
+.scale-value{width:54px;text-align:center;font-size:12px}
+.ruler-wrap{height:62px;overflow:auto;margin-top:4px}
+.ruler{position:relative;height:58px;min-width:100%;border-top:1px solid #999}
+.tick{position:absolute;top:0;height:100%;border-left:1px solid #bcc1c8}
+.tick span{position:absolute;top:4px;left:4px;font-size:10px;color:#666;white-space:nowrap}
+.playhead{position:absolute;top:0;height:100%;width:2px;background:#e23b3b;z-index:5;pointer-events:none}
+.scrub{position:absolute;inset:0;cursor:pointer;z-index:4}
+.modal{position:fixed;inset:0;background:#0008;display:none;align-items:center;justify-content:center;z-index:20}
 .modal.show{display:flex}
-.modal-box{width:390px;max-width:calc(100vw - 30px);background:#fff;border-radius:8px;padding:20px;box-shadow:0 15px 40px #0005}
-.modal-box h2{margin:0 0 14px;font-size:18px}
-.choice{width:100%;display:block;text-align:left;border:1px solid #d5d9df;background:#fafafa;border-radius:6px;padding:13px;margin-top:8px}
-.choice:hover{border-color:#2864d7;background:#eef4ff}
-.choice strong{display:block}
-.choice small{display:block;margin-top:4px;color:#777}
-.modal-close{margin-top:14px;border:1px solid #ccc;background:#fff;border-radius:5px;padding:7px 12px}
+.modal-box{width:400px;max-width:calc(100vw - 30px);background:#fff;border-radius:9px;
+ padding:20px;box-shadow:0 15px 45px #0005}
+.modal-box h2{margin:0 0 16px;font-size:18px}
+.video-list{display:grid;gap:9px}
+.video-choice{width:100%;text-align:left;border:1px solid #d4d9e0;background:#fff;
+ border-radius:7px;padding:13px}
+.video-choice:hover,.video-choice.selected{border-color:var(--accent);background:#eef4ff}
+.video-choice strong{display:block;margin-bottom:4px}
+.video-choice small{color:#666}
+.modal-foot{display:flex;justify-content:flex-end;margin-top:16px}
+.context-menu{position:fixed;display:none;z-index:30;background:#fff;border:1px solid #ccd1d9;
+ border-radius:6px;box-shadow:0 8px 24px #0003;padding:4px}
+.context-menu.show{display:block}
+.context-menu button{display:block;border:0;background:#fff;width:150px;text-align:left;
+ padding:8px 10px;border-radius:4px}
+.context-menu button:hover{background:#eef4ff;color:var(--accent)}
+.notice{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+ color:#888;font-size:13px;pointer-events:none}
 @media(max-width:700px){
-.preview{height:35%;min-height:190px}
-.timeline{height:115px}
+ .help{display:none}
+ .preview{height:32%}
+ .element{width:135px}
 }
 </style>
 </head>
 <body>
 <div class="app">
+
 <header class="header">
-<div class="title">動画編集</div>
-<button class="primary" id="selectVideo">動画を選択</button>
-<div class="status" id="videoStatus">動画未選択</div>
+  <div class="title">動画編集</div>
+  <div class="header-actions">
+    <span class="selected-video" id="selectedVideo">動画未選択</span>
+    <button class="primary" id="openVideo">動画を選択</button>
+  </div>
 </header>
 
 <main class="main">
-<section class="preview" id="preview">
-<div class="preview-empty" id="previewEmpty">動画を選択してください</div>
-<video id="video" controls playsinline preload="metadata" style="display:none"></video>
-<div class="video-name" id="videoName"></div>
-</section>
 
-<section class="editor">
-<div class="editor-head">
-<div class="editor-help">編集領域：右クリックで要素を追加できます</div>
-<div class="editor-state" id="editorState">通常操作</div>
-</div>
+  <div class="preview empty" id="preview">
+    <span id="previewEmpty">動画を選択してください</span>
+    <video id="video" controls playsinline style="display:none"></video>
+    <div class="video-label" id="videoLabel"></div>
+  </div>
 
-<div class="work-area" id="workArea">
-<div class="objects" id="objects">
-<svg class="connections" id="connections"></svg>
-</div>
-</div>
+  <section class="editor">
+    <div class="editor-head">
+      <button id="connectButton">接続</button>
+      <button id="hideButton">表示／非表示</button>
+      <button id="deleteButton">削除</button>
+      <span class="help" id="operationHelp">右クリックで要素を追加できます</span>
+    </div>
 
-<div class="timeline">
-<div class="timeline-head">
-<div class="time" id="timeText">00:00.0 / 00:30.0</div>
-<div class="scale">
-<button id="zoomOut">−</button>
-<span id="scaleText">標準</span>
-<button id="zoomIn">＋</button>
-</div>
-</div>
-<div class="ruler-wrap" id="rulerWrap">
-<div class="ruler" id="ruler">
-<div class="scrub" id="scrub"></div>
-<div class="playhead" id="playhead"></div>
-</div>
-</div>
-</div>
-</section>
+    <div class="stage-wrap" id="stageWrap">
+      <div class="stage" id="stage">
+        <svg class="connections" id="connections"></svg>
+        <div class="notice" id="stageNotice">右クリックで要素を追加</div>
+      </div>
+    </div>
+
+    <div class="timeline">
+      <div class="timeline-head">
+        <span class="time" id="timeText">00:00.0 / 00:00.0</span>
+        <div class="scale">
+          <button id="zoomOut">−</button>
+          <span class="scale-value" id="scaleText">1.0x</span>
+          <button id="zoomIn">＋</button>
+        </div>
+      </div>
+      <div class="ruler-wrap" id="rulerWrap">
+        <div class="ruler" id="ruler">
+          <div class="scrub" id="scrub"></div>
+          <div class="playhead" id="playhead"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
 </main>
 </div>
 
-<div class="context" id="contextMenu">
-<button id="addElement">要素を追加</button>
+<div class="modal" id="videoModal">
+  <div class="modal-box">
+    <h2>動画を選択</h2>
+    <div class="video-list">
+      <button class="video-choice" data-video="original">
+        <strong>オリジナル動画</strong>
+        <small>録画した元の動画</small>
+      </button>
+      <button class="video-choice" data-video="work">
+        <strong>作業動画</strong>
+        <small>編集中の作業動画</small>
+      </button>
+    </div>
+    <div class="modal-foot">
+      <button id="closeVideo">キャンセル</button>
+    </div>
+  </div>
 </div>
 
-<div class="modal" id="videoModal">
-<div class="modal-box">
-<h2>動画を選択</h2>
-<button class="choice" data-video="original">
-<strong>オリジナル動画</strong>
-<small>録画した元の動画</small>
-</button>
-<button class="choice" data-video="work">
-<strong>作業動画</strong>
-<small>編集中の作業動画</small>
-</button>
-<button class="modal-close" id="closeModal">キャンセル</button>
-</div>
+<div class="context-menu" id="contextMenu">
+  <button id="addElement">要素を追加</button>
 </div>
 
 <script>
 const state={
- video:null,
- duration:30,
- time:0,
- scale:1,
- selected:null,
- connectSource:null,
- nextId:1,
- elements:[],
- connections:[]
+  video:null,
+  duration:0,
+  time:0,
+  scale:1,
+  objects:[],
+  connections:[],
+  selected:null,
+  connectMode:false,
+  connectSource:null,
+  nextId:1
 };
 
+const videoSources={
+  original:'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+  work:'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm'
+};
+
+const stage=document.getElementById('stage');
+const stageWrap=document.getElementById('stageWrap');
+const svg=document.getElementById('connections');
 const video=document.getElementById('video');
 const preview=document.getElementById('preview');
-const objects=document.getElementById('objects');
-const connections=document.getElementById('connections');
-const workArea=document.getElementById('workArea');
+const previewEmpty=document.getElementById('previewEmpty');
+const videoLabel=document.getElementById('videoLabel');
+const selectedVideo=document.getElementById('selectedVideo');
+const modal=document.getElementById('videoModal');
+const contextMenu=document.getElementById('contextMenu');
 const ruler=document.getElementById('ruler');
 const playhead=document.getElementById('playhead');
-const contextMenu=document.getElementById('contextMenu');
-const editorState=document.getElementById('editorState');
-
-const sources={
- original:'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
- work:'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm'
-};
+const timeText=document.getElementById('timeText');
+const scaleText=document.getElementById('scaleText');
+const connectButton=document.getElementById('connectButton');
+const operationHelp=document.getElementById('operationHelp');
 
 function formatTime(sec){
- sec=Math.max(0,sec||0);
- return String(Math.floor(sec/60)).padStart(2,'0')+':'+(sec%60).toFixed(1).padStart(4,'0');
+  sec=Math.max(0,Number(sec)||0);
+  const min=Math.floor(sec/60);
+  const s=(sec%60).toFixed(1).padStart(4,'0');
+  return String(min).padStart(2,'0')+':'+s;
 }
 
 function openVideoSelector(){
- document.getElementById('videoModal').classList.add('show');
+  modal.classList.add('show');
 }
 
-document.getElementById('selectVideo').onclick=openVideoSelector;
-document.getElementById('closeModal').onclick=()=>{
- document.getElementById('videoModal').classList.remove('show');
-};
+function closeVideoSelector(){
+  modal.classList.remove('show');
+}
 
-document.querySelectorAll('.choice').forEach(button=>{
- button.onclick=()=>{
-  selectVideo(button.dataset.video);
-  document.getElementById('videoModal').classList.remove('show');
- };
+document.getElementById('openVideo').onclick=openVideoSelector;
+document.getElementById('closeVideo').onclick=closeVideoSelector;
+
+document.querySelectorAll('.video-choice').forEach(button=>{
+  button.addEventListener('click',()=>{
+    selectVideo(button.dataset.video);
+  });
 });
 
 function selectVideo(type){
- state.video=type;
- state.time=0;
- video.src=sources[type];
- video.style.display='block';
- document.getElementById('previewEmpty').style.display='none';
- document.getElementById('videoName').style.display='block';
- document.getElementById('videoName').textContent=
-  type==='original'?'オリジナル動画':'作業動画';
- document.getElementById('videoStatus').textContent=
-  type==='original'?'オリジナル動画':'作業動画';
- video.load();
- updateTimeline();
+  state.video=type;
+  state.time=0;
+  video.pause();
+  video.src=videoSources[type];
+  video.style.display='block';
+  preview.classList.remove('empty');
+  previewEmpty.style.display='none';
+  videoLabel.style.display='block';
+  videoLabel.textContent=type==='original'?'オリジナル動画':'作業動画';
+  selectedVideo.textContent=type==='original'?'オリジナル動画':'作業動画';
+  closeVideoSelector();
+  video.load();
+  updateTimeline();
 }
 
 video.addEventListener('loadedmetadata',()=>{
- if(Number.isFinite(video.duration)&&video.duration>0){
-  state.duration=video.duration;
- }else{
-  state.duration=30;
- }
- updateTimeline();
+  state.duration=Number.isFinite(video.duration)?video.duration:0;
+  updateTimeline();
 });
 
 video.addEventListener('timeupdate',()=>{
- state.time=video.currentTime;
- updateTimeline();
+  state.time=video.currentTime;
+  updateTimeline();
+});
+
+video.addEventListener('durationchange',()=>{
+  if(Number.isFinite(video.duration))state.duration=video.duration;
+  updateTimeline();
 });
 
 function updateTimeline(){
- document.getElementById('timeText').textContent=
-  formatTime(state.time)+' / '+formatTime(state.duration);
- const ratio=state.duration?state.time/state.duration:0;
- playhead.style.left=(ratio*100)+'%';
- renderRuler();
+  timeText.textContent=formatTime(state.time)+' / '+formatTime(state.duration);
+  const ratio=state.duration>0?state.time/state.duration:0;
+  playhead.style.left=(ratio*100)+'%';
+  renderRuler();
 }
 
-function interval(){
- if(state.scale===2)return 1;
- if(state.scale===1)return 5;
- return 10;
+function scaleSettings(){
+  if(state.scale===0.5)return {seconds:10,pixels:10};
+  if(state.scale===1)return {seconds:5,pixels:22};
+  if(state.scale===2)return {seconds:1,pixels:44};
+  return {seconds:0.5,pixels:70};
 }
 
 function renderRuler(){
- ruler.querySelectorAll('.tick').forEach(el=>el.remove());
+  ruler.querySelectorAll('.tick').forEach(el=>el.remove());
 
- const pxPerSecond=state.scale===2?45:(state.scale===1?24:12);
- const width=Math.max(
-  document.getElementById('rulerWrap').clientWidth,
-  state.duration*pxPerSecond
- );
- ruler.style.width=width+'px';
+  const settings=scaleSettings();
+  const duration=Math.max(state.duration,1);
+  const width=Math.max(
+    stageWrap.clientWidth,
+    duration*settings.pixels+20
+  );
 
- const step=interval();
- for(let t=0;t<=state.duration;t+=step){
-  const tick=document.createElement('div');
-  tick.className='tick';
-  tick.style.left=(t*pxPerSecond)+'px';
+  ruler.style.width=width+'px';
+  stage.style.minWidth=Math.max(stageWrap.clientWidth,width)+'px';
 
-  const label=document.createElement('span');
-  label.textContent=formatTime(t);
-  tick.appendChild(label);
-  ruler.appendChild(tick);
- }
+  for(let t=0;t<=duration+0.0001;t+=settings.seconds){
+    const tick=document.createElement('div');
+    tick.className='tick';
+    tick.style.left=(t*settings.pixels)+'px';
 
- const ratio=state.duration?state.time/state.duration:0;
- playhead.style.left=(ratio*100)+'%';
+    const label=document.createElement('span');
+    label.textContent=formatTime(t);
+    tick.appendChild(label);
+    ruler.appendChild(tick);
+  }
+
+  const ratio=state.duration>0?state.time/state.duration:0;
+  playhead.style.left=(ratio*100)+'%';
 }
 
 document.getElementById('zoomIn').onclick=()=>{
- state.scale=Math.min(2,state.scale+1);
- document.getElementById('scaleText').textContent=
-  state.scale===2?'拡大':state.scale===1?'標準':'縮小';
- updateTimeline();
+  state.scale=Math.min(4,state.scale*2);
+  scaleText.textContent=state.scale.toFixed(1)+'x';
+  updateTimeline();
 };
 
 document.getElementById('zoomOut').onclick=()=>{
- state.scale=Math.max(.5,state.scale-1);
- document.getElementById('scaleText').textContent=
-  state.scale===2?'拡大':state.scale===1?'標準':'縮小';
- updateTimeline();
+  state.scale=Math.max(0.5,state.scale/2);
+  scaleText.textContent=state.scale.toFixed(1)+'x';
+  updateTimeline();
 };
 
 document.getElementById('scrub').onclick=e=>{
- if(!state.video)return;
- const rect=ruler.getBoundingClientRect();
- const x=e.clientX-rect.left;
- const ratio=Math.max(0,Math.min(1,x/ruler.clientWidth));
- video.currentTime=ratio*state.duration;
+  if(!state.video||!state.duration)return;
+
+  const rect=ruler.getBoundingClientRect();
+  const settings=scaleSettings();
+  const x=Math.max(0,e.clientX-rect.left);
+  const t=Math.max(0,Math.min(state.duration,x/settings.pixels));
+
+  video.currentTime=t;
 };
 
-workArea.addEventListener('contextmenu',e=>{
- e.preventDefault();
- const rect=workArea.getBoundingClientRect();
- contextMenu.style.left=e.clientX+'px';
- contextMenu.style.top=e.clientY+'px';
- contextMenu.dataset.x=String(e.clientX-rect.left+workArea.scrollLeft);
- contextMenu.dataset.y=String(e.clientY-rect.top+workArea.scrollTop);
- contextMenu.style.display='block';
+stage.addEventListener('contextmenu',e=>{
+  e.preventDefault();
+
+  const rect=stage.getBoundingClientRect();
+  const x=Math.max(0,e.clientX-rect.left);
+  const y=Math.max(0,e.clientY-rect.top);
+
+  contextMenu.dataset.x=String(x);
+  contextMenu.dataset.y=String(y);
+  contextMenu.style.left=e.clientX+'px';
+  contextMenu.style.top=e.clientY+'px';
+  contextMenu.classList.add('show');
 });
 
 document.addEventListener('click',e=>{
- if(!contextMenu.contains(e.target))contextMenu.style.display='none';
+  if(!contextMenu.contains(e.target))contextMenu.classList.remove('show');
 });
 
 document.getElementById('addElement').onclick=()=>{
- const x=Number(contextMenu.dataset.x||30);
- const y=Number(contextMenu.dataset.y||30);
- addElement(x,y);
- contextMenu.style.display='none';
+  const x=Number(contextMenu.dataset.x||40);
+  const y=Number(contextMenu.dataset.y||40);
+
+  const id=state.nextId++;
+  state.objects.push({
+    id,
+    name:'要素 '+id,
+    x,
+    y,
+    visible:true
+  });
+
+  contextMenu.classList.remove('show');
+  state.selected=id;
+  renderObjects();
 };
 
-function addElement(x,y){
- const id=state.nextId++;
- state.elements.push({
-  id,
-  name:'要素 '+id,
-  x:Math.max(0,x-70),
-  y:Math.max(0,y-30),
-  visible:true
- });
- state.selected=id;
- renderElements();
- editorState.textContent='要素を選択中';
+function getObject(id){
+  return state.objects.find(o=>o.id===id);
 }
 
-function getElement(id){
- return state.elements.find(item=>item.id===id);
+function selectObject(id){
+  state.selected=id;
+  renderObjects();
 }
 
-function renderElements(){
- objects.querySelectorAll('.element').forEach(el=>el.remove());
+function renderObjects(){
+  stage.querySelectorAll('.element').forEach(el=>el.remove());
 
- state.elements.forEach(item=>{
-  if(!item.visible)return;
+  state.objects.forEach(obj=>{
+    if(!obj.visible)return;
 
-  const el=document.createElement('div');
-  el.className='element'+(item.id===state.selected?' selected':'');
-  el.dataset.id=item.id;
-  el.style.left=item.x+'px';
-  el.style.top=item.y+'px';
+    const el=document.createElement('div');
+    el.className='element'+(state.selected===obj.id?' selected':'');
+    el.dataset.id=obj.id;
+    el.style.left=obj.x+'px';
+    el.style.top=obj.y+'px';
 
-  const name=document.createElement('div');
-  name.className='element-name';
-  name.textContent=item.name;
-  el.appendChild(name);
+    const name=document.createElement('div');
+    name.className='element-name';
+    name.textContent=obj.name;
 
-  const time=document.createElement('div');
-  time.className='element-time';
-  time.textContent='編集要素';
-  el.appendChild(time);
+    const time=document.createElement('div');
+    time.className='element-time';
+    time.textContent='編集要素';
 
-  const del=document.createElement('button');
-  del.className='element-delete';
-  del.textContent='×';
-  del.title='削除';
-  del.onclick=e=>{
-   e.stopPropagation();
-   deleteElement(item.id);
-  };
-  el.appendChild(del);
+    const del=document.createElement('button');
+    del.className='element-delete';
+    del.textContent='×';
+    del.title='削除';
 
-  el.addEventListener('mousedown',startDrag);
-  el.addEventListener('click',e=>{
-   if(e.target!==del){
-    selectElement(item.id);
-   }
+    del.onclick=e=>{
+      e.stopPropagation();
+      deleteObject(obj.id);
+    };
+
+    el.appendChild(name);
+    el.appendChild(time);
+    el.appendChild(del);
+
+    el.addEventListener('mousedown',startDrag);
+    el.addEventListener('click',e=>{
+      if(e.target!==del)handleObjectClick(obj.id);
+    });
+
+    stage.appendChild(el);
   });
 
-  el.addEventListener('contextmenu',e=>{
-   e.preventDefault();
-   e.stopPropagation();
-   selectElement(item.id);
-   contextMenu.style.display='block';
-   contextMenu.style.left=e.clientX+'px';
-   contextMenu.style.top=e.clientY+'px';
-   contextMenu.dataset.x='0';
-   contextMenu.dataset.y='0';
-  });
-
-  objects.appendChild(el);
- });
-
- drawConnections();
+  drawConnections();
+  document.getElementById('stageNotice').style.display=
+    state.objects.length?'none':'block';
 }
 
-function selectElement(id){
- if(!getElement(id))return;
+function handleObjectClick(id){
+  if(state.connectMode){
+    if(state.connectSource===null){
+      state.connectSource=id;
+      state.selected=id;
+      operationHelp.textContent='接続先を選択してください';
+      renderObjects();
+      return;
+    }
 
- if(state.connectSource!==null&&state.connectSource!==id){
-  createConnection(state.connectSource,id);
-  state.connectSource=null;
-  state.selected=id;
-  editorState.textContent='接続しました';
- }else{
-  state.selected=id;
-  editorState.textContent='要素を選択中';
- }
+    if(state.connectSource!==id){
+      createConnection(state.connectSource,id);
+      state.connectSource=null;
+      state.selected=id;
+      operationHelp.textContent='接続元を選択してください';
+      renderObjects();
+      return;
+    }
 
- renderElements();
-}
+    return;
+  }
 
-function deleteElement(id){
- state.elements=state.elements.filter(item=>item.id!==id);
- state.connections=state.connections.filter(
-  line=>line.from!==id&&line.to!==id
- );
-
- if(state.selected===id)state.selected=null;
- if(state.connectSource===id)state.connectSource=null;
-
- editorState.textContent='通常操作';
- renderElements();
+  selectObject(id);
 }
 
 let drag=null;
 
 function startDrag(e){
- if(e.button!==0)return;
+  if(e.button!==0||state.connectMode)return;
 
- const id=Number(e.currentTarget.dataset.id);
- const item=getElement(id);
- if(!item)return;
+  const id=Number(e.currentTarget.dataset.id);
+  const obj=getObject(id);
+  if(!obj)return;
 
- selectElement(id);
+  state.selected=id;
+  renderObjects();
 
- drag={
-  id,
-  startX:e.clientX,
-  startY:e.clientY,
-  x:item.x,
-  y:item.y
- };
+  drag={
+    id,
+    startX:e.clientX,
+    startY:e.clientY,
+    x:obj.x,
+    y:obj.y
+  };
 
- document.addEventListener('mousemove',moveDrag);
- document.addEventListener('mouseup',endDrag,{once:true});
+  document.addEventListener('mousemove',moveDrag);
+  document.addEventListener('mouseup',endDrag,{once:true});
 }
 
 function moveDrag(e){
- if(!drag)return;
+  if(!drag)return;
 
- const item=getElement(drag.id);
- if(!item)return;
+  const obj=getObject(drag.id);
+  if(!obj)return;
 
- item.x=Math.max(
-  0,
-  drag.x+e.clientX-drag.startX
- );
- item.y=Math.max(
-  0,
-  drag.y+e.clientY-drag.startY
- );
+  obj.x=Math.max(0,drag.x+e.clientX-drag.startX);
+  obj.y=Math.max(0,drag.y+e.clientY-drag.startY);
 
- const el=objects.querySelector(
-  '.element[data-id="'+drag.id+'"]'
- );
+  const el=stage.querySelector('.element[data-id="'+drag.id+'"]');
 
- if(el){
-  el.style.left=item.x+'px';
-  el.style.top=item.y+'px';
- }
+  if(el){
+    el.style.left=obj.x+'px';
+    el.style.top=obj.y+'px';
+  }
 
- drawConnections();
+  drawConnections();
 }
 
 function endDrag(){
- drag=null;
- document.removeEventListener('mousemove',moveDrag);
+  drag=null;
+  document.removeEventListener('mousemove',moveDrag);
 }
 
+function deleteObject(id){
+  state.objects=state.objects.filter(obj=>obj.id!==id);
+  state.connections=state.connections.filter(c=>c.from!==id&&c.to!==id);
+
+  if(state.selected===id)state.selected=null;
+  if(state.connectSource===id)state.connectSource=null;
+
+  renderObjects();
+}
+
+document.getElementById('deleteButton').onclick=()=>{
+  if(state.selected!==null)deleteObject(state.selected);
+};
+
+document.getElementById('hideButton').onclick=()=>{
+  const obj=getObject(state.selected);
+  if(!obj)return;
+
+  obj.visible=!obj.visible;
+
+  if(!obj.visible){
+    state.connections=state.connections.filter(c=>c.from!==obj.id);
+  }
+
+  renderObjects();
+};
+
+connectButton.onclick=()=>{
+  state.connectMode=!state.connectMode;
+  state.connectSource=null;
+
+  connectButton.classList.toggle('active',state.connectMode);
+
+  operationHelp.textContent=state.connectMode
+    ?'接続元を選択してください'
+    :'右クリックで要素を追加できます';
+
+  renderObjects();
+};
+
 function createConnection(from,to){
- if(!getElement(from)||!getElement(to)||from===to)return;
+  const source=getObject(from);
+  const target=getObject(to);
 
- if(!state.connections.some(
-  line=>line.from===from&&line.to===to
- )){
-  state.connections.push({from,to});
- }
+  if(!source||!target||!source.visible||!target.visible)return;
 
- editorState.textContent='接続しました';
- drawConnections();
+  const exists=state.connections.some(
+    c=>c.from===from&&c.to===to
+  );
+
+  if(!exists){
+    state.connections.push({from,to});
+  }
+
+  drawConnections();
 }
 
 function drawConnections(){
- while(connections.firstChild){
-  connections.removeChild(connections.firstChild);
- }
+  while(svg.firstChild)svg.removeChild(svg.firstChild);
 
- state.connections=state.connections.filter(line=>{
-  const from=getElement(line.from);
-  const to=getElement(line.to);
-  return !!from&&!!to;
- });
+  state.connections=state.connections.filter(c=>{
+    const from=getObject(c.from);
+    const to=getObject(c.to);
+    return !!from&&!!to&&from.visible&&to.visible;
+  });
 
- const areaRect=objects.getBoundingClientRect();
+  const stageRect=stage.getBoundingClientRect();
 
- state.connections.forEach(line=>{
-  const from=getElement(line.from);
-  const to=getElement(line.to);
+  state.connections.forEach(c=>{
+    const from=getObject(c.from);
+    const to=getObject(c.to);
+    if(!from||!to||!from.visible||!to.visible)return;
 
-  if(!from||!to||!from.visible)return;
+    const fromEl=stage.querySelector('.element[data-id="'+from.id+'"]');
+    const toEl=stage.querySelector('.element[data-id="'+to.id+'"]');
 
-  const fromEl=objects.querySelector(
-   '.element[data-id="'+from.id+'"]'
-  );
-  const toEl=objects.querySelector(
-   '.element[data-id="'+to.id+'"]'
-  );
+    if(!fromEl||!toEl)return;
 
-  if(!fromEl||!toEl)return;
+    const a=fromEl.getBoundingClientRect();
+    const b=toEl.getBoundingClientRect();
 
-  const a=fromEl.getBoundingClientRect();
-  const b=toEl.getBoundingClientRect();
+    const x1=a.left-stageRect.left+a.width;
+    const y1=a.top-stageRect.top+a.height/2;
+    const x2=b.left-stageRect.left;
+    const y2=b.top-stageRect.top+b.height/2;
 
-  const x1=a.left-areaRect.left+a.width;
-  const y1=a.top-areaRect.top+a.height/2;
-  const x2=b.left-areaRect.left;
-  const y2=b.top-areaRect.top+b.height/2;
+    const bend=Math.max(30,Math.abs(x2-x1)*0.4);
 
-  const bend=Math.max(25,Math.abs(x2-x1)*.35);
+    const path=document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'path'
+    );
 
-  const path=document.createElementNS(
-   'http://www.w3.org/2000/svg',
-   'path'
-  );
+    path.setAttribute(
+      'd',
+      'M '+x1+' '+y1+
+      ' C '+(x1+bend)+' '+y1+
+      ', '+(x2-bend)+' '+y2+
+      ', '+x2+' '+y2
+    );
 
-  path.setAttribute(
-   'd',
-   'M '+x1+' '+y1+
-   ' C '+(x1+bend)+' '+y1+
-   ', '+(x2-bend)+' '+y2+
-   ', '+x2+' '+y2
-  );
-  path.setAttribute('fill','none');
-  path.setAttribute('stroke','#2864d7');
-  path.setAttribute('stroke-width','2');
-  path.setAttribute('stroke-linecap','round');
+    path.setAttribute('fill','none');
+    path.setAttribute('stroke','var(--accent)');
+    path.setAttribute('stroke-width','2');
+    path.setAttribute('stroke-linecap','round');
 
-  connections.appendChild(path);
- });
+    svg.appendChild(path);
+  });
 }
 
 window.addEventListener('resize',()=>{
- drawConnections();
- updateTimeline();
+  updateTimeline();
+  drawConnections();
 });
 
-workArea.addEventListener('scroll',drawConnections);
+stageWrap.addEventListener('scroll',drawConnections);
 
 updateTimeline();
-renderElements();
+renderObjects();
 </script>
 </body>
 </html>
