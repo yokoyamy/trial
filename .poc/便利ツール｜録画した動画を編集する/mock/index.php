@@ -20,17 +20,16 @@ svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index
 .line{fill:none;stroke:#90a4ae;stroke-width:2;pointer-events:none}.line.sel{stroke:#4da3ff;stroke-width:3}.line.pre{stroke:#ffd54f;stroke-dasharray:6 4}
 .endh{fill:#fff;stroke:#4da3ff;stroke-width:2;pointer-events:auto;cursor:grab}
 .hint{position:absolute;inset:0;display:grid;place-items:center;color:#657080;text-align:center;pointer-events:none;z-index:4}
-.timeline{height:270px;flex:none;border-top:1px solid #30363d}
-.tools{height:42px;border-bottom:1px solid #30363d}.time{min-width:165px}.scale{margin-left:auto;color:#8b949e;font-size:12px}.scale input{width:120px}
-.scroll{height:calc(100% - 42px);overflow:hidden;position:relative}.tl{position:relative;height:100%}
+.timeline{height:270px;flex:none;border-top:1px solid #30363d;display:flex;flex-direction:column}
+.tools{height:42px;flex:none;border-bottom:1px solid #30363d}.time{min-width:165px}.scale{margin-left:auto;color:#8b949e;font-size:12px}.scale input{width:120px}
+.scroll{flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;position:relative}.tl{position:relative;min-height:100%}
 .axis{height:30px;margin:0 15px 0 95px;position:relative;border-bottom:1px solid #30363d}
 .tick{position:absolute;height:100%;border-left:1px solid #4a5563;color:#9aa5b1;font-size:10px;padding-left:3px;white-space:nowrap}
 .tick.minor{height:7px;bottom:0;border-left:1px solid #343b45}
 .tick.end{border:0;border-right:2px solid #f0b000;padding:0 3px 0 0;transform:translateX(-100%);color:#f0b000}
-.rows{margin:0 15px 0 95px}.row{height:45px;position:relative;border-bottom:1px solid #242b33;overflow:hidden}
-.label{position:absolute;right:100%;width:95px;height:45px;display:flex;align-items:center;padding-left:7px;background:#161b22;font-size:11px}
-.lane{position:absolute;inset:0}
-.bar{position:absolute;top:7px;height:31px;border:1px solid;border-radius:5px;display:flex;align-items:center;padding:0 7px;font-size:10px;cursor:grab;overflow:hidden;white-space:nowrap}.bar.sel{box-shadow:0 0 0 2px #4da3ff}
+.rows{margin:0 15px 0 95px;position:relative}.row{height:34px;position:relative;border-bottom:1px solid #242b33}
+.row .label{position:absolute;right:100%;width:95px;height:34px;display:flex;align-items:center;padding-left:7px;background:#161b22;font-size:10px;color:#8b949e}
+.bar{position:absolute;top:4px;height:26px;border:1px solid;border-radius:5px;display:flex;align-items:center;padding:0 7px;font-size:10px;cursor:grab;overflow:hidden;white-space:nowrap}.bar.sel{box-shadow:0 0 0 2px #4da3ff}
 .playhead{position:absolute;top:0;bottom:0;width:2px;background:#f04444;z-index:20;cursor:ew-resize}
 .playhead::before{content:"";position:absolute;left:-7px;top:0;width:16px;height:16px;background:#f04444;border-radius:3px 3px 8px 8px}
 .playhead::after{content:"";position:absolute;left:-8px;right:-8px;top:0;bottom:0}
@@ -53,8 +52,9 @@ svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index
 const $=id=>document.getElementById(id),video=$("video"),scr=$("screen"),layer=$("layer"),svg=$("svg"),menu=$("menu");
 const TYPES={comment:["コメント","#4da3ff"],highlight:["強調枠","#f04444"],zoom:["拡大枠","#54d68a"],skip:["スキップ","#ff9800"]};
 const SIDES=["top","right","bottom","left"],SJ={top:"上",right:"右",bottom:"下",left:"左"},DASH={solid:"",dotted:"2 5",dashed:"10 6",dashdot:"12 5 2 5"};
-let duration=60,current=0,scale=1,selected=[],selLine=null,next=5,nextLine=1,drag=null,mt=null,connect=null,mouse=null,endDrag=null;
-let els=[{id:1,type:"comment",start:5,end:18,x:18,y:15,w:25,h:9,text:"ここを確認してください"},{id:2,type:"highlight",start:8,end:24,x:52,y:34,w:25,h:24},{id:3,type:"zoom",start:20,end:35,x:20,y:58,w:22,h:18},{id:4,type:"skip",start:38,end:45}],lines=[];
+let duration=60,current=0,scale=1,selected=[],selLine=null,next=5,nextLine=1,drag=null,mt=null,connect=null,mouse=null,endDrag=null,tdrag=null;
+let els=[{id:1,type:"comment",start:5,end:18,x:18,y:15,w:25,h:9,text:"ここを確認してください"},{id:2,type:"highlight",start:8,end:24,x:52,y:34,w:25,h:24},{id:3,type:"zoom",start:20,end:35,x:20,y:58,w:22,h:18},{id:4,type:"skip",start:38,end:45},{id:5,type:"comment",start:10,end:30,x:55,y:10,w:25,h:9,text:"同時間帯のコメント"}];next=6;
+let lines=[];
 const fmt=v=>String(Math.floor(v/60)).padStart(2,"0")+":"+(v%60).toFixed(3).padStart(6,"0");
 const fmtTick=(v,step)=>{let m=Math.floor(v/60),s=v-m*60,dec=step<1?(step<.1?2:1):0;return String(m).padStart(2,"0")+":"+s.toFixed(dec).padStart(dec?3+dec:2,"0")};
 const toast=s=>{let t=$("toast");t.textContent=s;t.style.display="block";clearTimeout(t.x);t.x=setTimeout(()=>t.style.display="none",1800)};
@@ -195,11 +195,19 @@ menu.onclick=e=>{
 };
 
 /* ---- タイムライン ---- */
-/* 主目盛り: ラベル間の画面上の間隔を必ず80px以上にする。刻みは1・2・5系から選ぶ。
-   スケール倍率が高いほど、より細かい刻みを許容する(ただし80px間隔は維持)。
-   補助目盛り: 主目盛りを2または5分割した細線。ラベルなし。 */
 function niceStep(minSec){
  let p=Math.pow(10,Math.floor(Math.log10(minSec))),m=[1,2,5,10].find(k=>k*p>=minSec);return m*p}
+
+/* 行割り当て: 開始時間順に並べ、時間が重ならない最初の行へ入れる。
+   重なる要素は必ず別の行になり、重ならない要素は同じ行に詰める。 */
+function assignRows(){
+ let rowEnd=[],map={};
+ [...els].sort((a,b)=>a.start-b.start||a.end-b.end||a.id-b.id).forEach(e=>{
+  let r=rowEnd.findIndex(t=>t<=e.start+1e-9);
+  if(r<0){r=rowEnd.length;rowEnd.push(0)}
+  rowEnd[r]=e.end;map[e.id]=r});
+ return{map,count:Math.max(rowEnd.length,1)}}
+
 function timeline(){
  let W=TW(),ax=$("axis"),pxSec=W/duration*scale,major=niceStep(80/pxSec);
  let lead=Math.pow(10,Math.floor(Math.log10(major))),minor=major/(Math.round(major/lead)==2?2:5);
@@ -210,11 +218,35 @@ function timeline(){
   let labeled=isMajor&&(t==0||W-x>50);
   ax.insertAdjacentHTML("beforeend",`<div class="tick${labeled?"":" minor"}" style="left:${x}px">${labeled?fmtTick(t,major):""}</div>`)}
  ax.insertAdjacentHTML("beforeend",`<div class="tick end" style="left:${W}px">${fmt(duration).slice(0,8)}</div>`);
- $("rows").innerHTML=Object.entries(TYPES).map(([k,[n,c]])=>`<div class="row"><div class="label">● ${n}</div><div class="lane">`+
-  els.filter(e=>e.type==k).map(e=>{let L=e.start/duration*W;return`<div class="bar${selected.includes(e.id)?" sel":""}" data-id="${e.id}" style="left:${L}px;width:${Math.max(24,Math.min(e.end/duration*W,W)-L)}px;color:${c};background:${c}44">${n}</div>`}).join("")+`</div></div>`).join("");
- $("rows").querySelectorAll(".bar").forEach(b=>b.onclick=x=>{x.stopPropagation();pick(+b.dataset.id,x);render()});
+ let {map,count}=assignRows(),h="";
+ for(let r=0;r<count;r++){
+  h+=`<div class="row"><div class="label">行 ${r+1}</div>`+els.filter(e=>map[e.id]==r).map(e=>{
+   let [n,c]=TYPES[e.type],L=e.start/duration*W,R=Math.min(e.end/duration*W,W);
+   return`<div class="bar${selected.includes(e.id)?" sel":""}" data-id="${e.id}" style="left:${L}px;width:${Math.max(24,R-L)}px;color:${c};background:${c}44">${n}</div>`}).join("")+`</div>`}
+ $("rows").innerHTML=h;
+ $("rows").querySelectorAll(".bar").forEach(b=>{
+  b.onclick=x=>{x.stopPropagation();pick(+b.dataset.id,x);render()};
+  b.onpointerdown=startTdrag});
  $("head").style.left=95+current/duration*W+"px";$("time").textContent=fmt(current)+" / "+fmt(duration);
 }
+
+/* 要素の表示時間の変更: バー左端=開始、右端=終了、中央=全体移動 */
+function startTdrag(e){
+ if(e.button!==0)return;e.stopPropagation();
+ let b=e.currentTarget,o=byId(+b.dataset.id),r=b.getBoundingClientRect(),edge=8,mode=e.clientX-r.left<edge?"l":r.right-e.clientX<edge?"r":"m";
+ tdrag={o,mode,sx:e.clientX,s:o.start,e:o.end,moved:false};
+ addEventListener("pointermove",tmove);addEventListener("pointerup",tend,{once:true});
+}
+function tmove(e){
+ let dt=(e.clientX-tdrag.sx)/TW()*duration,o=tdrag.o;
+ if(!tdrag.moved&&Math.abs(e.clientX-tdrag.sx)<3)return;tdrag.moved=true;
+ if(tdrag.mode=="l")o.start=Math.max(0,Math.min(tdrag.e-.1,tdrag.s+dt));
+ else if(tdrag.mode=="r")o.end=Math.min(duration,Math.max(tdrag.s+.1,tdrag.e+dt));
+ else{let len=tdrag.e-tdrag.s,s=Math.max(0,Math.min(duration-len,tdrag.s+dt));o.start=s;o.end=s+len}
+ render();
+}
+function tend(){tdrag=null;removeEventListener("pointermove",tmove);render()}
+
 function seek(cx){current=Math.max(0,Math.min(duration,(cx-$("tl").getBoundingClientRect().left-95)/TW()*duration));if(video.src)video.currentTime=current;render()}
 $("head").onpointerdown=e=>{e.preventDefault();e.stopPropagation();let m=ev=>seek(ev.clientX);addEventListener("pointermove",m);addEventListener("pointerup",()=>removeEventListener("pointermove",m),{once:true})};
 $("tl").onclick=e=>{if(!e.target.closest(".bar")&&e.clientX-$("tl").getBoundingClientRect().left>=95)seek(e.clientX)};
