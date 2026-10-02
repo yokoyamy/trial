@@ -1,257 +1,215 @@
 <?php ?>
 <!doctype html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>録画動画編集モック</title>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>録画動画編集モック</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;background:#11161d;color:#eee;font-family:Arial,"Noto Sans JP",sans-serif}
-button,input{font:inherit}button{border:1px solid #46515f;background:#242c36;color:#eee;border-radius:5px;padding:6px 10px;cursor:pointer}
-button:hover{background:#303b48}.primary{background:#1769aa}.app{height:100%;display:flex;flex-direction:column}
-header{height:52px;display:flex;align-items:center;gap:7px;padding:7px 10px;background:#161b22;border-bottom:1px solid #30363d}
-.status{margin-left:auto;color:#9aa5b1;font-size:12px}.main{flex:1;min-height:0;display:flex;flex-direction:column}
+button,input{font:inherit}button{border:1px solid #46515f;background:#242c36;color:#eee;border-radius:5px;padding:6px 10px;cursor:pointer}button:hover{background:#303b48}
+.app,.main{display:flex;flex-direction:column}.app{height:100%}.main{flex:1;min-height:0}
+header,.tools{display:flex;align-items:center;gap:8px;padding:7px 10px}header{height:52px;background:#161b22;border-bottom:1px solid #30363d}
+.status{margin-left:auto;color:#9aa5b1;font-size:12px}
 .video{flex:1;min-height:0;background:#05070a;padding:10px}.screen{height:100%;position:relative;background:#000;overflow:hidden}
-video{width:100%;height:100%;object-fit:contain}.layer{position:absolute;inset:0;z-index:2}
-.el{position:absolute;cursor:move;user-select:none;min-width:40px;min-height:25px}.el.sel{outline:2px solid #4da3ff;outline-offset:3px}
-.comment{padding:7px 10px;color:#fff;background:#0009}.highlight{border:4px solid #f04444}.highlight.round{border-radius:18px}.highlight.circle{border-radius:50%}
-.zoom{border:3px solid #54d68a;background:#54d68a18}
+video{width:100%;height:100%;object-fit:contain}.layer{position:absolute;inset:0;z-index:2;pointer-events:none}
+.el{position:absolute;cursor:move;user-select:none;min-width:40px;min-height:25px;pointer-events:auto}
+.el.sel{outline:2px solid #4da3ff;outline-offset:3px}.el.target{outline:2px dashed #ffd54f;outline-offset:3px;cursor:crosshair}
+.comment{padding:7px 10px;color:#fff;background:#0009}.highlight{border:4px solid #f04444}.round{border-radius:18px}.circle{border-radius:50%}
+.zoom{border:3px solid #54d68a;background:#54d68a18;color:#9ff0bd;text-align:center;padding:8px}
 .handle{position:absolute;width:9px;height:9px;background:#fff;border:2px solid #4da3ff}
 .nw{left:-5px;top:-5px;cursor:nwse-resize}.ne{right:-5px;top:-5px;cursor:nesw-resize}.sw{left:-5px;bottom:-5px;cursor:nesw-resize}.se{right:-5px;bottom:-5px;cursor:nwse-resize}
-svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}.linehit{pointer-events:stroke;stroke:transparent;stroke-width:18;fill:none}.line{fill:none;stroke:#90a4ae;stroke-width:2}.line.sel{stroke:#4da3ff;stroke-width:3}
-.hint{position:absolute;inset:0;display:grid;place-items:center;color:#657080;text-align:center;pointer-events:none;z-index:3}
-.timeline{height:270px;flex:none;border-top:1px solid #30363d;background:#11161d}
-.tools{height:42px;display:flex;align-items:center;gap:8px;padding:5px 9px;border-bottom:1px solid #30363d}
-.time{min-width:165px}.scale{margin-left:auto;color:#8b949e;font-size:12px}.scale input{width:120px}
-.scroll{height:calc(100% - 42px);overflow:hidden;position:relative}.tl{position:relative;height:100%;width:100%}
-.axis{height:30px;margin-left:95px;margin-right:15px;position:relative;border-bottom:1px solid #30363d}
+svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:3}
+.hit{pointer-events:stroke;stroke:transparent;stroke-width:18;fill:none;cursor:pointer}
+.line{fill:none;stroke:#90a4ae;stroke-width:2;pointer-events:none}.line.sel{stroke:#4da3ff;stroke-width:3}
+.endh{fill:#fff;stroke:#4da3ff;stroke-width:2;pointer-events:auto;cursor:grab}
+.hint{position:absolute;inset:0;display:grid;place-items:center;color:#657080;text-align:center;pointer-events:none;z-index:4}
+.timeline{height:270px;flex:none;border-top:1px solid #30363d}
+.tools{height:42px;border-bottom:1px solid #30363d}.time{min-width:165px}.scale{margin-left:auto;color:#8b949e;font-size:12px}.scale input{width:120px}
+.scroll{height:calc(100% - 42px);overflow:hidden;position:relative}.tl{position:relative;height:100%}
+.axis{height:30px;margin:0 15px 0 95px;position:relative;border-bottom:1px solid #30363d}
 .tick{position:absolute;height:100%;border-left:1px solid #343b45;color:#7d8590;font-size:10px;padding-left:3px;white-space:nowrap}
-.tick.end{border-left:none;border-right:2px solid #f0b000;padding:0 3px 0 0;transform:translateX(-100%);color:#f0b000}
-.rows{margin-left:95px;margin-right:15px}.row{height:45px;position:relative;border-bottom:1px solid #242b33;overflow:hidden}
+.tick.end{border:0;border-right:2px solid #f0b000;padding:0 3px 0 0;transform:translateX(-100%);color:#f0b000}
+.rows{margin:0 15px 0 95px}.row{height:45px;position:relative;border-bottom:1px solid #242b33;overflow:hidden}
 .label{position:absolute;right:100%;width:95px;height:45px;display:flex;align-items:center;padding-left:7px;background:#161b22;font-size:11px}
 .lane{position:absolute;inset:0}
 .bar{position:absolute;top:7px;height:31px;border:1px solid;border-radius:5px;display:flex;align-items:center;padding:0 7px;font-size:10px;cursor:grab;overflow:hidden;white-space:nowrap}.bar.sel{box-shadow:0 0 0 2px #4da3ff}
 .playhead{position:absolute;top:0;bottom:0;width:2px;background:#f04444;z-index:20;cursor:ew-resize}
 .playhead::before{content:"";position:absolute;left:-7px;top:0;width:16px;height:16px;background:#f04444;border-radius:3px 3px 8px 8px}
 .playhead::after{content:"";position:absolute;left:-8px;right:-8px;top:0;bottom:0}
-.menu{position:fixed;display:none;z-index:100;background:#1c2531;border:1px solid #46515f;border-radius:6px;padding:5px;min-width:210px;box-shadow:0 10px 30px #0009}.menu button{display:block;width:100%;text-align:left;margin:2px 0}
+.menu{position:fixed;display:none;z-index:100;background:#1c2531;border:1px solid #46515f;border-radius:6px;padding:5px;min-width:210px;max-height:95vh;overflow-y:auto;box-shadow:0 10px 30px #0009}
+.menu button{display:block;width:100%;text-align:left;margin:2px 0}.menu hr{border:0;border-top:1px solid #46515f;margin:4px 0}.menu .cur{background:#1769aa}
 .toast{position:fixed;right:12px;bottom:12px;background:#202938;border:1px solid #46515f;padding:8px 12px;border-radius:5px;display:none;z-index:200}
-</style>
-</head>
-<body>
-<div class="app">
-<header>
-<b>録画動画編集</b>
-<button class="primary" id="pick">動画を選択</button>
-<input id="file" type="file" accept="video/*" hidden>
-<span class="status" id="status">動画を選択してください</span>
-</header>
-
+</style></head>
+<body><div class="app">
+<header><b>録画動画編集</b><button style="background:#1769aa" id="pick">動画を選択</button><input id="file" type="file" accept="video/*" hidden><span class="status" id="status">動画を選択してください</span></header>
 <div class="main">
-<div class="video"><div class="screen" id="screen">
-<video id="video" playsinline></video>
-<svg id="svg"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#90a4ae"/></marker></defs></svg>
-<div class="layer" id="layer"></div>
-<div class="hint" id="hint">動画を選択してください<br>動画上で右クリックすると要素を追加できます</div>
-</div></div>
-
+<div class="video"><div class="screen" id="screen"><video id="video" playsinline></video><div class="layer" id="layer"></div><svg id="svg"></svg>
+<div class="hint" id="hint">動画を選択してください<br>動画上で右クリックすると要素を追加できます</div></div></div>
 <div class="timeline">
-<div class="tools">
-<button id="play">▶ 再生</button><button id="stop">■ 停止</button>
-<span class="time" id="time">00:00.000 / 00:00.000</span>
+<div class="tools"><button id="play">▶ 再生</button><button id="stop">■ 停止</button><span class="time" id="time"></span>
 <span class="scale">時間軸 <input id="scale" type="range" min=".5" max="4" step=".1" value="1"> <span id="scaleText">1.0×</span></span></div>
-<div class="scroll" id="scroll"><div class="tl" id="tl">
-<div class="axis" id="axis"></div>
-<div class="rows">
-<div class="row"><div class="label">● コメント</div><div class="lane" id="comment"></div></div>
-<div class="row"><div class="label">● 強調枠</div><div class="lane" id="highlight"></div></div>
-<div class="row"><div class="label">● 拡大枠</div><div class="lane" id="zoom"></div></div>
-<div class="row"><div class="label">● スキップ</div><div class="lane" id="skip"></div></div>
-</div>
-<div class="playhead" id="head"></div>
-</div></div>
-</div>
-</div></div>
-
+<div class="scroll"><div class="tl" id="tl"><div class="axis" id="axis"></div><div class="rows" id="rows"></div><div class="playhead" id="head"></div></div></div>
+</div></div></div>
 <div class="menu" id="menu"></div><div class="toast" id="toast"></div>
-
 <script>
 const $=id=>document.getElementById(id),video=$("video"),scr=$("screen"),layer=$("layer"),svg=$("svg"),menu=$("menu");
-let duration=60,current=0,scale=1,selected=[],next=5,drag=null,menuTarget=null,connectMode=null;
-const colors={comment:"#4da3ff",highlight:"#f04444",zoom:"#54d68a",skip:"#ff9800"};
-let els=[
-{id:1,type:"comment",label:"コメント",start:5,end:18,x:18,y:15,w:25,h:9,text:"ここを確認してください"},
-{id:2,type:"highlight",label:"強調枠",start:8,end:24,x:52,y:34,w:25,h:24,shape:"rect"},
-{id:3,type:"zoom",label:"拡大枠",start:20,end:35,x:20,y:58,w:22,h:18},
-{id:4,type:"skip",label:"スキップ",start:38,end:45}
-],lines=[];
-
-function fmt(v){let m=Math.floor(v/60),s=(v%60).toFixed(3);return String(m).padStart(2,"0")+":"+s.padStart(6,"0")}
-function toast(s){let t=$("toast");t.textContent=s;t.style.display="block";clearTimeout(t.x);t.x=setTimeout(()=>t.style.display="none",1500)}
-/* タイムライン幅は領域に固定。スケールでは変えない */
-function timelineWidth(){return Math.max(100,$("scroll").clientWidth-95-15)}
-function active(e){return current>=e.start&&current<=e.end}
+const TYPES={comment:["コメント","#4da3ff"],highlight:["強調枠","#f04444"],zoom:["拡大枠","#54d68a"],skip:["スキップ","#ff9800"]};
+const SIDES=["top","right","bottom","left"],SJ={top:"上",right:"右",bottom:"下",left:"左"},DASH={solid:"",dotted:"2 5",dashed:"10 6",dashdot:"12 5 2 5"};
+let duration=60,current=0,scale=1,selected=[],selLine=null,next=5,nextLine=1,drag=null,mt=null,connect=null,endDrag=null;
+let els=[{id:1,type:"comment",start:5,end:18,x:18,y:15,w:25,h:9,text:"ここを確認してください"},{id:2,type:"highlight",start:8,end:24,x:52,y:34,w:25,h:24},{id:3,type:"zoom",start:20,end:35,x:20,y:58,w:22,h:18},{id:4,type:"skip",start:38,end:45}],lines=[];
+const fmt=v=>String(Math.floor(v/60)).padStart(2,"0")+":"+(v%60).toFixed(3).padStart(6,"0");
+const toast=s=>{let t=$("toast");t.textContent=s;t.style.display="block";clearTimeout(t.x);t.x=setTimeout(()=>t.style.display="none",1800)};
+const TW=()=>Math.max(100,$("tl").clientWidth-110),active=e=>current>=e.start&&current<=e.end,byId=id=>els.find(a=>a.id==id);
+const multi=e=>e.shiftKey||e.ctrlKey||e.metaKey;
+function pick(id,e){selLine=null;selected=multi(e)?(selected.includes(id)?selected.filter(i=>i!=id):[...selected,id]):[id]}
 
 function render(){
 layer.innerHTML="";
 els.filter(e=>e.type!="skip"&&active(e)).forEach(e=>{
-let d=document.createElement("div");d.className="el "+e.type+(selected.includes(e.id)?" sel":"");d.dataset.id=e.id;
-d.style.cssText=`left:${e.x}%;top:${e.y}%;width:${e.w}%;height:${e.h}%`;
-if(e.shape)d.classList.add(e.shape);
-if(e.type=="comment")d.textContent=e.text;
-if(e.type=="zoom"){d.textContent="拡大表示範囲";d.style.color="#9ff0bd";d.style.textAlign="center";d.style.padding="8px"}
-["nw","ne","sw","se"].forEach(p=>{let h=document.createElement("i");h.className="handle "+p;h.dataset.resize=p;d.append(h)});
-d.onpointerdown=startMove;
-d.oncontextmenu=ev=>{ev.preventDefault();ev.stopPropagation();if(!selected.includes(e.id)){selected=[e.id];render()}elementMenu(ev.clientX,ev.clientY,e.id)};
-layer.append(d);
-});
+ let d=document.createElement("div");d.dataset.id=e.id;
+ d.className="el "+e.type+" "+(e.shape||"")+(selected.includes(e.id)?" sel":"")+(connect&&connect!=e.id?" target":"");
+ d.style.cssText=`left:${e.x}%;top:${e.y}%;width:${e.w}%;height:${e.h}%`;
+ d.textContent=e.type=="comment"?e.text:e.type=="zoom"?"拡大表示範囲":"";
+ ["nw","ne","sw","se"].forEach(p=>d.insertAdjacentHTML("beforeend",`<i class="handle ${p}" data-resize="${p}"></i>`));
+ d.onpointerdown=startMove;
+ d.oncontextmenu=ev=>{ev.preventDefault();ev.stopPropagation();if(!selected.includes(e.id)){selected=[e.id];selLine=null;render()}elMenu(ev.clientX,ev.clientY,e)};
+ layer.append(d)});
 drawLines();timeline();
 }
-
-function select(id,e){
-if(e&&(e.shiftKey||e.ctrlKey||e.metaKey))selected=selected.includes(id)?selected.filter(x=>x!=id):[...selected,id];
-else selected=[id];
-render();
-}
-function clear(){selected=[];menu.style.display="none";render()}
-scr.onclick=e=>{if(!e.target.closest(".el"))clear()};
+scr.onclick=e=>{if(!e.target.closest(".el,svg *")){selected=[];selLine=null;connect=null;menu.style.display="none";render()}};
 
 function startMove(e){
-if(e.button!==0)return;
-let o=els.find(x=>x.id==+e.currentTarget.dataset.id);if(!o)return;
-e.stopPropagation();menu.style.display="none";
-let multi=e.shiftKey||e.ctrlKey||e.metaKey;
-if(!selected.includes(o.id)){
-  selected=multi?[...selected,o.id]:[o.id];
-  e.currentTarget.classList.add("sel");
-}
-let base={};selected.forEach(id=>{let x=els.find(a=>a.id==id);if(x)base[id]={x:x.x,y:x.y,w:x.w,h:x.h}});
-drag={o,resize:e.target.dataset.resize,sx:e.clientX,sy:e.clientY,base,moved:false,multi};
-addEventListener("pointermove",move);addEventListener("pointerup",end,{once:true});
+ if(e.button!==0)return;let o=byId(+e.currentTarget.dataset.id);e.stopPropagation();menu.style.display="none";
+ if(connect){
+  if(connect==o.id)return toast("別の要素を選択してください");
+  lines.push({id:nextLine,from:connect,to:o.id,fs:"auto",ts:"auto",form:"straight",dash:"solid",se:"none",ee:"none"});
+  selLine=nextLine++;selected=[];connect=null;toast("接続線を作成しました");return render();
+ }
+ selLine=null;if(!selected.includes(o.id))selected=multi(e)?[...selected,o.id]:[o.id];
+ let base={};selected.forEach(id=>{let x=byId(id);base[id]={...x}});
+ drag={o,resize:e.target.dataset.resize,sx:e.clientX,sy:e.clientY,base,moved:false,m:multi(e)};
+ addEventListener("pointermove",move);addEventListener("pointerup",end,{once:true});
 }
 function move(e){
-if(!drag)return;
-let r=scr.getBoundingClientRect(),dx=(e.clientX-drag.sx)/r.width*100,dy=(e.clientY-drag.sy)/r.height*100;
-if(!drag.moved&&Math.abs(e.clientX-drag.sx)+Math.abs(e.clientY-drag.sy)<4)return;
-drag.moved=true;
-if(!drag.resize)selected.forEach(id=>{let x=els.find(a=>a.id==id),b=drag.base[id];if(x){x.x=Math.max(0,Math.min(100-x.w,b.x+dx));x.y=Math.max(0,Math.min(100-x.h,b.y+dy))}});
-else{let x=drag.o,b=drag.base[x.id],p=drag.resize;
-if(p.includes("e"))x.w=Math.max(5,Math.min(100-x.x,b.w+dx));
-if(p.includes("s"))x.h=Math.max(5,Math.min(100-x.y,b.h+dy));
-if(p.includes("w")){let nx=Math.max(0,b.x+dx);x.w=Math.max(5,b.w+(b.x-nx));x.x=nx}
-if(p.includes("n")){let ny=Math.max(0,b.y+dy);x.h=Math.max(5,b.h+(b.y-ny));x.y=ny}}
-render();
+ let r=scr.getBoundingClientRect(),dx=(e.clientX-drag.sx)/r.width*100,dy=(e.clientY-drag.sy)/r.height*100;
+ if(!drag.moved&&Math.abs(e.clientX-drag.sx)+Math.abs(e.clientY-drag.sy)<4)return;drag.moved=true;
+ if(!drag.resize)selected.forEach(id=>{let x=byId(id),b=drag.base[id];if(x.type!="skip"){x.x=Math.max(0,Math.min(100-x.w,b.x+dx));x.y=Math.max(0,Math.min(100-x.h,b.y+dy))}});
+ else{let x=drag.o,b=drag.base[x.id],p=drag.resize;
+  if(p.includes("e"))x.w=Math.max(5,Math.min(100-x.x,b.w+dx));
+  if(p.includes("s"))x.h=Math.max(5,Math.min(100-x.y,b.h+dy));
+  if(p.includes("w")){let n=Math.max(0,b.x+dx);x.w=Math.max(5,b.w+b.x-n);x.x=n}
+  if(p.includes("n")){let n=Math.max(0,b.y+dy);x.h=Math.max(5,b.h+b.y-n);x.y=n}}
+ render();
 }
-function end(e){
-if(drag&&!drag.moved&&!drag.resize){
-  if(drag.multi)selected=selected.includes(drag.o.id)?selected:[...selected,drag.o.id];
-  else selected=[drag.o.id];
-}
-drag=null;removeEventListener("pointermove",move);render();
+function end(){
+ if(!drag.moved&&!drag.resize)selected=drag.m?[...new Set([...selected,drag.o.id])]:[drag.o.id];
+ drag=null;removeEventListener("pointermove",move);render();
 }
 
-function drawAxis(){
-let a=$("axis"),W=timelineWidth();a.innerHTML="";
-let steps=[0.1,0.2,0.5,1,2,5,10,15,30,60,120,300,600],
-    pxPerSec=W/duration,
-    minPx=60/scale,
-    step=steps.find(s=>s*pxPerSec>=minPx)||600;
-for(let t=0;t<duration-step*0.3;t+=step){
-let d=document.createElement("div");d.className="tick";
-d.style.left=t/duration*W+"px";d.textContent=fmt(t).slice(0,8);a.append(d);
+/* ---- 接続線 ---- */
+const rp=e=>{let r=scr.getBoundingClientRect();return{x:e.x/100*r.width,y:e.y/100*r.height,w:e.w/100*r.width,h:e.h/100*r.height}};
+function anchor(e,s){let r=rp(e),cx=r.x+r.w/2,cy=r.y+r.h/2;
+ return s=="top"?{x:cx,y:r.y,s}:s=="bottom"?{x:cx,y:r.y+r.h,s}:s=="left"?{x:r.x,y:cy,s}:{x:r.x+r.w,y:cy,s}}
+function autoSide(a,b){let A=rp(a),B=rp(b),dx=B.x+B.w/2-A.x-A.w/2,dy=B.y+B.h/2-A.y-A.h/2;
+ return Math.abs(dx)>Math.abs(dy)?[dx>0?"right":"left",dx>0?"left":"right"]:[dy>0?"bottom":"top",dy>0?"top":"bottom"]}
+const out=(p,d)=>({x:p.x+(p.s=="left"?-d:p.s=="right"?d:0),y:p.y+(p.s=="top"?-d:p.s=="bottom"?d:0)});
+function hit(a,b,r){ /* 線分と矩形(余白4)の交差 */
+ let x1=r.x-4,y1=r.y-4,x2=r.x+r.w+4,y2=r.y+r.h+4,dx=b.x-a.x,dy=b.y-a.y,t0=0,t1=1;
+ for(let [p,q] of [[-dx,a.x-x1],[dx,x2-a.x],[-dy,a.y-y1],[dy,y2-a.y]]){
+  if(!p){if(q<0)return false}else{let t=q/p;if(p<0){if(t>t1)return false;t0=Math.max(t0,t)}else{if(t<t0)return false;t1=Math.min(t1,t)}}}
+ return true}
+function route(form,A,B,obst){
+ if(form=="straight")return[A,B];
+ let a=out(A,18),b=out(B,18),h=A.s=="left"||A.s=="right";
+ let xs=[a.x,b.x,...obst.flatMap(r=>[r.x,r.x+r.w])],ys=[a.y,b.y,...obst.flatMap(r=>[r.y,r.y+r.h])];
+ let c=[[A,a,h?{x:b.x,y:a.y}:{x:a.x,y:b.y},b,B],[A,a,h?{x:a.x,y:b.y}:{x:b.x,y:a.y},b,B],
+  ...[Math.min(...ys)-14,Math.max(...ys)+14].map(v=>[A,a,{x:a.x,y:v},{x:b.x,y:v},b,B]),
+  ...[Math.min(...xs)-14,Math.max(...xs)+14].map(v=>[A,a,{x:v,y:a.y},{x:v,y:b.y},b,B])];
+ return c.find(p=>!p.slice(1).some((q,i)=>obst.some(r=>hit(p[i],q,r))))||c[0]}
+function toPath(pts,form){
+ if(form!="wave")return"M"+pts.map(p=>p.x.toFixed(1)+" "+p.y.toFixed(1)).join("L");
+ let d=`M${pts[0].x} ${pts[0].y}`;
+ pts.slice(1).forEach((q,i)=>{let p=pts[i],L=Math.hypot(q.x-p.x,q.y-p.y)||1,n=Math.max(2,Math.round(L/16)),nx=-(q.y-p.y)/L,ny=(q.x-p.x)/L;
+  for(let k=1;k<=n;k++){let m=(k-.5)/n,o=(k%2?10:-10);
+   d+=`Q${(p.x+(q.x-p.x)*m+nx*o).toFixed(1)} ${(p.y+(q.y-p.y)*m+ny*o).toFixed(1)} ${(p.x+(q.x-p.x)*k/n).toFixed(1)} ${(p.y+(q.y-p.y)*k/n).toFixed(1)}`}});
+ return d}
+function marker(kind,id,c){if(kind=="none")return"";
+ let s=kind=="arrow"?'<path d="M0 0L10 5L0 10Z"':kind=="circle"?'<circle cx="5" cy="5" r="4"':'<rect x="1" y="1" width="8" height="8"';
+ return`<marker id="${id}" markerWidth="10" markerHeight="10" refX="${kind=="arrow"?9:5}" refY="5" orient="auto-start-reverse" markerUnits="userSpaceOnUse">${s} fill="${c}"/></marker>`}
+function drawLines(){
+ let defs="",body="";lines=lines.filter(L=>byId(L.from)&&byId(L.to));
+ lines.forEach(L=>{
+  let a=byId(L.from),b=byId(L.to);if(!active(a)||!active(b))return;
+  let au=autoSide(a,b),A=anchor(a,L.fs=="auto"?au[0]:L.fs),B=anchor(b,L.ts=="auto"?au[1]:L.ts);
+  let obst=els.filter(e=>e.type!="skip"&&e!=a&&e!=b&&active(e)).map(rp),d=toPath(route(L.form,A,B,obst),L.form),sel=selLine==L.id,c=sel?"#4da3ff":"#90a4ae";
+  defs+=marker(L.se,"ms"+L.id,c)+marker(L.ee,"me"+L.id,c);
+  body+=`<path class="hit" data-line="${L.id}" d="${d}"/><path class="line${sel?" sel":""}" d="${d}"${DASH[L.dash]?` stroke-dasharray="${DASH[L.dash]}"`:""}${L.se!="none"?` marker-start="url(#ms${L.id})"`:""}${L.ee!="none"?` marker-end="url(#me${L.id})"`:""}/>`;
+  if(sel)body+=[[A,"from"],[B,"to"]].map(([p,k])=>`<circle class="endh" data-end="${k}" data-line="${L.id}" cx="${p.x}" cy="${p.y}" r="6"/>`).join("");
+ });
+ svg.innerHTML=`<defs>${defs}</defs>`+body;
+ svg.querySelectorAll(".hit").forEach(p=>{
+  p.onclick=e=>{e.stopPropagation();selLine=+p.dataset.line;selected=[];render()};
+  p.oncontextmenu=e=>{e.preventDefault();e.stopPropagation();selLine=+p.dataset.line;selected=[];render();lineMenu(e.clientX,e.clientY,selLine)}});
+ svg.querySelectorAll(".endh").forEach(h=>h.onpointerdown=e=>{e.stopPropagation();e.preventDefault();endDrag=h.dataset;
+  addEventListener("pointermove",endMove);addEventListener("pointerup",()=>{endDrag=null;removeEventListener("pointermove",endMove)},{once:true})});
 }
-let e=document.createElement("div");e.className="tick end";
-e.style.left=W+"px";e.textContent=fmt(duration).slice(0,8);a.append(e);
+function endMove(e){
+ let r=scr.getBoundingClientRect(),L=lines.find(l=>l.id==endDrag.line),k=endDrag.end=="from",el=byId(k?L.from:L.to);
+ L[k?"fs":"ts"]=SIDES.map(s=>({s,d:Math.hypot(anchor(el,s).x-(e.clientX-r.left),anchor(el,s).y-(e.clientY-r.top))})).sort((a,b)=>a.d-b.d)[0].s;render()}
+
+/* ---- メニュー ---- */
+function showMenu(x,y,h){menu.innerHTML=h;menu.style.display="block";menu.style.left=Math.min(x,innerWidth-230)+"px";menu.style.top=Math.max(5,Math.min(y,innerHeight-menu.offsetHeight-5))+"px"}
+const btns=(items,cur,key)=>items.map(([k,n])=>`<button${k==cur?' class="cur"':''} data-l="${key}:${k}">${n}</button>`).join("");
+function lineMenu(x,y,id){
+ let L=lines.find(l=>l.id==id),E=[["none","なし"],["arrow","矢印"],["circle","丸"],["square","四角"]],S=[["auto","自動"],...SIDES.map(s=>[s,SJ[s]])];
+ mt={line:id};
+ showMenu(x,y,`<b>接続線</b><hr>線形${btns([["straight","直線"],["elbow","折れ線"],["wave","波線"]],L.form,"form")}<hr>線種${btns([["solid","実線"],["dotted","点線"],["dashed","破線"],["dashdot","一点鎖線"]],L.dash,"dash")}<hr>始点の終端${btns(E,L.se,"se")}<hr>終点の終端${btns(E,L.ee,"ee")}<hr>始点の接続位置${btns(S,L.fs,"fs")}<hr>終点の接続位置${btns(S,L.ts,"ts")}<hr><button data-l="del:1">接続線を削除</button>`);
 }
-
-function timeline(){
-drawAxis();
-let W=timelineWidth();
-["comment","highlight","zoom","skip"].forEach(type=>{
-let box=$(type);box.innerHTML="";
-els.filter(e=>e.type==type).forEach(e=>{
-let b=document.createElement("div");b.className="bar"+(selected.includes(e.id)?" sel":"");
-let L=e.start/duration*W,R=e.end/duration*W;
-b.style.left=L+"px";b.style.width=Math.max(24,Math.min(R,W)-L)+"px";
-b.style.color=colors[type];b.style.background=colors[type]+"44";b.textContent=e.label;
-b.onclick=x=>{x.stopPropagation();select(e.id,x)};
-box.append(b);
-});
-});
-$("head").style.left=95+current/duration*W+"px";
-$("time").textContent=fmt(current)+" / "+fmt(duration);
+function elMenu(x,y,e){
+ mt={el:e.id};
+ showMenu(x,y,`<b>${TYPES[e.type][0]}</b>`+(e.type=="comment"?'<button data-a="text">コメント変更</button>':"")+(e.type=="highlight"?'<button data-a="rect">直角</button><button data-a="round">角丸</button><button data-a="circle">円形</button>':"")+(e.type!="skip"?'<button data-a="connect">接続線を作成</button>':"")+'<button data-a="del">削除</button>');
 }
-
-function drawLines(){svg.querySelectorAll(".line,.linehit").forEach(x=>x.remove())}
-
-function elementMenu(x,y,id){
-let e=els.find(a=>a.id==id);
-let h=`<b>${e.label}</b>`;
-if(e.type=="comment")h+=`<button data-a="text">コメント変更</button>`;
-if(e.type=="highlight")h+=`<button data-a="rect">直角</button><button data-a="round">角丸</button><button data-a="circle">円形</button>`;
-if(e.type=="zoom")h+=`<button data-a="connect">接続線を作成</button>`;
-h+=`<button data-a="delete">削除</button>`;
-menu.innerHTML=h;menu.style.display="block";menu.style.left=Math.min(x,innerWidth-220)+"px";menu.style.top=Math.min(y,innerHeight-180)+"px";menuTarget=id;
-}
-menu.addEventListener("click",e=>{
-let a=e.target.dataset.a;if(!a)return;let x=els.find(v=>v.id==menuTarget);if(!x)return;
-if(a=="text"){let v=prompt("コメント",x.text);if(v!==null)x.text=v}
-if(["rect","round","circle"].includes(a))x.shape=a;
-if(a=="connect"){connectMode=x.id;toast("接続先をクリックしてください")}
-if(a=="delete"){els=els.filter(v=>v.id!=x.id);selected=[]}
-menu.style.display="none";render();
-});
-
-scr.oncontextmenu=e=>{
-if(e.target.closest(".el"))return;e.preventDefault();
-menu.innerHTML=`<b>要素を追加</b><button data-add="comment">コメント</button><button data-add="highlight">強調枠</button><button data-add="zoom">拡大枠</button><button data-add="skip">スキップ</button>`;
-menu.style.display="block";menu.style.left=e.clientX+"px";menu.style.top=e.clientY+"px";menuTarget={x:e.clientX,y:e.clientY};
+scr.oncontextmenu=e=>{if(e.target.closest(".el,svg *"))return;e.preventDefault();mt={x:e.clientX,y:e.clientY};
+ showMenu(e.clientX,e.clientY,"<b>要素を追加</b>"+Object.entries(TYPES).map(([k,v])=>`<button data-add="${k}">${v[0]}</button>`).join(""))};
+menu.onclick=e=>{
+ let b=e.target.closest("button");if(!b)return;let d=b.dataset;
+ if(d.l){let L=lines.find(l=>l.id==mt.line),[k,v]=d.l.split(":");
+  if(k=="del"){lines=lines.filter(l=>l!=L);selLine=null;menu.style.display="none"}else{L[k]=v;lineMenu(parseFloat(menu.style.left),parseFloat(menu.style.top),L.id)}
+  return render()}
+ if(d.a){let x=byId(mt.el);
+  if(d.a=="text"){let v=prompt("コメント",x.text);if(v!==null)x.text=v}
+  else if(d.a=="connect"){connect=x.id;toast("接続先の要素をクリックしてください")}
+  else if(d.a=="del"){els=els.filter(v=>v!=x);selected=[]}
+  else x.shape=d.a;
+  menu.style.display="none";return render()}
+ if(d.add){let r=scr.getBoundingClientRect();
+  els.push({id:next++,type:d.add,start:current,end:Math.min(duration,current+5),x:Math.max(0,Math.min(75,(mt.x-r.left)/r.width*100)),y:Math.max(0,Math.min(82,(mt.y-r.top)/r.height*100)),w:25,h:18,text:"新しいコメント"});
+  menu.style.display="none";render()}
 };
-menu.addEventListener("click",e=>{
-let t=e.target.dataset.add;if(!t)return;
-let r=scr.getBoundingClientRect(),w=25,h=18,
-x=Math.max(0,Math.min(100-w,(menuTarget.x-r.left)/r.width*100)),
-y=Math.max(0,Math.min(100-h,(menuTarget.y-r.top)/r.height*100));
-els.push({id:next++,type:t,label:t=="comment"?"コメント":t=="highlight"?"強調枠":t=="zoom"?"拡大枠":"スキップ",start:current,end:Math.min(duration,current+5),x,y,w,h,text:"新しいコメント",shape:"rect"});
-menu.style.display="none";render();
-});
 
-$("pick").onclick=()=>$("file").click();
-$("file").onchange=e=>{let f=e.target.files[0];if(!f)return;video.src=URL.createObjectURL(f);video.onloadedmetadata=()=>{duration=video.duration;$("hint").style.display="none";$("status").textContent=f.name;render()}};
-$("play").onclick=()=>{if(!video.src)return toast("先に動画を選択してください");video.paused?video.play():video.pause()};
-$("stop").onclick=()=>{if(video.src){video.pause();video.currentTime=0}};
-video.onplay=()=>$("play").textContent="❚❚ 一時停止";
-video.onpause=()=>$("play").textContent="▶ 再生";
-video.ontimeupdate=()=>{current=video.currentTime;render()};
-
-/* スケールは幅を変えず、目盛りの細かさだけを変える */
+/* ---- タイムライン ---- */
+function timeline(){
+ let W=TW(),steps=[.1,.2,.5,1,2,5,10,15,30,60,120,300,600],step=steps.find(s=>s*W/duration>=60/scale)||600,ax=$("axis");
+ ax.innerHTML="";
+ for(let t=0;t<duration-step*.3;t+=step)ax.insertAdjacentHTML("beforeend",`<div class="tick" style="left:${t/duration*W}px">${fmt(t).slice(0,8)}</div>`);
+ ax.insertAdjacentHTML("beforeend",`<div class="tick end" style="left:${W}px">${fmt(duration).slice(0,8)}</div>`);
+ $("rows").innerHTML=Object.entries(TYPES).map(([k,[n,c]])=>`<div class="row"><div class="label">● ${n}</div><div class="lane">`+
+  els.filter(e=>e.type==k).map(e=>{let L=e.start/duration*W;return`<div class="bar${selected.includes(e.id)?" sel":""}" data-id="${e.id}" style="left:${L}px;width:${Math.max(24,Math.min(e.end/duration*W,W)-L)}px;color:${c};background:${c}44">${n}</div>`}).join("")+`</div></div>`).join("");
+ $("rows").querySelectorAll(".bar").forEach(b=>b.onclick=x=>{x.stopPropagation();pick(+b.dataset.id,x);render()});
+ $("head").style.left=95+current/duration*W+"px";$("time").textContent=fmt(current)+" / "+fmt(duration);
+}
+function seek(cx){current=Math.max(0,Math.min(duration,(cx-$("tl").getBoundingClientRect().left-95)/TW()*duration));if(video.src)video.currentTime=current;render()}
+$("head").onpointerdown=e=>{e.preventDefault();e.stopPropagation();let m=ev=>seek(ev.clientX);addEventListener("pointermove",m);addEventListener("pointerup",()=>removeEventListener("pointermove",m),{once:true})};
+$("tl").onclick=e=>{if(!e.target.closest(".bar")&&e.clientX-$("tl").getBoundingClientRect().left>=95)seek(e.clientX)};
 $("scale").oninput=e=>{scale=+e.target.value;$("scaleText").textContent=scale.toFixed(1)+"×";render()};
 
-function seekFromX(cx){
-let r=$("tl").getBoundingClientRect(),x=cx-r.left-95;
-current=Math.max(0,Math.min(duration,x/timelineWidth()*duration));
-if(video.src)video.currentTime=current;
-render();
-}
-$("head").onpointerdown=e=>{
-e.preventDefault();e.stopPropagation();
-let mv=ev=>seekFromX(ev.clientX);
-addEventListener("pointermove",mv);
-addEventListener("pointerup",()=>removeEventListener("pointermove",mv),{once:true});
-};
-$("tl").onclick=e=>{
-if(e.target.closest(".bar"))return;
-let r=$("tl").getBoundingClientRect(),x=e.clientX-r.left-95;
-if(x>=0)seekFromX(e.clientX);
-};
-
+/* ---- 動画・共通 ---- */
+$("pick").onclick=()=>$("file").click();
+$("file").onchange=e=>{let f=e.target.files[0];if(!f)return;video.src=URL.createObjectURL(f);video.onloadedmetadata=()=>{duration=video.duration;$("hint").style.display="none";$("status").textContent=f.name;render()}};
+$("play").onclick=()=>video.src?(video.paused?video.play():video.pause()):toast("先に動画を選択してください");
+$("stop").onclick=()=>{if(video.src){video.pause();video.currentTime=0}};
+video.onplay=()=>$("play").textContent="❚❚ 一時停止";video.onpause=()=>$("play").textContent="▶ 再生";
+video.ontimeupdate=()=>{current=video.currentTime;render()};
 addEventListener("keydown",e=>{
-if(e.key=="Escape")menu.style.display="none";
-if(e.key=="Delete"&&selected.length){els=els.filter(x=>!selected.includes(x.id));selected=[];render()}
-});
+ if(e.key=="Escape"){menu.style.display="none";connect=null;render()}
+ if(e.key=="Delete"){if(selLine)lines=lines.filter(l=>l.id!=selLine);else els=els.filter(x=>!selected.includes(x.id));selLine=null;selected=[];render()}});
 addEventListener("click",e=>{if(!e.target.closest(".menu"))menu.style.display="none"});
-addEventListener("resize",render);
-render();
-</script>
-</body>
-</html>
+addEventListener("resize",render);render();
+</script></body></html>
