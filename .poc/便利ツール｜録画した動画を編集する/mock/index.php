@@ -195,28 +195,20 @@ menu.onclick=e=>{
 };
 
 /* ---- タイムライン ---- */
-/* 主目盛り: ラベル間隔が画面上で最低80px以上になる「1・2・5」系の刻みを選ぶ。
-   scaleが大きいほど刻みが細かくなるが、ラベル同士は必ず80px以上離れる。
-   補助目盛り: 主目盛りを5(または2)分割した細線。ラベルなし。 */
+/* 主目盛り: ラベル間の画面上の間隔を必ず80px以上にする。刻みは1・2・5系から選ぶ。
+   スケール倍率が高いほど、より細かい刻みを許容する(ただし80px間隔は維持)。
+   補助目盛り: 主目盛りを2または5分割した細線。ラベルなし。 */
 function niceStep(minSec){
  let p=Math.pow(10,Math.floor(Math.log10(minSec))),m=[1,2,5,10].find(k=>k*p>=minSec);return m*p}
 function timeline(){
- let W=TW(),ax=$("axis"),pxPerSec=W/duration*scale,
-  major=niceStep(80/pxPerSec*(1/scale)*scale/1),
-  minor=major/(String(Math.round(major/Math.pow(10,Math.floor(Math.log10(major)))))=="2"?2:5);
- major=niceStep(80/(W/duration));
- /* スケールは「細かく読む倍率」: 倍率が高いほど主目盛りを細かくする(ただし80px間隔は守る) */
- let fine=Math.max(niceStep(80/(W/duration)/scale),niceStep(80/(W/duration))/Math.pow(2,0));
- major=Math.max(niceStep(80/(W/duration)/scale),0.01);
- while(major*(W/duration)<80)major=niceStep(major*1.01);
- let lead=Math.pow(10,Math.floor(Math.log10(major))),mm=Math.round(major/lead);
- minor=major/(mm==2?2:mm==5?5:5);
+ let W=TW(),ax=$("axis"),pxSec=W/duration*scale,major=niceStep(80/pxSec);
+ let lead=Math.pow(10,Math.floor(Math.log10(major))),minor=major/(Math.round(major/lead)==2?2:5);
  ax.innerHTML="";
- for(let t=0;t<=duration+1e-9;t+=minor){
-  let isMajor=Math.abs(t/major-Math.round(t/major))<1e-6,x=t/duration*W;
-  if(x>W-1)break;
-  if(isMajor){if(W-x>50||t==0)ax.insertAdjacentHTML("beforeend",`<div class="tick" style="left:${x}px">${fmtTick(t,major)}</div>`);else ax.insertAdjacentHTML("beforeend",`<div class="tick minor" style="left:${x}px"></div>`)}
-  else ax.insertAdjacentHTML("beforeend",`<div class="tick minor" style="left:${x}px"></div>`)}
+ for(let t=0;t<duration;t+=minor){
+  let x=t/duration*W,isMajor=Math.abs(t/major-Math.round(t/major))<1e-6;
+  if(x>=W)break;
+  let labeled=isMajor&&(t==0||W-x>50);
+  ax.insertAdjacentHTML("beforeend",`<div class="tick${labeled?"":" minor"}" style="left:${x}px">${labeled?fmtTick(t,major):""}</div>`)}
  ax.insertAdjacentHTML("beforeend",`<div class="tick end" style="left:${W}px">${fmt(duration).slice(0,8)}</div>`);
  $("rows").innerHTML=Object.entries(TYPES).map(([k,[n,c]])=>`<div class="row"><div class="label">● ${n}</div><div class="lane">`+
   els.filter(e=>e.type==k).map(e=>{let L=e.start/duration*W;return`<div class="bar${selected.includes(e.id)?" sel":""}" data-id="${e.id}" style="left:${L}px;width:${Math.max(24,Math.min(e.end/duration*W,W)-L)}px;color:${c};background:${c}44">${n}</div>`}).join("")+`</div></div>`).join("");
