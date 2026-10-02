@@ -6,34 +6,69 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>動画編集モック</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#f3f4f6;color:#222;font:14px sans-serif}
-button,input{font:inherit}button{padding:5px 10px;border:1px solid #aaa;border-radius:4px;background:#fff;cursor:pointer}
-button.primary{background:#2563eb;color:#fff;border-color:#2563eb}.danger{color:#b91c1c}
-.wrap{max-width:1000px;margin:auto;padding:16px}.card{background:#fff;border:1px solid #ddd;border-radius:6px;padding:14px;margin-bottom:14px}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grow{flex:1}.muted{color:#666}.hidden{display:none!important}
-.orig{border:2px solid #93c5fd;border-radius:5px;margin:8px 0}.orig>div{padding:8px}.head{background:#dbeafe}
-.work{padding:6px;border-top:1px dashed #ccc}.top{background:#1f2937;color:#fff;padding:8px 12px}
-.videoWrap{max-width:760px;margin:12px auto}.video{height:380px;background:#000;position:relative;overflow:hidden;user-select:none}
+*{box-sizing:border-box}
+body{margin:0;background:#f3f4f6;color:#222;font:14px Arial,sans-serif}
+button,input,select,textarea{font:inherit}
+button{padding:6px 10px;border:1px solid #aaa;border-radius:4px;background:#fff;cursor:pointer}
+button.primary{background:#2563eb;color:#fff;border-color:#2563eb}
+button.danger{color:#b91c1c}
+.hidden{display:none!important}
+.wrap,.editor{max-width:1050px;margin:auto;padding:16px}
+.card{background:#fff;border:1px solid #ddd;border-radius:6px;padding:14px;margin-bottom:14px}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.grow{flex:1}
+.muted{color:#666}
+.orig{border:2px solid #bfdbfe;border-radius:5px;margin:8px 0}
+.orig .head{padding:9px;background:#dbeafe}
+.orig .body{padding:8px}
+.top{padding:9px 12px;background:#1f2937;color:#fff}
+.video-wrap{max-width:800px;margin:12px auto}
+.video{position:relative;height:420px;background:#000;overflow:hidden;user-select:none}
 .video video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none}
-.demo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#777;font-size:28px;pointer-events:none}
-#objects{position:absolute;inset:0}.obj{position:absolute;cursor:grab;touch-action:none;z-index:10}
-.obj:active{cursor:grabbing}.obj.sel{outline:2px dashed #fbbf24;z-index:20}
+.demo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#777;font-size:26px;pointer-events:none}
+#objects{position:absolute;inset:0}
+#lines{position:absolute;inset:0;width:100%;height:100%;overflow:visible;z-index:3;pointer-events:none}
+.obj{position:absolute;z-index:10;touch-action:none;cursor:grab;overflow:visible}
+.obj:active{cursor:grabbing}
+.obj.sel{outline:2px dashed #fbbf24}
+.obj.source{outline:3px solid #22c55e}
+.obj.target{outline:3px dashed #38bdf8}
 .resize{position:absolute;right:-1px;bottom:-1px;width:12px;height:12px;background:#fbbf24;cursor:nwse-resize}
-#lines{position:absolute;inset:0;width:100%;height:100%;z-index:5;pointer-events:none}
-.hit{fill:none;stroke:transparent;stroke-width:18;pointer-events:stroke;cursor:pointer}
-.line{fill:none;stroke-linecap:round;stroke-linejoin:round}
-.temp{fill:none;stroke:#22c55e;stroke-width:3;stroke-dasharray:7 5}
-.connecting .obj{cursor:crosshair}.source{outline:3px solid #22c55e!important}.target{outline:3px dashed #38bdf8!important}
-.editor{max-width:1000px;margin:auto}.timeline{background:#fff;border:1px solid #aaa;border-radius:4px;overflow:hidden}
-.ruler{height:28px;border-bottom:1px solid #aaa;position:relative}.tick{position:absolute;top:0;height:100%;border-left:1px solid #aaa;padding-left:3px;font-size:10px}
-.lanes{height:170px;position:relative;cursor:grab}.clip{position:absolute;height:24px;border-radius:3px;color:#fff;padding:4px 6px;font-size:11px;overflow:hidden;white-space:nowrap;cursor:grab}
-.clip.sel{outline:2px solid #fbbf24}.cursor{position:absolute;top:0;bottom:0;border-left:2px solid #e11d48;pointer-events:none}.cursor i{position:absolute;top:0;left:-7px;width:12px;height:12px;border-radius:50%;background:#e11d48}
-.overview{height:28px;background:#e5e7eb;border:1px solid #aaa;margin:8px 4px;position:relative}.range{position:absolute;top:0;bottom:0;background:#93c5fd66;border:2px solid #2563eb}
-.handle{position:absolute;top:-2px;bottom:-2px;width:10px;background:#2563eb;cursor:ew-resize}.handle.l{left:-5px}.handle.r{right:-5px}
-.menu{position:fixed;z-index:100;background:#fff;border:1px solid #aaa;border-radius:5px;padding:7px;box-shadow:0 3px 12px #0003;min-width:210px;max-width:300px}
-.menu button{display:block;width:100%;text-align:left;border:0;margin:2px 0}.menu button:hover{background:#eff6ff}
-.menu label{display:flex;gap:5px;align-items:center;margin:5px 0}.sw{display:flex;flex-wrap:wrap;gap:3px}.sw b{width:20px;height:20px;border:1px solid #888;cursor:pointer}.sw b.on{outline:2px solid #2563eb}
-.choice{display:flex;gap:3px;flex-wrap:wrap}.choice button{width:auto;border:1px solid #ccc}.choice button.on{background:#dbeafe;border-color:#2563eb}
+.connect-port{position:absolute;width:10px;height:10px;border:2px solid #fff;background:#22c55e;border-radius:50%;z-index:30;display:none}
+.obj.sel .connect-port{display:block}
+.connect-port.t{top:-6px;left:50%;margin-left:-5px}
+.connect-port.r{right:-6px;top:50%;margin-top:-5px}
+.connect-port.b{bottom:-6px;left:50%;margin-left:-5px}
+.connect-port.l{left:-6px;top:50%;margin-top:-5px}
+.connecting .obj{cursor:crosshair}
+.line{fill:none;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+.line-hit{fill:none;stroke:transparent;stroke-width:18;pointer-events:stroke;cursor:pointer}
+.line.selected{stroke:#fbbf24}
+.temp{fill:none;stroke:#22c55e;stroke-width:3;stroke-dasharray:7 5;pointer-events:none}
+.line-handle{fill:#fff;stroke:#f59e0b;stroke-width:2;pointer-events:auto;cursor:move}
+.timeline{background:#fff;border:1px solid #aaa;border-radius:5px;overflow:hidden}
+.ruler{height:30px;border-bottom:1px solid #aaa;position:relative}
+.tick{position:absolute;top:0;height:100%;border-left:1px solid #aaa;padding-left:3px;font-size:10px}
+.lanes{height:190px;position:relative}
+.clip{position:absolute;height:24px;border-radius:3px;color:#fff;padding:4px 6px;font-size:11px;white-space:nowrap;overflow:hidden;cursor:grab}
+.clip.sel{outline:2px solid #fbbf24}
+.clip.skip{background:#6b7280!important}
+.cursor{position:absolute;top:0;bottom:0;border-left:2px solid #e11d48;z-index:20;pointer-events:none}
+.cursor:before{content:"";position:absolute;top:0;left:-6px;width:12px;height:12px;border-radius:50%;background:#e11d48}
+.overview{height:28px;background:#e5e7eb;border:1px solid #aaa;margin:8px 4px;position:relative}
+.view-range{position:absolute;top:0;bottom:0;background:#93c5fd66;border:2px solid #2563eb}
+.scale{width:150px}
+.menu{position:fixed;z-index:100;background:#fff;border:1px solid #aaa;border-radius:5px;padding:10px;box-shadow:0 4px 16px #0003;width:290px;max-height:80vh;overflow:auto}
+.menu h4{margin:0 0 8px}
+.menu label{display:block;margin:7px 0}
+.menu input[type=text],.menu input[type=number],.menu select{width:100%;padding:5px}
+.menu .choices{display:flex;gap:4px;flex-wrap:wrap}
+.menu .choices button.active{background:#dbeafe;border-color:#2563eb}
+.colors{display:flex;gap:4px;flex-wrap:wrap}
+.color{width:22px;height:22px;padding:0;border:1px solid #777}
+.color.active{outline:2px solid #2563eb}
+hr{border:0;border-top:1px solid #ddd;margin:10px 0}
+.notice{padding:8px;background:#fef3c7;border:1px solid #f59e0b;border-radius:4px}
 </style>
 </head>
 <body>
@@ -41,21 +76,29 @@ button.primary{background:#2563eb;color:#fff;border-color:#2563eb}.danger{color:
 <div id="home" class="wrap">
 <div class="card">
 <h2>動画を選択</h2>
+<p class="muted">編集する動画を明示的に選択してください。</p>
 <button id="choose" class="primary">動画を選択</button>
 <input id="file" type="file" accept="video/*" class="hidden">
-<p class="muted">動画ファイルを選択すると編集画面を開きます。</p>
 </div>
-<div class="card"><h2>オリジナル動画</h2><div id="videos"></div></div>
+<div class="card">
+<h2>オリジナル動画</h2>
+<div id="videoList"></div>
+</div>
 </div>
 
 <div id="editor" class="editor hidden">
 <div class="top row">
-<b id="videoName"></b><span>／</span><span id="workName">新しい編集作業</span>
-<span class="grow"></span><span id="changed" class="hidden">未保存の変更あり</span>
-<button id="back">編集作業を終了する</button>
+<b id="videoName"></b>
+<span>／</span>
+<span id="workName">新しい編集作業</span>
+<span class="grow"></span>
+<span id="dirty" class="hidden">未保存</span>
+<button id="save">保存</button>
+<button id="make">編集結果を動画にする</button>
+<button id="finish">編集作業を終了する</button>
 </div>
 
-<div class="videoWrap">
+<div class="video-wrap">
 <div id="video" class="video"></div>
 </div>
 
@@ -66,7 +109,9 @@ button.primary{background:#2563eb;color:#fff;border-color:#2563eb}.danger{color:
 <button id="stop">■ 停止</button>
 <span id="position" class="muted"></span>
 <span class="grow"></span>
+<button id="add">＋ 要素を追加</button>
 <button id="fit">全体表示</button>
+<label>スケール <input id="scale" class="scale" type="range" min="1" max="4" step=".1" value="1"></label>
 </div>
 </div>
 
@@ -75,15 +120,18 @@ button.primary{background:#2563eb;color:#fff;border-color:#2563eb}.danger{color:
 <div id="lanes" class="lanes"></div>
 </div>
 <div id="overview" class="overview"></div>
-<p class="muted">動画上：要素をドラッグして移動できます。要素から別の要素へドラッグすると接続線を作成できます。空白部分を右クリックすると要素を追加できます。</p>
+
+<p class="muted">
+動画上の要素はドラッグして移動できます。接続線を作る場合は、選択した要素の緑色の接続点から別の要素へドラッグしてください。
+</p>
 </div>
 
 <div id="popup"></div>
-<div id="modal"></div>
 
 <script>
 (function(){
 "use strict";
+
 const $=id=>document.getElementById(id);
 const TYPES={
  comment:{name:"コメント",color:"#2563eb"},
@@ -91,346 +139,985 @@ const TYPES={
  zoom:{name:"拡大枠",color:"#059669"},
  skip:{name:"スキップ",color:"#6b7280"}
 };
-const colors=["#000","#fff","#dc2626","#ea580c","#eab308","#16a34a","#0891b2","#2563eb","#7c3aed","#db2777","#6b7280"];
-let seq=1,videoData=null,state=null,drag=null,connect=null,timer=null;
+const COLORS=["#000000","#ffffff","#ef4444","#f97316","#eab308","#22c55e","#06b6d4","#3b82f6","#8b5cf6","#ec4899","#6b7280","#92400e"];
 
-const uid=p=>p+(seq++);
+let no=1;
+let sourceVideo=null;
+let state=null;
+let timer=null;
+let connectionDrag=null;
+
+const uid=p=>p+(no++);
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const find=(a,id)=>a.find(x=>x.id===id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const fmt=s=>{s=Math.max(0,s);return Math.floor(s/60)+":"+String(Math.floor(s%60)).padStart(2,"0")};
+const fmt=s=>Math.floor(s/60)+":"+String(Math.floor(s%60)).padStart(2,"0");
 
 $("choose").onclick=()=>$("file").click();
+
 $("file").onchange=function(){
- const f=this.files[0];if(!f)return;
- const u=URL.createObjectURL(f),v=document.createElement("video");
+ const f=this.files[0];
+ if(!f)return;
+ const url=URL.createObjectURL(f);
+ const v=document.createElement("video");
  v.preload="metadata";
- v.onloadedmetadata=()=>{
-  videoData={id:uid("v"),name:f.name,url:u,dur:v.duration};
+ v.onloadedmetadata=function(){
+  sourceVideo={id:uid("v"),name:f.name,url:url,dur:v.duration};
   openEditor();
  };
- v.onerror=()=>alert("動画を読み込めませんでした。");
- v.src=u;
+ v.onerror=function(){alert("動画の読み込みに失敗しました。")};
+ v.src=url;
 };
 
 function openEditor(){
  state={
-  dur:videoData.dur,pos:0,viewStart:0,viewEnd:videoData.dur,
-  objects:[],lines:[],selected:[],selectedLine:null,dirty:false
+  dur:sourceVideo.dur,
+  pos:0,
+  scale:1,
+  selected:[],
+  selectedLine:null,
+  objects:[],
+  lines:[],
+  dirty:false
  };
- $("home").classList.add("hidden");$("editor").classList.remove("hidden");
- $("videoName").textContent=videoData.name;
+ $("home").classList.add("hidden");
+ $("editor").classList.remove("hidden");
+ $("videoName").textContent=sourceVideo.name;
+ $("workName").textContent="新しい編集作業";
  $("video").innerHTML="";
  const v=document.createElement("video");
- v.src=videoData.url;v.controls=false;
- $("video").appendChild(v);state.video=v;
- const objects=document.createElement("div");objects.id="objects";$("video").appendChild(objects);
+ v.src=sourceVideo.url;
+ v.preload="auto";
+ $("video").appendChild(v);
+ state.video=v;
+ const layer=document.createElement("div");
+ layer.id="objects";
+ $("video").appendChild(layer);
  const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");
- svg.id="lines";svg.setAttribute("viewBox","0 0 100 100");objects.appendChild(svg);
+ svg.id="lines";
+ layer.appendChild(svg);
  render();
 }
 
-function mark(){state.dirty=true;$("changed").classList.remove("hidden")}
-
-function position(e){
- const r=$("video").getBoundingClientRect();
- return{x:clamp((e.clientX-r.left)/r.width,0,1),y:clamp((e.clientY-r.top)/r.height,0,1)};
+function mark(){
+ state.dirty=true;
+ $("dirty").classList.remove("hidden");
 }
 
-function visible(o){return state.pos>=o.s&&state.pos<=o.e}
+function videoPoint(e){
+ const r=$("video").getBoundingClientRect();
+ return {
+  x:clamp((e.clientX-r.left)/r.width,0,1),
+  y:clamp((e.clientY-r.top)/r.height,0,1)
+ };
+}
+
+function addObject(type){
+ const start=clamp(state.pos,0,Math.max(0,state.dur-5));
+ const o={
+  id:uid("e"),
+  type:type,
+  s:start,
+  e:Math.min(state.dur,start+5),
+  x:.28,
+  y:.25,
+  w:.32,
+  h:.20,
+  a:{}
+ };
+
+ if(type==="comment"){
+  o.a={
+   text:"コメント",
+   border:true,
+   borderWidth:2,
+   borderColor:"#2563eb",
+   textColor:"#000",
+   fill:true,
+   bg:"#fff",
+   size:18,
+   font:"Arial"
+  };
+ }
+
+ if(type==="highlight"){
+  o.a={
+   width:4,
+   color:"#ef4444",
+   fill:false,
+   style:"solid"
+  };
+ }
+
+ if(type==="zoom"){
+  o.a={zoom:1.5};
+ }
+
+ if(type==="skip"){
+  o.x=0;
+  o.y=0;
+  o.w=0;
+  o.h=0;
+ }
+
+ state.objects.push(o);
+ state.selected=[o.id];
+ state.selectedLine=null;
+ mark();
+ closeMenu();
+ render();
+}
+
+function addMenu(x,y){
+ showMenu(x,y,`
+  <h4>要素を追加</h4>
+  <button data-add="comment">コメント</button>
+  <button data-add="highlight">強調枠</button>
+  <button data-add="zoom">拡大枠</button>
+  <button data-add="skip">スキップ</button>
+ `);
+}
+
+$("add").onclick=e=>addMenu(e.clientX,e.clientY);
+
+$("popup").onclick=function(e){
+ const b=e.target.closest("[data-add]");
+ if(b)addObject(b.dataset.add);
+};
 
 function render(){
  if(!state)return;
- $("position").textContent=fmt(state.pos)+" / "+fmt(state.dur);
- renderObjects();renderTimeline();renderLines();
+ renderObjects();
+ renderLines();
+ renderTimeline();
+ updatePosition();
 }
 
 function renderObjects(){
  const layer=$("objects");
- let svg=layer.querySelector("#lines");
+ const svg=layer.querySelector("#lines");
  layer.innerHTML="";
  layer.appendChild(svg);
+
  state.objects.forEach(o=>{
-  if(o.type==="skip"||!visible(o))return;
+  if(o.type==="skip")return;
+  if(state.pos<o.s||state.pos>o.e)return;
+
   const d=document.createElement("div");
   d.className="obj"+(state.selected.includes(o.id)?" sel":"");
-  if(connect&&connect.from===o.id)d.classList.add("source");
-  if(connect&&connect.target===o.id)d.classList.add("target");
+  if(connectionDrag){
+   if(connectionDrag.from===o.id)d.classList.add("source");
+   if(connectionDrag.target===o.id)d.classList.add("target");
+  }
   d.dataset.id=o.id;
-  d.style.cssText=`left:${o.x*100}%;top:${o.y*100}%;width:${o.w*100}%;height:${o.h*100}%;`;
+  d.style.left=o.x*100+"%";
+  d.style.top=o.y*100+"%";
+  d.style.width=o.w*100+"%";
+  d.style.height=o.h*100+"%";
+
   if(o.type==="comment"){
+   d.textContent=o.a.text;
    d.style.color=o.a.textColor;
    d.style.fontSize=o.a.size+"px";
    d.style.fontFamily=o.a.font;
    d.style.padding="5px";
-   if(o.a.fill)d.style.background=o.a.bg;
-   if(o.a.border)d.style.border=`${o.a.width}px solid ${o.a.borderColor}`;
-   d.textContent=o.a.text;
-  }else if(o.type==="highlight"){
-   d.style.border=`${o.a.width}px ${o.a.style} ${o.a.color}`;
-   if(o.a.fill)d.style.background=o.a.color+"33";
-  }else if(o.type==="zoom"){
-   d.style.border="2px solid #059669";d.style.background="#05966922";
-   d.innerHTML='<span style="background:#059669;color:#fff;padding:2px 5px">拡大</span>';
+   d.style.background=o.a.fill?o.a.bg:"transparent";
+   d.style.border=o.a.border?o.a.borderWidth+"px solid "+o.a.borderColor:"none";
   }
+
+  if(o.type==="highlight"){
+   d.style.border=o.a.width+"px "+o.a.style+" "+o.a.color;
+   d.style.background=o.a.fill?o.a.color+"33":"transparent";
+  }
+
+  if(o.type==="zoom"){
+   d.style.border="2px solid #059669";
+   d.style.background="#05966922";
+   d.innerHTML='<span style="background:#059669;color:#fff;padding:2px 5px">拡大 '+o.a.zoom+'倍</span>';
+  }
+
   if(state.selected.includes(o.id)){
-   const r=document.createElement("div");r.className="resize";d.appendChild(r);
+   ["t","r","b","l"].forEach(side=>{
+    const p=document.createElement("i");
+    p.className="connect-port "+side;
+    p.dataset.port=side;
+    d.appendChild(p);
+   });
+   const r=document.createElement("i");
+   r.className="resize";
+   d.appendChild(r);
   }
+
   layer.appendChild(d);
  });
 }
 
-function anchor(o,a){
- if(a==="top")return{x:o.x+o.w/2,y:o.y};
- if(a==="right")return{x:o.x+o.w,y:o.y+o.h/2};
- if(a==="bottom")return{x:o.x+o.w/2,y:o.y+o.h};
- if(a==="left")return{x:o.x,y:o.y+o.h/2};
- return{x:o.x+o.w/2,y:o.y+o.h/2};
+function anchor(o,side){
+ if(side==="t")return{x:o.x+o.w/2,y:o.y};
+ if(side==="r")return{x:o.x+o.w,y:o.y+o.h/2};
+ if(side==="b")return{x:o.x+o.w/2,y:o.y+o.h};
+ return{x:o.x,y:o.y+o.h/2};
+}
+
+function otherObjects(line){
+ return state.objects.filter(o=>o.id!==line.from&&o.id!==line.to&&o.type!=="skip");
+}
+
+function intersectsRect(x1,y1,x2,y2,o,pad=.015){
+ return Math.max(x1,x2)>=o.x-pad&&
+        Math.min(x1,x2)<=o.x+o.w+pad&&
+        Math.max(y1,y2)>=o.y-pad&&
+        Math.min(y1,y2)<=o.y+o.h+pad;
+}
+
+function route(line){
+ const a=find(state.objects,line.from);
+ const b=find(state.objects,line.to);
+ if(!a||!b)return "";
+
+ const p=anchor(a,line.fromSide);
+ const q=anchor(b,line.toSide);
+
+ if(line.shape==="直線")
+  return `M ${p.x*100} ${p.y*100} L ${q.x*100} ${q.y*100}`;
+
+ const obstacles=otherObjects(line);
+ const clear=(pts)=>{
+  for(let i=0;i<pts.length-1;i++){
+   for(const o of obstacles){
+    if(intersectsRect(pts[i].x,pts[i].y,pts[i+1].x,pts[i+1].y,o))return false;
+   }
+  }
+  return true;
+ };
+
+ const candidates=[];
+
+ if(line.shape==="折れ線"){
+  const xs=[p.x,q.x,(p.x+q.x)/2,.1,.9];
+  const ys=[p.y,q.y,(p.y+q.y)/2,.1,.9];
+  xs.forEach(mx=>{
+   candidates.push([
+    p,{x:mx,y:p.y},{x:mx,y:q.y},q
+   ]);
+  });
+  ys.forEach(my=>{
+   candidates.push([
+    p,{x:p.x,y:my},{x:q.x,y:my},q
+   ]);
+  });
+ }else{
+  const mx=(p.x+q.x)/2;
+  const my=(p.y+q.y)/2;
+  candidates.push([
+   p,{x:mx,y:p.y},{x:mx,y:q.y},q
+  ]);
+  candidates.push([
+   p,{x:p.x,y:my},{x:q.x,y:my},q
+  ]);
+ }
+
+ for(const pts of candidates){
+  if(clear(pts))return pts.map((v,i)=>(i?"L ":"M ")+v.x*100+" "+v.y*100).join(" ");
+ }
+
+ return `M ${p.x*100} ${p.y*100} L ${q.x*100} ${q.y*100}`;
+}
+
+function wavePath(line){
+ const a=find(state.objects,line.from);
+ const b=find(state.objects,line.to);
+ if(!a||!b)return "";
+
+ const p=anchor(a,line.fromSide);
+ const q=anchor(b,line.toSide);
+ const dx=q.x-p.x,dy=q.y-p.y;
+ const len=Math.sqrt(dx*dx+dy*dy)||1;
+ const nx=-dy/len*.018;
+ const ny=dx/len*.018;
+ const count=16;
+ let d=`M ${p.x*100} ${p.y*100}`;
+ for(let i=1;i<=count;i++){
+  const t=i/count;
+  const off=(i%2?1:-1);
+  d+=` L ${(p.x+dx*t+nx*off)*100} ${(p.y+dy*t+ny*off)*100}`;
+ }
+ return d;
 }
 
 function renderLines(){
- const svg=$("lines");while(svg.firstChild)svg.removeChild(svg.firstChild);
- state.lines.forEach(c=>{
-  const a=find(state.objects,c.from),b=find(state.objects,c.to);if(!a||!b)return;
-  const p=anchor(a,c.fromAnchor),q=anchor(b,c.toAnchor);
-  let d=`M ${p.x*100} ${p.y*100}`;
-  if(c.shape==="折れ線"){
-   const mx=(p.x+q.x)/2;
-   d+=` L ${mx*100} ${p.y*100} L ${mx*100} ${q.y*100}`;
-  }else if(c.shape==="波線"){
-   const n=10,dx=(q.x-p.x)/n,dy=(q.y-p.y)/n;
-   for(let i=1;i<=n;i++){
-    const x=p.x+dx*i,y=p.y+dy*i;
-    const off=(i%2?0.018:-0.018);
-    d+=` L ${(x-dy*off)*100} ${(y+dx*off)*100}`;
-   }
-  }else d+=` L ${q.x*100} ${q.y*100}`;
+ const svg=$("lines");
+ while(svg.firstChild)svg.removeChild(svg.firstChild);
+
+ state.lines.forEach(line=>{
+  let d=line.shape==="波線"?wavePath(line):route(line);
+  if(!d)return;
+
   const g=document.createElementNS("http://www.w3.org/2000/svg","g");
-  g.dataset.line=c.id;
+  g.dataset.line=line.id;
+
   const hit=document.createElementNS("http://www.w3.org/2000/svg","path");
-  hit.classList.add("hit");hit.setAttribute("d",d);
-  const line=document.createElementNS("http://www.w3.org/2000/svg","path");
-  line.classList.add("line");line.setAttribute("d",d);
-  line.setAttribute("stroke",c.color);line.setAttribute("stroke-width",c.width);
-  line.setAttribute("stroke-dasharray",c.style);
-  if(state.selectedLine===c.id)line.setAttribute("stroke","#fbbf24");
-  if(c.end==="arrow"){
+  hit.setAttribute("d",d);
+  hit.classList.add("line-hit");
+
+  const visible=document.createElementNS("http://www.w3.org/2000/svg","path");
+  visible.setAttribute("d",d);
+  visible.setAttribute("stroke",line.color);
+  visible.setAttribute("stroke-width",line.width);
+  visible.setAttribute("stroke-dasharray",line.dash);
+  visible.classList.add("line");
+  if(state.selectedLine===line.id)visible.classList.add("selected");
+
+  if(line.end==="arrow"){
    const defs=document.createElementNS("http://www.w3.org/2000/svg","defs");
-   const m=document.createElementNS("http://www.w3.org/2000/svg","marker");
-   m.id="arrow"+c.id;m.setAttribute("viewBox","0 0 10 10");m.setAttribute("refX","9");m.setAttribute("refY","5");
-   m.setAttribute("markerWidth","6");m.setAttribute("markerHeight","6");m.setAttribute("orient","auto");
-   const pth=document.createElementNS("http://www.w3.org/2000/svg","path");pth.setAttribute("d","M0 0L10 5L0 10z");pth.setAttribute("fill",c.color);
-   m.appendChild(pth);defs.appendChild(m);g.appendChild(defs);line.setAttribute("marker-end","url(#arrow"+c.id+")");
+   const marker=document.createElementNS("http://www.w3.org/2000/svg","marker");
+   const mid="m"+line.id;
+   marker.id=mid;
+   marker.setAttribute("viewBox","0 0 10 10");
+   marker.setAttribute("refX","9");
+   marker.setAttribute("refY","5");
+   marker.setAttribute("markerWidth","6");
+   marker.setAttribute("markerHeight","6");
+   marker.setAttribute("orient","auto");
+   const mp=document.createElementNS("http://www.w3.org/2000/svg","path");
+   mp.setAttribute("d","M0 0 L10 5 L0 10 Z");
+   mp.setAttribute("fill",line.color);
+   marker.appendChild(mp);
+   defs.appendChild(marker);
+   g.appendChild(defs);
+   visible.setAttribute("marker-end","url(#"+mid+")");
   }
-  g.appendChild(hit);g.appendChild(line);svg.appendChild(g);
+
+  g.appendChild(hit);
+  g.appendChild(visible);
+
+  if(state.selectedLine===line.id){
+   const a=find(state.objects,line.from);
+   const b=find(state.objects,line.to);
+   if(a&&b){
+    ["from","to"].forEach(kind=>{
+     const o=kind==="from"?a:b;
+     const side=kind==="from"?line.fromSide:line.toSide;
+     const p=anchor(o,side);
+     const h=document.createElementNS("http://www.w3.org/2000/svg","circle");
+     h.classList.add("line-handle");
+     h.dataset.handle=kind;
+     h.dataset.line=line.id;
+     h.setAttribute("cx",p.x*100);
+     h.setAttribute("cy",p.y*100);
+     h.setAttribute("r","0.9");
+     g.appendChild(h);
+    });
+   }
+  }
+
+  svg.appendChild(g);
  });
- if(connect){
-  const p=connect.start,q=connect.current;
+
+ if(connectionDrag){
+  const p=connectionDrag.start;
+  const q=connectionDrag.current;
   const t=document.createElementNS("http://www.w3.org/2000/svg","path");
-  t.classList.add("temp");t.setAttribute("d",`M${p.x*100} ${p.y*100}L${q.x*100} ${q.y*100}`);svg.appendChild(t);
+  t.classList.add("temp");
+  t.setAttribute("d",`M ${p.x*100} ${p.y*100} L ${q.x*100} ${q.y*100}`);
+  svg.appendChild(t);
  }
 }
 
 function renderTimeline(){
- const w=$("lanes").clientWidth||700,sp=state.viewEnd-state.viewStart;
+ const lanes=$("lanes");
+ const width=lanes.clientWidth||800;
+ const start=0,end=state.dur;
  let ruler="";
- for(let t=Math.ceil(state.viewStart/10)*10;t<=state.viewEnd;t+=10){
-  ruler+=`<div class="tick" style="left:${(t-state.viewStart)/sp*100}%">${fmt(t)}</div>`;
- }
+
+ const step=state.dur<=30?5:state.dur<=120?10:30;
+ for(let t=0;t<=state.dur;t+=step)
+  ruler+=`<div class="tick" style="left:${t/state.dur*100}%">${fmt(t)}</div>`;
+
  $("ruler").innerHTML=ruler;
- const rows=[];let h="";
+
+ const rows=[];
+ let html="";
+
  state.objects.forEach(o=>{
-  if(o.e<state.viewStart||o.s>state.viewEnd)return;
-  let row=0;while(rows[row]>o.s)row++;rows[row]=o.e;
-  const x=(o.s-state.viewStart)/sp*w,ww=(o.e-o.s)/sp*w;
-  h+=`<div class="clip${state.selected.includes(o.id)?" sel":""}" data-id="${o.id}" style="left:${x}px;width:${Math.max(4,ww)}px;top:${6+row*28}px;background:${TYPES[o.type].color}">${TYPES[o.type].name}</div>`;
+  let row=0;
+  while(rows[row]!=null&&rows[row]>o.s)row++;
+  rows[row]=o.e;
+
+  const left=o.s/end*100;
+  const width=(o.e-o.s)/end*100;
+  html+=`<div class="clip ${o.type==="skip"?"skip":""} ${state.selected.includes(o.id)?"sel":""}" data-id="${o.id}" style="left:${left}%;width:${Math.max(width,.5)}%;top:${8+row*30}px;background:${TYPES[o.type].color}">${TYPES[o.type].name} ${fmt(o.s)}-${fmt(o.e)}</div>`;
  });
- $("lanes").innerHTML=h;
- if(state.pos>=state.viewStart&&state.pos<=state.viewEnd){
-  const c=document.createElement("div");c.className="cursor";
-  c.style.left=(state.pos-state.viewStart)/sp*100+"%";c.innerHTML="<i></i>";$("lanes").appendChild(c);
+
+ lanes.innerHTML=html;
+
+ if(state.pos<=state.dur){
+  const c=document.createElement("div");
+  c.className="cursor";
+  c.style.left=state.pos/state.dur*100+"%";
+  lanes.appendChild(c);
  }
- $("overview").innerHTML=`<div class="range" style="left:${state.viewStart/state.dur*100}%;width:${sp/state.dur*100}%"></div>`;
+
+ $("overview").innerHTML=`<div class="view-range" style="left:${state.viewStart/state.dur*100}%;width:${(state.viewEnd-state.viewStart)/state.dur*100}%"></div>`;
 }
 
-function addObject(type){
- const s=clamp(state.pos,0,Math.max(0,state.dur-5)),o={
-  id:uid("e"),type,s,e:Math.min(state.dur,s+5),x:.3,y:.25,w:.3,h:.2,a:{}
- };
- if(type==="comment")o.a={text:"コメント",border:true,width:2,borderColor:"#2563eb",textColor:"#000",bg:"#fff",fill:true,size:16,font:"sans-serif"};
- if(type==="highlight")o.a={width:4,color:"#dc2626",fill:false,style:"solid"};
- state.objects.push(o);state.selected=[o.id];state.selectedLine=null;mark();closePopup();render();
+function updatePosition(){
+ $("position").textContent=fmt(state.pos)+" / "+fmt(state.dur);
 }
 
-function menu(x,y,html){
- closePopup();$("popup").innerHTML=`<div class="menu" id="menu">${html}</div>`;
- const m=$("menu");m.style.left=Math.min(x,innerWidth-m.offsetWidth-8)+"px";m.style.top=Math.min(y,innerHeight-m.offsetHeight-8)+"px";
+function showMenu(x,y,html){
+ closeMenu();
+ $("popup").innerHTML=`<div class="menu">${html}</div>`;
+ const m=$("popup").firstElementChild;
+ m.style.left=Math.min(x,innerWidth-m.offsetWidth-8)+"px";
+ m.style.top=Math.min(y,innerHeight-m.offsetHeight-8)+"px";
 }
 
-function closePopup(){$("popup").innerHTML=""}
-
-$("video").oncontextmenu=function(e){
- e.preventDefault();const o=e.target.closest(".obj");
- if(o){state.selected=[o.dataset.id];state.selectedLine=null;render();elementMenu(e.clientX,e.clientY,find(state.objects,o.dataset.id));}
- else basicMenu(e.clientX,e.clientY);
-};
-
-function basicMenu(x,y){
- menu(x,y,`<b>要素を追加</b>
- <button data-add="comment">コメントを追加</button>
- <button data-add="highlight">強調枠を追加</button>
- <button data-add="zoom">拡大枠を追加</button>
- <button data-add="skip">スキップを追加</button>`);
+function closeMenu(){
+ $("popup").innerHTML="";
 }
 
 function elementMenu(x,y,o){
- let h=`<b>${TYPES[o.type].name}</b>`;
- if(o.type==="comment")h+=`<label>文字<input id="txt" value="${esc(o.a.text)}"></label>
- <label>線あり<input id="border" type="checkbox" ${o.a.border?"checked":""}></label>
- <label>文字サイズ<input id="size" type="number" value="${o.a.size}" min="8" max="72" style="width:65px"></label>`;
- if(o.type==="highlight")h+=`<label>塗り潰し<input id="fill" type="checkbox" ${o.a.fill?"checked":""}></label>
- <div>線種</div><div class="choice">${["solid","dotted","dashed","double"].map(x=>`<button data-style="${x}" class="${o.a.style===x?"on":""}">${x}</button>`).join("")}</div>`;
- h+=`<hr><button id="connectStart">接続線を開始</button><button id="delete" class="danger">削除</button>`;
- menu(x,y,h);
- $("txt")?.addEventListener("input",e=>{o.a.text=e.target.value;mark();render()});
- $("border")?.addEventListener("change",e=>{o.a.border=e.target.checked;mark();render()});
- $("size")?.addEventListener("change",e=>{o.a.size=clamp(+e.target.value||16,8,72);mark();render()});
- $("fill")?.addEventListener("change",e=>{o.a.fill=e.target.checked;mark();render()});
- document.querySelectorAll("[data-style]").forEach(b=>b.onclick=()=>{o.a.style=b.dataset.style;mark();render();elementMenu(x,y,o)});
- $("delete").onclick=()=>{state.objects=state.objects.filter(x=>x.id!==o.id);state.lines=state.lines.filter(c=>c.from!==o.id&&c.to!==o.id);state.selected=[];mark();closePopup();render()};
- $("connectStart").onclick=()=>{
-  closePopup();startConnection(o,{clientX:$("video").getBoundingClientRect().left+(o.x+o.w/2)*$("video").clientWidth,clientY:$("video").getBoundingClientRect().top+(o.y+o.h/2)*$("video").clientHeight});
+ let html=`<h4>${TYPES[o.type].name}</h4>`;
+
+ if(o.type==="comment"){
+  html+=`
+   <label>コメント本文<input id="mtext" type="text" value="${esc(o.a.text)}"></label>
+   <label>文字サイズ<input id="msize" type="number" min="8" max="72" value="${o.a.size}"></label>
+   <label>フォント
+    <select id="mfont">
+     <option ${o.a.font==="Arial"?"selected":""}>Arial</option>
+     <option ${o.a.font==="serif"?"selected":""}>serif</option>
+     <option ${o.a.font==="sans-serif"?"selected":""}>sans-serif</option>
+     <option ${o.a.font==="monospace"?"selected":""}>monospace</option>
+    </select>
+   </label>
+   <label>線<input id="mborder" type="checkbox" ${o.a.border?"checked":""}></label>
+   <label>塗り潰し<input id="mfill" type="checkbox" ${o.a.fill?"checked":""}></label>
+   <div>文字色</div><div class="colors">${colorButtons("textColor",o.a.textColor)}</div>
+   <div>線色</div><div class="colors">${colorButtons("borderColor",o.a.borderColor)}</div>
+   <div>背景色</div><div class="colors">${colorButtons("bg",o.a.bg)}</div>
+  `;
+ }
+
+ if(o.type==="highlight"){
+  html+=`
+   <div>線の太さ</div>
+   <div class="choices">${[2,4,6,8].map(v=>`<button data-width="${v}" class="${o.a.width===v?"active":""}">${v}px</button>`).join("")}</div>
+   <label>塗り潰し<input id="hfill" type="checkbox" ${o.a.fill?"checked":""}></label>
+   <div>線種</div>
+   <div class="choices">
+    <button data-style="solid" class="${o.a.style==="solid"?"active":""}">実線</button>
+    <button data-style="dotted" class="${o.a.style==="dotted"?"active":""}">点線</button>
+    <button data-style="dashed" class="${o.a.style==="dashed"?"active":""}">破線</button>
+    <button data-style="double" class="${o.a.style==="double"?"active":""}">一点鎖線</button>
+   </div>
+  `;
+ }
+
+ if(o.type==="zoom"){
+  html+=`
+   <label>拡大倍率
+    <select id="zoom">
+     <option value="1.25" ${o.a.zoom==1.25?"selected":""}>1.25倍</option>
+     <option value="1.5" ${o.a.zoom==1.5?"selected":""}>1.5倍</option>
+     <option value="2" ${o.a.zoom==2?"selected":""}>2倍</option>
+     <option value="3" ${o.a.zoom==3?"selected":""}>3倍</option>
+    </select>
+   </label>
+  `;
+ }
+
+ if(o.type==="skip"){
+  html+=`<div class="notice">スキップは動画上には表示されません。</div>`;
+ }
+
+ html+=`
+  <hr>
+  <button id="startLine">この要素から接続線を作成</button>
+  <button id="deleteObject" class="danger">この要素を削除</button>
+ `;
+
+ showMenu(x,y,html);
+
+ $("mtext")?.addEventListener("input",e=>{o.a.text=e.target.value;mark();render()});
+ $("msize")?.addEventListener("change",e=>{o.a.size=clamp(+e.target.value||18,8,72);mark();render()});
+ $("mfont")?.addEventListener("change",e=>{o.a.font=e.target.value;mark();render()});
+ $("mborder")?.addEventListener("change",e=>{o.a.border=e.target.checked;mark();render()});
+ $("mfill")?.addEventListener("change",e=>{o.a.fill=e.target.checked;mark();render()});
+ $("hfill")?.addEventListener("change",e=>{o.a.fill=e.target.checked;mark();render()});
+ $("zoom")?.addEventListener("change",e=>{o.a.zoom=+e.target.value;mark();render()});
+
+ document.querySelectorAll("[data-width]").forEach(b=>b.onclick=()=>{
+  o.a.width=+b.dataset.width;mark();render();elementMenu(x,y,o);
+ });
+
+ document.querySelectorAll("[data-style]").forEach(b=>b.onclick=()=>{
+  o.a.style=b.dataset.style;mark();render();elementMenu(x,y,o);
+ });
+
+ document.querySelectorAll("[data-color]").forEach(b=>b.onclick=()=>{
+  o.a[b.dataset.color]=b.dataset.value;mark();render();elementMenu(x,y,o);
+ });
+
+ $("startLine").onclick=()=>{
+  closeMenu();
+  const r=$("video").getBoundingClientRect();
+  const p=anchor(o,"r");
+  startConnection(o,p);
+ };
+
+ $("deleteObject").onclick=()=>{
+  state.objects=state.objects.filter(v=>v.id!==o.id);
+  state.lines=state.lines.filter(v=>v.from!==o.id&&v.to!==o.id);
+  state.selected=state.selected.filter(v=>v!==o.id);
+  state.selectedLine=null;
+  mark();
+  closeMenu();
+  render();
  };
 }
 
-$("popup").onclick=function(e){
- const b=e.target.closest("[data-add]");if(b)addObject(b.dataset.add);
-};
+function colorButtons(prop,current){
+ return COLORS.map(c=>`<button class="color ${c===current?"active":""}" data-color="${prop}" data-value="${c}" style="background:${c}"></button>`).join("");
+}
+
+function lineMenu(x,y,line){
+ const shapes=["直線","折れ線","波線"];
+ const dashes=[
+  ["","実線"],
+  ["2 5","点線"],
+  ["8 5","破線"],
+  ["10 5 2 5","一点鎖線"]
+ ];
+ const sides=[
+  ["t","上"],
+  ["r","右"],
+  ["b","下"],
+  ["l","左"]
+ ];
+
+ showMenu(x,y,`
+  <h4>接続線</h4>
+  <div>線形</div>
+  <div class="choices">${shapes.map(v=>`<button data-shape="${v}" class="${line.shape===v?"active":""}">${v}</button>`).join("")}</div>
+  <div>線種</div>
+  <div class="choices">${dashes.map(v=>`<button data-dash="${v[0]}" class="${line.dash===v[0]?"active":""}">${v[1]}</button>`).join("")}</div>
+  <label>線の太さ
+   <select id="lineWidth">
+    <option value="2" ${line.width===2?"selected":""}>2px</option>
+    <option value="3" ${line.width===3?"selected":""}>3px</option>
+    <option value="5" ${line.width===5?"selected":""}>5px</option>
+   </select>
+  </label>
+  <div>接続元</div>
+  <div class="choices">${sides.map(v=>`<button data-from="${v[0]}" class="${line.fromSide===v[0]?"active":""}">${v[1]}</button>`).join("")}</div>
+  <div>接続先</div>
+  <div class="choices">${sides.map(v=>`<button data-to="${v[0]}" class="${line.toSide===v[0]?"active":""}">${v[1]}</button>`).join("")}</div>
+  <label>終端
+   <select id="lineEnd">
+    <option value="none" ${line.end==="none"?"selected":""}>なし</option>
+    <option value="arrow" ${line.end==="arrow"?"selected":""}>矢印</option>
+   </select>
+  </label>
+  <div>線色</div><div class="colors">${colorButtons("color",line.color)}</div>
+  <hr>
+  <button id="deleteLine" class="danger">接続線を削除</button>
+ `);
+
+ document.querySelectorAll("[data-shape]").forEach(b=>b.onclick=()=>{
+  line.shape=b.dataset.shape;
+  mark();render();lineMenu(x,y,line);
+ });
+
+ document.querySelectorAll("[data-dash]").forEach(b=>b.onclick=()=>{
+  line.dash=b.dataset.dash;
+  mark();render();lineMenu(x,y,line);
+ });
+
+ document.querySelectorAll("[data-from]").forEach(b=>b.onclick=()=>{
+  line.fromSide=b.dataset.from;
+  mark();render();lineMenu(x,y,line);
+ });
+
+ document.querySelectorAll("[data-to]").forEach(b=>b.onclick=()=>{
+  line.toSide=b.dataset.to;
+  mark();render();lineMenu(x,y,line);
+ });
+
+ document.querySelectorAll("[data-color]").forEach(b=>b.onclick=()=>{
+  line[b.dataset.color]=b.dataset.value;
+  mark();render();lineMenu(x,y,line);
+ });
+
+ $("lineWidth").onchange=e=>{
+  line.width=+e.target.value;
+  mark();render();
+ };
+
+ $("lineEnd").onchange=e=>{
+  line.end=e.target.value;
+  mark();render();
+ };
+
+ $("deleteLine").onclick=()=>{
+  state.lines=state.lines.filter(v=>v.id!==line.id);
+  state.selectedLine=null;
+  mark();closeMenu();render();
+ };
+}
+
+function startConnection(o,start){
+ connectionDrag={
+  from:o.id,
+  start:start,
+  current:start,
+  target:null
+ };
+ $("video").classList.add("connecting");
+
+ const move=e=>{
+  connectionDrag.current=videoPoint(e);
+  const n=document.elementFromPoint(e.clientX,e.clientY)?.closest(".obj");
+  connectionDrag.target=n?find(state.objects,n.dataset.id):null;
+  if(connectionDrag.target?.id===o.id)connectionDrag.target=null;
+  render();
+ };
+
+ const up=e=>{
+  window.removeEventListener("pointermove",move);
+  window.removeEventListener("pointerup",up);
+
+  if(connectionDrag.target){
+   const target=connectionDrag.target;
+   const fromSide=nearestSide(o,connectionDrag.start);
+   const toSide=nearestSide(target,connectionDrag.current);
+
+   state.lines.push({
+    id:uid("l"),
+    from:o.id,
+    to:target.id,
+    fromSide:fromSide,
+    toSide:toSide,
+    shape:"直線",
+    dash:"",
+    width:3,
+    color:"#f59e0b",
+    end:"none"
+   });
+
+   state.selectedLine=state.lines[state.lines.length-1].id;
+   state.selected=[];
+   mark();
+  }
+
+  connectionDrag=null;
+  $("video").classList.remove("connecting");
+  render();
+ };
+
+ window.addEventListener("pointermove",move);
+ window.addEventListener("pointerup",up);
+}
+
+function nearestSide(o,p){
+ const sides={
+  t:Math.abs(p.y-o.y),
+  r:Math.abs(p.x-(o.x+o.w)),
+  b:Math.abs(p.y-(o.y+o.h)),
+  l:Math.abs(p.x-o.x)
+ };
+ return Object.keys(sides).sort((a,b)=>sides[a]-sides[b])[0];
+}
 
 $("video").addEventListener("pointerdown",function(e){
  if(e.button!==0)return;
- if(e.target.closest(".hit"))return;
+
+ const handle=e.target.closest(".connect-port");
+ if(handle){
+  const n=e.target.closest(".obj");
+  const o=find(state.objects,n.dataset.id);
+  startConnection(o,anchor(o,handle.dataset.port));
+  e.preventDefault();
+  return;
+ }
+
+ const resize=e.target.closest(".resize");
+ if(resize){
+  const n=e.target.closest(".obj");
+  resizeObject(find(state.objects,n.dataset.id),e);
+  e.preventDefault();
+  return;
+ }
+
  const n=e.target.closest(".obj");
- if(!n){state.selected=[];state.selectedLine=null;render();return}
+
+ if(!n){
+  state.selected=[];
+  state.selectedLine=null;
+  render();
+  return;
+ }
+
  const o=find(state.objects,n.dataset.id);
- if(e.shiftKey){state.selected.includes(o.id)?state.selected=state.selected.filter(x=>x!==o.id):state.selected.push(o.id);render();return}
- state.selected=[o.id];state.selectedLine=null;
- if(e.target.classList.contains("resize"))return resize(o,e);
- startMove(o,e);
+ state.selectedLine=null;
+
+ if(e.shiftKey){
+  if(state.selected.includes(o.id))
+   state.selected=state.selected.filter(v=>v!==o.id);
+  else
+   state.selected.push(o.id);
+  render();
+  return;
+ }
+
+ state.selected=[o.id];
+ render();
+ moveObject(o,e);
 });
 
-function startMove(o,e){
- const r=$("video").getBoundingClientRect(),sx=e.clientX,sy=e.clientY,ox=o.x,oy=o.y;
- let moved=false;
- const move=ev=>{
-  const dx=(ev.clientX-sx)/r.width,dy=(ev.clientY-sy)/r.height;
-  if(Math.abs(dx)+Math.abs(dy)>.004)moved=true;
-  o.x=clamp(ox+dx,0,1-o.w);o.y=clamp(oy+dy,0,1-o.h);
-  mark();render();
- };
- const up=ev=>{
-  window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",up);
-  if(moved){connect=null}else startConnection(o,e);
- };
- window.addEventListener("pointermove",move);window.addEventListener("pointerup",up);
- e.preventDefault();
-}
+function moveObject(o,e){
+ const r=$("video").getBoundingClientRect();
+ const sx=e.clientX,sy=e.clientY,ox=o.x,oy=o.y;
 
-function resize(o,e){
- const r=$("video").getBoundingClientRect(),sx=e.clientX,sy=e.clientY,ow=o.w,oh=o.h;
- const move=ev=>{o.w=clamp(ow+(ev.clientX-sx)/r.width,.05,1-o.x);o.h=clamp(oh+(ev.clientY-sy)/r.height,.05,1-o.y);mark();render()};
- const up=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",up)};
- window.addEventListener("pointermove",move);window.addEventListener("pointerup",up);e.preventDefault();
-}
-
-function startConnection(o,e){
- const p=position(e);connect={from:o.id,start:p,current:p,target:null};
- $("video").classList.add("connecting");render();
  const move=ev=>{
-  connect.current=position(ev);
-  const n=document.elementFromPoint(ev.clientX,ev.clientY)?.closest(".obj");
-  connect.target=n?find(state.objects,n.dataset.id):null;
-  if(connect.target?.id===connect.from)connect.target=null;
+  const dx=(ev.clientX-sx)/r.width;
+  const dy=(ev.clientY-sy)/r.height;
+  o.x=clamp(ox+dx,0,1-o.w);
+  o.y=clamp(oy+dy,0,1-o.h);
+  mark();
   render();
  };
- const up=ev=>{
-  window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",up);
-  if(connect.target){
-   const a=find(state.objects,connect.from),b=connect.target;
-   state.lines.push({id:uid("l"),from:a.id,to:b.id,shape:"直線",style:"",color:"#f59e0b",width:3,fromAnchor:"right",toAnchor:"left",end:"none"});
-   state.selected=[];state.selectedLine=state.lines[state.lines.length-1].id;mark();
-  }
-  connect=null;$("video").classList.remove("connecting");render();
+
+ const up=()=>{
+  window.removeEventListener("pointermove",move);
+  window.removeEventListener("pointerup",up);
  };
- window.addEventListener("pointermove",move);window.addEventListener("pointerup",up);
+
+ window.addEventListener("pointermove",move);
+ window.addEventListener("pointerup",up);
 }
 
-$("video").addEventListener("click",e=>{
- const g=e.target.closest("[data-line]");if(!g)return;
- state.selected=[];state.selectedLine=g.dataset.line;render();lineMenu(e.clientX,e.clientY,find(state.lines,g.dataset.line));
+function resizeObject(o,e){
+ const r=$("video").getBoundingClientRect();
+ const sx=e.clientX,sy=e.clientY,ow=o.w,oh=o.h;
+
+ const move=ev=>{
+  o.w=clamp(ow+(ev.clientX-sx)/r.width,.05,1-o.x);
+  o.h=clamp(oh+(ev.clientY-sy)/r.height,.05,1-o.y);
+  mark();
+  render();
+ };
+
+ const up=()=>{
+  window.removeEventListener("pointermove",move);
+  window.removeEventListener("pointerup",up);
+ };
+
+ window.addEventListener("pointermove",move);
+ window.addEventListener("pointerup",up);
+}
+
+$("video").addEventListener("contextmenu",function(e){
+ e.preventDefault();
+
+ const lineGroup=e.target.closest("[data-line]");
+ if(lineGroup){
+  const line=find(state.lines,lineGroup.dataset.line);
+  state.selected=[];
+  state.selectedLine=line.id;
+  render();
+  lineMenu(e.clientX,e.clientY,line);
+  return;
+ }
+
+ const n=e.target.closest(".obj");
+ if(n){
+  const o=find(state.objects,n.dataset.id);
+  state.selected=[o.id];
+  state.selectedLine=null;
+  render();
+  elementMenu(e.clientX,e.clientY,o);
+  return;
+ }
+
+ addMenu(e.clientX,e.clientY);
 });
 
-function lineMenu(x,y,c){
- menu(x,y,`<b>接続線</b>
- <div>線形</div><div class="choice">${["直線","折れ線","波線"].map(x=>`<button data-shape="${x}" class="${c.shape===x?"on":""}">${x}</button>`).join("")}</div>
- <div>線種</div><div class="choice">${[["","実線"],["2 5","点線"],["8 5","破線"],["10 5 2 5","一点鎖線"]].map(x=>`<button data-line-style="${x[0]}" class="${c.style===x[0]?"on":""}">${x[1]}</button>`).join("")}</div>
- <label>矢印<input id="arrow" type="checkbox" ${c.end==="arrow"?"checked":""}></label>
- <hr><button id="delLine" class="danger">接続線を削除</button>`);
- document.querySelectorAll("[data-shape]").forEach(b=>b.onclick=()=>{c.shape=b.dataset.shape;mark();render();lineMenu(x,y,c)});
- document.querySelectorAll("[data-line-style]").forEach(b=>b.onclick=()=>{c.style=b.dataset.lineStyle;mark();render();lineMenu(x,y,c)});
- $("arrow").onchange=e=>{c.end=e.target.checked?"arrow":"none";mark();render()};
- $("delLine").onclick=()=>{state.lines=state.lines.filter(x=>x.id!==c.id);state.selectedLine=null;mark();closePopup();render()};
-}
+$("video").addEventListener("click",function(e){
+ const g=e.target.closest("[data-line]");
+ if(g){
+  state.selected=[];
+  state.selectedLine=g.dataset.line;
+  render();
+ }
+});
 
 $("lanes").addEventListener("pointerdown",function(e){
- const n=e.target.closest(".clip");if(!n)return;
- const o=find(state.objects,n.dataset.id),r=$("lanes").getBoundingClientRect(),sx=e.clientX,os=o.s,oe=o.e;
- state.selected=[o.id];render();
+ const clip=e.target.closest(".clip");
+ if(!clip){
+  seekFromTimeline(e);
+  return;
+ }
+
+ const o=find(state.objects,clip.dataset.id);
+ if(!o)return;
+
+ if(e.shiftKey){
+  state.selected.includes(o.id)
+   ?state.selected=state.selected.filter(v=>v!==o.id)
+   :state.selected.push(o.id);
+ }else{
+  state.selected=[o.id];
+ }
+
+ state.selectedLine=null;
+ render();
+
+ const r=$("lanes").getBoundingClientRect();
+ const sx=e.clientX;
+ const os=o.s;
+ const oe=o.e;
+ const duration=oe-os;
+
  const move=ev=>{
-  const dt=(ev.clientX-sx)/r.width*(state.viewEnd-state.viewStart);
-  o.s=clamp(os+dt,0,oe-os>0?state.dur-(oe-os):state.dur);o.e=o.s+(oe-os);mark();render();
+  const dt=(ev.clientX-sx)/r.width*state.dur;
+  o.s=clamp(os+dt,0,state.dur-duration);
+  o.e=o.s+duration;
+  mark();
+  render();
  };
- const up=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",up)};
- window.addEventListener("pointermove",move);window.addEventListener("pointerup",up);e.preventDefault();
+
+ const up=()=>{
+  window.removeEventListener("pointermove",move);
+  window.removeEventListener("pointerup",up);
+ };
+
+ window.addEventListener("pointermove",move);
+ window.addEventListener("pointerup",up);
+ e.preventDefault();
 });
 
-$("ruler").onpointerdown=e=>{
- const move=ev=>{
-  const r=$("lanes").getBoundingClientRect(),t=state.viewStart+clamp(ev.clientX-r.left,0,r.width)/r.width*(state.viewEnd-state.viewStart);
-  state.pos=clamp(t,0,state.dur);state.video.currentTime=state.pos;render();
- };
- const up=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",up)};
- move(e);window.addEventListener("pointermove",move);window.addEventListener("pointerup",up);
-};
+function seekFromTimeline(e){
+ const r=$("lanes").getBoundingClientRect();
+ state.pos=clamp((e.clientX-r.left)/r.width*state.dur,0,state.dur);
+ state.video.currentTime=state.pos;
+ render();
+}
+
+$("ruler").addEventListener("pointerdown",seekFromTimeline);
 
 $("play").onclick=()=>{
  if(timer)return;
- if(state.pos>=state.dur)state.pos=0;
+
  state.video.currentTime=state.pos;
  state.video.play();
+
  timer=setInterval(()=>{
   state.pos=state.video.currentTime;
-  if(state.pos>=state.dur){clearInterval(timer);timer=null;state.video.pause()}
+
+  const skip=state.objects.find(o=>
+   o.type==="skip"&&state.pos>=o.s&&state.pos<o.e
+  );
+
+  if(skip){
+   state.pos=skip.e;
+   state.video.currentTime=skip.e;
+  }
+
+  if(state.pos>=state.dur){
+   state.pos=state.dur;
+   clearInterval(timer);
+   timer=null;
+   state.video.pause();
+  }
+
   render();
  },50);
 };
-$("pause").onclick=()=>{state.video.pause();clearInterval(timer);timer=null};
-$("stop").onclick=()=>{state.video.pause();clearInterval(timer);timer=null;state.pos=0;state.video.currentTime=0;render()};
-$("fit").onclick=()=>{state.viewStart=0;state.viewEnd=state.dur;render()};
 
-$("back").onclick=()=>{
- if(state.dirty&&!confirm("未保存の変更があります。終了しますか？"))return;
- clearInterval(timer);timer=null;state.video.pause();state=null;
- $("editor").classList.add("hidden");$("home").classList.remove("hidden");
+$("pause").onclick=()=>{
+ state.video.pause();
+ clearInterval(timer);
+ timer=null;
 };
 
-document.addEventListener("pointerdown",e=>{if(!e.target.closest(".menu"))closePopup()},true);
-document.addEventListener("keydown",e=>{
- if(e.key==="Escape"){connect=null;$("video")?.classList.remove("connecting");closePopup();render()}
-});
-window.onresize=()=>state&&render();
+$("stop").onclick=()=>{
+ state.video.pause();
+ clearInterval(timer);
+ timer=null;
+ state.pos=0;
+ state.video.currentTime=0;
+ render();
+};
 
-$("videos").innerHTML=`<div class="orig"><div class="head row"><b>動画を選択するとここに表示されます</b><span class="grow"></span></div></div>`;
+$("scale").oninput=function(){
+ state.scale=+this.value;
+ renderTimelineScaled();
+};
+
+function renderTimelineScaled(){
+ const lanes=$("lanes");
+ lanes.style.transformOrigin="left top";
+ lanes.style.transform="scaleX("+state.scale+")";
+ renderTimeline();
+}
+
+$("fit").onclick=()=>{
+ state.scale=1;
+ $("scale").value=1;
+ state.viewStart=0;
+ state.viewEnd=state.dur;
+ render();
+};
+
+$("save").onclick=()=>{
+ const name=prompt("編集作業名を入力してください",$("workName").textContent);
+ if(name===null)return;
+ $("workName").textContent=name||"編集作業";
+ state.dirty=false;
+ $("dirty").classList.add("hidden");
+ alert("編集作業を保存しました。");
+};
+
+$("make").onclick=()=>{
+ if(state.dirty){
+  const ok=confirm("未保存の変更があります。保存してから編集結果を作成しますか？");
+  if(ok)$("save").click();
+ }
+ alert("編集結果動画の作成を開始しました。");
+};
+
+$("finish").onclick=()=>{
+ if(state.dirty){
+  const result=confirm("未保存の変更があります。保存して終了しますか？");
+  if(result)$("save").click();
+ }
+ clearInterval(timer);
+ timer=null;
+ state.video.pause();
+ state=null;
+ $("editor").classList.add("hidden");
+ $("home").classList.remove("hidden");
+};
+
+document.addEventListener("pointerdown",function(e){
+ if(!e.target.closest(".menu"))closeMenu();
+},true);
+
+document.addEventListener("keydown",function(e){
+ if(e.key==="Escape"){
+  connectionDrag=null;
+  $("video")?.classList.remove("connecting");
+  closeMenu();
+  if(state)render();
+ }
+});
+
+window.addEventListener("resize",function(){
+ if(state)render();
+});
+
 })();
 </script>
 </body>
