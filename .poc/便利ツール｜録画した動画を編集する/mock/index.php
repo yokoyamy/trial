@@ -24,7 +24,8 @@ svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index
 .tools{height:42px;border-bottom:1px solid #30363d}.time{min-width:165px}.scale{margin-left:auto;color:#8b949e;font-size:12px}.scale input{width:120px}
 .scroll{height:calc(100% - 42px);overflow:hidden;position:relative}.tl{position:relative;height:100%}
 .axis{height:30px;margin:0 15px 0 95px;position:relative;border-bottom:1px solid #30363d}
-.tick{position:absolute;height:100%;border-left:1px solid #343b45;color:#7d8590;font-size:10px;padding-left:3px;white-space:nowrap}
+.tick{position:absolute;height:100%;border-left:1px solid #4a5563;color:#9aa5b1;font-size:10px;padding-left:3px;white-space:nowrap}
+.tick.minor{height:7px;bottom:0;border-left:1px solid #343b45}
 .tick.end{border:0;border-right:2px solid #f0b000;padding:0 3px 0 0;transform:translateX(-100%);color:#f0b000}
 .rows{margin:0 15px 0 95px}.row{height:45px;position:relative;border-bottom:1px solid #242b33;overflow:hidden}
 .label{position:absolute;right:100%;width:95px;height:45px;display:flex;align-items:center;padding-left:7px;background:#161b22;font-size:11px}
@@ -55,6 +56,7 @@ const SIDES=["top","right","bottom","left"],SJ={top:"上",right:"右",bottom:"�
 let duration=60,current=0,scale=1,selected=[],selLine=null,next=5,nextLine=1,drag=null,mt=null,connect=null,mouse=null,endDrag=null;
 let els=[{id:1,type:"comment",start:5,end:18,x:18,y:15,w:25,h:9,text:"ここを確認してください"},{id:2,type:"highlight",start:8,end:24,x:52,y:34,w:25,h:24},{id:3,type:"zoom",start:20,end:35,x:20,y:58,w:22,h:18},{id:4,type:"skip",start:38,end:45}],lines=[];
 const fmt=v=>String(Math.floor(v/60)).padStart(2,"0")+":"+(v%60).toFixed(3).padStart(6,"0");
+const fmtTick=(v,step)=>{let m=Math.floor(v/60),s=v-m*60,dec=step<1?(step<.1?2:1):0;return String(m).padStart(2,"0")+":"+s.toFixed(dec).padStart(dec?3+dec:2,"0")};
 const toast=s=>{let t=$("toast");t.textContent=s;t.style.display="block";clearTimeout(t.x);t.x=setTimeout(()=>t.style.display="none",1800)};
 const TW=()=>Math.max(100,$("tl").clientWidth-110),active=e=>current>=e.start&&current<=e.end,byId=id=>els.find(a=>a.id==id);
 const multi=e=>e.shiftKey||e.ctrlKey||e.metaKey;
@@ -127,7 +129,6 @@ function route(form,A,B,obst){
  return c.find(p=>!p.slice(1).some((q,i)=>obst.some(r=>hit(p[i],q,r))))||c[0]}
 function toPath(pts,form){
  if(form!="wave")return"M"+pts.map(p=>p.x.toFixed(1)+" "+p.y.toFixed(1)).join("L");
- /* 始点→終点の経路全体を長さで補間し、法線方向にsinで1周期だけ揺らす */
  let seg=pts.slice(1).map((q,i)=>Math.hypot(q.x-pts[i].x,q.y-pts[i].y)),total=seg.reduce((a,b)=>a+b,0)||1,N=60,d="";
  for(let i=0;i<=N;i++){
   let s=i/N*total,k=0;while(k<seg.length-1&&s>seg[k]){s-=seg[k];k++}
@@ -194,10 +195,28 @@ menu.onclick=e=>{
 };
 
 /* ---- タイムライン ---- */
+/* 主目盛り: ラベル間隔が画面上で最低80px以上になる「1・2・5」系の刻みを選ぶ。
+   scaleが大きいほど刻みが細かくなるが、ラベル同士は必ず80px以上離れる。
+   補助目盛り: 主目盛りを5(または2)分割した細線。ラベルなし。 */
+function niceStep(minSec){
+ let p=Math.pow(10,Math.floor(Math.log10(minSec))),m=[1,2,5,10].find(k=>k*p>=minSec);return m*p}
 function timeline(){
- let W=TW(),steps=[.1,.2,.5,1,2,5,10,15,30,60,120,300,600],step=steps.find(s=>s*W/duration>=60/scale)||600,ax=$("axis");
+ let W=TW(),ax=$("axis"),pxPerSec=W/duration*scale,
+  major=niceStep(80/pxPerSec*(1/scale)*scale/1),
+  minor=major/(String(Math.round(major/Math.pow(10,Math.floor(Math.log10(major)))))=="2"?2:5);
+ major=niceStep(80/(W/duration));
+ /* スケールは「細かく読む倍率」: 倍率が高いほど主目盛りを細かくする(ただし80px間隔は守る) */
+ let fine=Math.max(niceStep(80/(W/duration)/scale),niceStep(80/(W/duration))/Math.pow(2,0));
+ major=Math.max(niceStep(80/(W/duration)/scale),0.01);
+ while(major*(W/duration)<80)major=niceStep(major*1.01);
+ let lead=Math.pow(10,Math.floor(Math.log10(major))),mm=Math.round(major/lead);
+ minor=major/(mm==2?2:mm==5?5:5);
  ax.innerHTML="";
- for(let t=0;t<duration-step*.3;t+=step)ax.insertAdjacentHTML("beforeend",`<div class="tick" style="left:${t/duration*W}px">${fmt(t).slice(0,8)}</div>`);
+ for(let t=0;t<=duration+1e-9;t+=minor){
+  let isMajor=Math.abs(t/major-Math.round(t/major))<1e-6,x=t/duration*W;
+  if(x>W-1)break;
+  if(isMajor){if(W-x>50||t==0)ax.insertAdjacentHTML("beforeend",`<div class="tick" style="left:${x}px">${fmtTick(t,major)}</div>`);else ax.insertAdjacentHTML("beforeend",`<div class="tick minor" style="left:${x}px"></div>`)}
+  else ax.insertAdjacentHTML("beforeend",`<div class="tick minor" style="left:${x}px"></div>`)}
  ax.insertAdjacentHTML("beforeend",`<div class="tick end" style="left:${W}px">${fmt(duration).slice(0,8)}</div>`);
  $("rows").innerHTML=Object.entries(TYPES).map(([k,[n,c]])=>`<div class="row"><div class="label">● ${n}</div><div class="lane">`+
   els.filter(e=>e.type==k).map(e=>{let L=e.start/duration*W;return`<div class="bar${selected.includes(e.id)?" sel":""}" data-id="${e.id}" style="left:${L}px;width:${Math.max(24,Math.min(e.end/duration*W,W)-L)}px;color:${c};background:${c}44">${n}</div>`}).join("")+`</div></div>`).join("");
