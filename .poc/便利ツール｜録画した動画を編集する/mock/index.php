@@ -127,10 +127,12 @@ function route(form,A,B,obst){
  return c.find(p=>!p.slice(1).some((q,i)=>obst.some(r=>hit(p[i],q,r))))||c[0]}
 function toPath(pts,form){
  if(form!="wave")return"M"+pts.map(p=>p.x.toFixed(1)+" "+p.y.toFixed(1)).join("L");
- let d=`M${pts[0].x} ${pts[0].y}`;
- pts.slice(1).forEach((q,i)=>{let p=pts[i],L=Math.hypot(q.x-p.x,q.y-p.y)||1,n=Math.max(2,Math.round(L/16)),nx=-(q.y-p.y)/L,ny=(q.x-p.x)/L;
-  for(let k=1;k<=n;k++){let m=(k-.5)/n,o=(k%2?10:-10);
-   d+=`Q${(p.x+(q.x-p.x)*m+nx*o).toFixed(1)} ${(p.y+(q.y-p.y)*m+ny*o).toFixed(1)} ${(p.x+(q.x-p.x)*k/n).toFixed(1)} ${(p.y+(q.y-p.y)*k/n).toFixed(1)}`}});
+ /* 始点→終点の経路全体を長さで補間し、法線方向にsinで1周期だけ揺らす */
+ let seg=pts.slice(1).map((q,i)=>Math.hypot(q.x-pts[i].x,q.y-pts[i].y)),total=seg.reduce((a,b)=>a+b,0)||1,N=60,d="";
+ for(let i=0;i<=N;i++){
+  let s=i/N*total,k=0;while(k<seg.length-1&&s>seg[k]){s-=seg[k];k++}
+  let p=pts[k],q=pts[k+1],l=seg[k]||1,u=s/l,nx=-(q.y-p.y)/l,ny=(q.x-p.x)/l,o=Math.sin(i/N*Math.PI*2)*10;
+  d+=(i?"L":"M")+(p.x+(q.x-p.x)*u+nx*o).toFixed(1)+" "+(p.y+(q.y-p.y)*u+ny*o).toFixed(1)}
  return d}
 function marker(kind,id,c){if(kind=="none")return"";
  let s=kind=="arrow"?'<path d="M0 0L10 5L0 10Z"':kind=="circle"?'<circle cx="5" cy="5" r="4"':'<rect x="1" y="1" width="8" height="8"';
@@ -182,7 +184,7 @@ menu.onclick=e=>{
   return render()}
  if(d.a){let x=byId(mt.el);
   if(d.a=="text"){let v=prompt("コメント",x.text);if(v!==null)x.text=v}
-  else if(d.a=="connect"){connect=x.id;selected=[x.id];let r=scr.getBoundingClientRect(),p=rp(x);mouse={x:p.x+p.w+40,y:p.y+p.h/2}}
+  else if(d.a=="connect"){connect=x.id;selected=[x.id];let p=rp(x);mouse={x:p.x+p.w+40,y:p.y+p.h/2}}
   else if(d.a=="del"){els=els.filter(v=>v!=x);selected=[]}
   else x.shape=d.a;
   menu.style.display="none";return render()}
