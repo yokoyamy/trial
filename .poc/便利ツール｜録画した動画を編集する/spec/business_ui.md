@@ -1,536 +1,668 @@
-# 業務・操作要件（改訂版）
-
-## 1. 目的
-
-録画した動画を編集対象として選択し、動画上の要素・接続線・表示時間などを編集し、その編集結果を画面上で確認できること。
-
-編集作業は動画単位で管理する。編集作業は必ず1つのオリジナル動画に属し、オリジナル動画の配下に置かれるものとして扱う。
-
-### 1.1 用語の整理
-
-- オリジナル動画：操作者が選択して取り込んだ、編集の元になる動画。編集作業を保存しても内容は変わらない。
-- 編集作業：あるオリジナル動画に対して行った編集内容（要素・接続線・表示時間・属性など）を保存したもの。必ず1つのオリジナル動画に属する。
-- 現在編集中の動画：編集作業を開始した時点で選択したオリジナル動画。
-- 現在編集中の編集作業：画面で編集している最中の編集作業。保存済みのものを再開した場合はその編集作業、新規の場合は未保存の編集作業を指す。
-- 編集結果の動画：「編集結果を動画にする」で作成した動画。オリジナル動画とは別の動画として扱う。
-- 表示範囲：タイムラインの見える領域が、動画のどの時間からどの時間までを映しているかを指す。
-- 再生ハンドル：再生カーソルの上端に付く丸いつまみ。掴んで再生位置を動かすための目印。
-
-### 1.2 全体の関係
-
-- オリジナル動画が親、編集作業がその子という関係とする。
-- 1つのオリジナル動画の配下に、複数の編集作業を持てる。
-- 編集作業は、所属するオリジナル動画を後から変更できない。
-- 編集結果の動画は、どのオリジナル動画から作ったかを確認できる。
-
----
-
-## 2. 初期画面
-
-### 2.1 画面の構成
-
-- 初期画面は、オリジナル動画の一覧を親として表示し、各動画の配下にその動画の編集作業を入れ子で表示する。
-- 各オリジナル動画の行には、動画名・取り込み日時・配下の編集作業の件数を表示する。
-- 各オリジナル動画の配下には、その動画の編集作業を一覧表示する。各編集作業には、名前・最終保存日時を表示する。
-- 編集作業の一覧は、最終保存日時の新しい順に並べる。
-- 配下の編集作業が無い動画は、「編集作業はありません」と表示する。
-- 画面の別の場所に、編集結果の動画の一覧を表示する。各編集結果の動画には、元のオリジナル動画名と作成日時を表示する。
-- オリジナル動画と編集作業は、画面上で親子関係が一目で分かるように、インデントや枠などで視覚的にまとめる。
-- 編集作業を、オリジナル動画と並列の別の一覧として表示しない。
-
-### 2.2 動画の選択
-
-- 初期画面では、動画を未選択状態とする。どの動画も編集対象として自動的に選ばない。
-- 操作者が「動画を選択」から、編集対象の動画を明示的に選択する。
-- 動画を選択するまで、編集画面を開始しない。
-- 特定の例題動画を自動的に選択した状態にしない。
-- 例題動画を用意する場合も、操作者が明示的に選択した場合だけ編集対象とする。
-- 新しく選択した動画はオリジナル動画として一覧に追加し、そのまま新しい編集作業を開始する。
-- 既に取り込み済みのオリジナル動画から新しい編集作業を始めるときは、その動画の行にある「新しい編集作業を始める」を使う。同じ動画を重複して取り込まなくてよい。
-- 選択した動画を「現在編集中の動画」とする。
-- 編集作業中に編集結果を保存しても、現在編集中の動画そのものを別動画として扱わない。
-- 選択した動画が読み込めない場合は、その旨を表示し、編集画面を開始しない。
-
-### 2.3 編集作業の再開
-
-- 初期画面で、オリジナル動画の配下に表示された保存済みの編集作業から「再開」を選んで再開できる。
-- 編集作業を再開した場合は、その編集作業が属するオリジナル動画を編集対象として表示する。
-- 再開した場合は、保存時点の編集状態を表示する。
-- 再開時のタイムラインは全体表示から始める。
-- 新しい編集作業を始める場合は、オリジナル動画を明示的に選択する（取り込み済みの動画の行から始めるか、「動画を選択」で新しく取り込む）。
-
-### 2.4 保存件数
-
-- 保存できるオリジナル動画は10件までとする。
-- 編集作業は、全体で10件までとする。
-- 編集結果の動画は、全体で10件までとする。
-- 上限を超えて保存しようとした場合は、削除が必要であることを明示し、どれを削除するかを操作者が選べるようにする。
-- オリジナル動画が上限の場合は、削除候補を選択肢として示し、「削除して取り込む」「キャンセル」を選べるようにする。削除候補には、配下の編集作業も一緒に削除されることを明記する。
-- 既存の動画や編集作業を勝手に削除しない。
-- 現在の件数と上限（例：3/10件）を、それぞれの一覧の見出しに表示する。
-
-### 2.5 削除
-
-- 削除は、オリジナル動画・編集作業・編集結果の動画のそれぞれに対して、操作者が明示的に行う。
-- 削除の前には、必ず確認を表示する。
-- 編集作業を削除しても、所属するオリジナル動画と、作成済みの編集結果の動画には影響しない。
-- 配下に編集作業があるオリジナル動画を削除しようとした場合は、配下の編集作業も一緒に削除されることを明示したうえで確認する。確認なしで配下の編集作業を消さない。
-- オリジナル動画を削除しても、作成済みの編集結果の動画は残す。その場合、編集結果の動画の元の動画名は、削除済みであっても名前として表示を続ける。確認表示でも、編集結果の動画は残ることを伝える。
-- 編集画面を開いている間は、編集中の編集作業や、それが属するオリジナル動画を削除できない。
-
----
-
-## 3. 編集画面
-
-- 動画領域とタイムライン領域を表示する。
-- 画面の見やすい場所に、現在編集中の動画の名前と、現在編集中の編集作業の名前（未保存の場合は「未保存の編集作業」）を表示する。
-- 未保存の変更がある場合は、それが分かる表示を行う。
-- 動画領域には以下を表示できる。
-  - コメント
-  - 強調枠
-  - 拡大枠
-  - 接続線
-- タイムラインには各要素の表示時間を表示する。
-- 右側に常設の汎用プロパティ欄を設けない。
-- 要素の属性変更は、対象をマウス操作して表示される操作メニューから行う。
-- 操作メニューは対象を右クリックした場合に表示する。
-- 操作メニューは選択対象に応じて内容を切り替える。
-- 操作メニューを閉じるときは、対象外をクリックするなど一般的な操作で閉じられること。
-- 選択対象が変わった場合、以前の対象用メニューを残さない。
-- 要素に対する操作（属性変更、削除、接続など）を、画面上の常設ボタンとして置かない。これらは操作メニューから行う。
-- 編集作業そのものに対する操作（保存、別の編集作業として保存、編集結果を動画にする、編集作業を終了する）は、画面上部にまとめて配置する。これは要素に対する操作ではない。
-- 動画の再生・一時停止・停止など、動画そのものの再生操作は、タイムライン付近にまとめて配置する。これも要素に対する操作ではない。
-- タイムラインの表示操作（拡大・縮小、全体表示に戻す、表示範囲の移動）は、タイムライン付近に配置する。これらは要素に対する操作ではなく、タイムラインの見え方に対する操作である。
-
----
-
-## 4. タイムライン
-
-### 4.1 基本の考え方
-
-- タイムラインは、動画の時間を横方向に並べた編集領域である。
-- 左が動画の早い時間、右が遅い時間とする。
-- タイムラインの見える領域の横幅は、画面内で固定する。倍率を変えても、領域が画面の外へ広がったり、画面全体が横にスクロールしたりしない。
-- 動画の総時間は、動画を選択した時点で決まる。動画の総時間が変わらない限り、要素の開始時間・終了時間・再生位置の実時間は変わらない。
-- 倍率を変えても、要素の実際の表示時間や、動画の再生時間は変わらない。
-
-### 4.2 全体表示（基準の状態）
-
-- 編集画面を開いた直後、および倍率を1倍に戻したときは「全体表示」とする。
-- 全体表示では、タイムラインの左端が動画の再生開始位置（0秒）、右端が動画の再生終了時間（動画の総時間）に対応する。
-- 全体表示では、動画の最初から最後までの全体を一度に見渡せる。
-- 全体表示に戻すための操作として、「全体表示に戻す」ボタンを用意する。
-- 全体表示のときは、倍率表示に「全体表示」であることを併記する。
-
-### 4.3 拡大・縮小（スケール調整）
-
-- 「スケール調整」は、タイムラインに映す時間の範囲（表示範囲）を狭めたり広げたりする操作を指す。
-- 拡大すると、表示範囲が狭くなり、短い時間を細かく確認・調整できる。
-- 縮小すると、表示範囲が広くなる。全体表示より縮小はできない。
-- 表示範囲の最小幅を設ける（0.5秒）。これより拡大はできない。
-- 拡大・縮小しても、タイムライン領域の横幅は変わらない。変わるのは、その横幅で映す時間の範囲だけである。
-- 拡大・縮小の中心は、次のとおりとする。
-  - マウスホイールの場合は、マウスの位置を中心にする。
-  - 「＋」「－」ボタンおよびスライダーの場合は、再生カーソルの位置を中心にする。ただし再生カーソルが表示範囲の外にあるときは、表示範囲の中央を中心にする。
-  - 中心にした位置の時間は、倍率を変えても動かない。
-- 拡大・縮小の操作は、以下の方法で行える。
-  - 「＋」「－」ボタン（1回あたり1.5倍）。
-  - 倍率スライダー（全体表示から最大拡大までを連続的に調整できる）。
-  - マウスホイール（1回あたり1.25倍）。
-- スライダーをドラッグしている間は、スライダーのつまみ位置を操作者の操作に従わせ、自動で位置を書き換えない。
-- 倍率は、数値（例：1倍、2倍、4倍）でも表示する。
-- 拡大・縮小しても、各要素の開始時間・終了時間、再生位置の実時間は変わらない。要素の表示時間が変更されたように見えてはならない。
-
-### 4.4 表示範囲の移動
-
-- 拡大している間は、表示範囲を左右に移動できる。
-- 表示範囲の移動は、以下の方法で行える。
-  - タイムラインの要素領域内を左右にドラッグする。
-  - タイムラインの左右に置いた「◀」「▶」ボタンを押す（1回あたり表示幅の25%）。
-  - 全体の長さを示す帯の操作（4.5参照）。
-- 表示範囲を移動しても、要素の時間は変わらない。
-- 動画を再生中に再生位置が表示範囲の外に出そうになった場合は、表示範囲を自動で追従して移動する。
-- 操作者が意図して表示範囲を動かしている間は、自動の追従で妨げない。
-- 表示範囲の外にある要素は見えなくてよい。範囲の外にある要素を示す専用の印（端の矢印など）は設けない。要素の位置は、全体の長さを示す帯（4.5）で確認する。
-- 全体表示のときは、表示範囲が動画全体と一致するため、移動の操作をしても表示範囲は変わらない。
-
-### 4.5 全体の位置を示す帯
-
-- タイムラインには、動画の全体の長さを示す帯を常に表示する。
-- 帯の上に、現在の表示範囲がどこにあたるかを示す。
-- 全体表示のときは、表示範囲が帯の全体と一致する。
-- 帯の上で、以下の操作ができる。
-  - 表示範囲の枠をドラッグして、表示範囲を移動する。
-  - 枠の左右の端のつまみをドラッグして、表示範囲の開始側・終了側を変更する（拡大・縮小になる）。
-  - 枠の外をクリックして、その位置が中央になるよう表示範囲を移動する。
-- 帯の上に、再生位置と各要素の位置も薄く示す。
-- 表示範囲外にある要素の存在は、この帯の上の表示で確認できる。
-
-### 4.6 時間目盛り
-
-- タイムライン上に時間目盛りを表示する。
-- 時間目盛りは、表示範囲の広さに応じて、読みやすい間隔に自動で切り替える。拡大したときは細かく、縮小したときは粗くする。
-- 時間目盛りには、実際の時間（分：秒、必要に応じて小数の秒）を表示する。
-- 現在の表示範囲（開始〜終了の時間）と表示範囲の幅（秒）を、数字でも表示する。これにより、表示範囲と実際の動画時間の関係を常に確認できる。
-- 動画の終了位置が表示範囲に入っているときは、終了位置が分かる印を表示する。
-
-### 4.7 再生位置
-
-- 動画の再生位置を示すカーソルを表示する。
-- 再生カーソルの上端に、丸い「再生ハンドル」を表示し、掴める場所が一目で分かるようにする。
-- 再生ハンドルにマウスを乗せたとき、左右に動かせることが分かるカーソル形状に変える。
-- 再生ハンドルを左右にドラッグして、再生位置を変更できる。ハンドルを掴んでいる間に、表示範囲が動いてしまってはならない。
-- 再生カーソルと動画の再生位置を常に連動させる。
-- 動画を再生するとカーソルも連動して移動する。
-- 動画が終了するとカーソルは動画終了位置に到達する。
-- タイムラインの時間目盛り部分をクリックまたはドラッグして、再生位置を変更できる。
-- 再生位置を変更すると動画側の再生位置も変更する。
-- 現在の再生位置と動画の総時間を、数字でも表示する。
-- 再生位置は、動画の実時間どおりの位置に表示され、倍率や表示範囲に左右されない。
-- 再生位置が表示範囲の外にあるときは、再生カーソルと再生ハンドルは表示しない。
-
-### 4.8 要素の表示時間
-
-- タイムライン上で各要素の表示開始時間・終了時間を確認できる。
-- タイムライン上で各要素の表示開始時間・終了時間を変更できる。
-- 表示時間の変更を動画領域へ即時反映する。
-- 同じ時間帯に複数の要素が存在する場合、タイムライン上で要素同士が重ならないように縦方向へ自動的に並べる。
-- 同じ時間帯の要素は、時間の関係を維持したまま、それぞれの行を分けて表示する。
-- 要素の表示時間は、0秒より前や動画の総時間より後にはならない。
-- 開始時間が終了時間より後にならない。極端に短くなりすぎない最小の長さを設ける。
-- 拡大している間は、時間の変更を細かい単位で行える。全体表示のときは、粗い単位でもよい。
-- 表示範囲の端までドラッグした場合、表示範囲を自動で移動して、範囲の外まで調整を続けられるようにする。
-
----
-
-## 5. 要素操作
-
-### 5.1 追加と削除
-
-- 新規の要素（コメント・強調枠・拡大枠・スキップ）は、何も選択していない状態で動画領域やタイムラインを右クリックして表示される操作メニューから追加する。
-- 新規要素は、現在の再生位置から始まる一定の長さの表示時間で追加する。
-- 要素を削除する操作は、その要素の操作メニューに含める。
-- 複数の要素を選択している場合は、まとめて削除できる。
-- 要素を削除した場合、その要素につながっている接続線も一緒に削除する。削除前に、接続線も削除されることを確認する。
-
-### 5.2 選択
-
-- 動画領域の要素をクリックして選択できる。
-- タイムライン上の要素をクリックして選択できる。
-- 動画領域・タイムラインのどちらから選択しても同じ要素として扱う。
-- Shiftキーを併用して複数要素を選択できる。
-- 選択状態を視覚的に確認できる。
-- 接続線も要素と同様に明確に選択できる。
-- 何もない場所をクリックすると、選択を解除する。
-
-### 5.3 移動・サイズ変更
-
-- 動画領域上の要素をマウス操作で移動できる。
-- 要素のサイズをマウス操作で変更できる。
-- 移動・サイズ変更の結果を即時に動画領域へ反映する。
-- 新規追加した要素の初期サイズは、動画領域から大きくはみ出さない適切な大きさとする。
-- 新規追加した要素を自動的に動画領域外まで拡大しない。
-- 要素のサイズ変更時も、動画領域から不必要にはみ出さない。
-- 操作者が意図的に領域外へ移動する操作については、必要に応じて制限する。
-- 複数選択している場合は、選択した要素をまとめて移動できる。
-
-### 5.4 表示時間
-
-- タイムライン上で要素の開始時間・終了時間を変更できる。
-- 表示時間の変更を動画領域へ即時反映する。
-
----
-
-## 6. 要素別操作
-
-### 6.1 コメント
-
-- 動画上にテキストとして表示する。
-- コメントを右クリックするとコメント用の操作メニューを表示する。
-- コメント用操作メニューから以下を変更できる。
-  - 文字の内容
-  - 線の有り・無し
-  - 線の太さ
-  - 線の色
-  - 文字色
-  - 背景色
-  - 塗り潰しの有り・無し
-  - 文字サイズ
-  - フォント
-- 線の太さは数値入力だけでなく、見た目を確認できる選択肢として選べる。
-- フォントは実際の文字の見た目を確認できる選択肢として表示する。
-- 色は基本的な12色程度から選択できる。
-- 属性変更は動画上へ即時反映する。
-
-### 6.2 強調枠
-
-- 動画上の範囲を強調表示する。
-- 強調枠を右クリックすると強調枠用の操作メニューを表示する。
-- 強調枠用操作メニューから以下を変更できる。
-  - 線の太さ
-  - 線の色
-  - 塗り潰しの有り・無し
-  - 塗り潰しの色
-  - 線種
-- 線の太さは見た目を確認できる選択肢として表示する。
-- 線種は以下から選択できる。
-  - 実線
-  - 点線
-  - 破線
-  - 一点鎖線
-- 線の内部に別の線種を混在させたり重ねたりしない。
-- 属性変更を動画上へ即時反映する。
-
-### 6.3 拡大枠
-
-- 動画上の指定範囲を拡大表示する。
-- 拡大枠を右クリックすると拡大枠用の操作メニューを表示する。
-- 拡大枠のサイズ・位置・表示時間を変更できる。
-- 属性変更を動画上へ即時反映する。
-- 拡大枠の表示中も、ほかの要素は拡大後の映像に合わせて正しい位置に表示される。
-- 拡大枠が同じ時間帯に複数重なる場合の扱い（後から追加したものを優先するなど）を、操作者が分かるように表示する。
-
-### 6.4 スキップ
-
-- タイムライン上でスキップ範囲を表示する。
-- 開始時間・終了時間を変更できる。
-- 動画領域にはスキップ用の要素を表示しない。
-- スキップ範囲は、編集結果を動画にする際に、その区間を飛ばした動画となる。
-- 編集画面での再生時は、スキップ範囲を実際に飛ばして再生するか、通常どおり再生するかを、操作者が確認できるようにする。
-
----
-
-## 7. 接続線
-
-### 7.1 作成
-
-- 2つの要素を指定して接続線を作成できる。
-- 接続線は動画領域上に表示する。
-- 要素ブロック間に別の補助接続線を表示しない。
-- 接続線の作成操作は、開始側の要素の操作メニューから接続を開始し、終了側の要素をクリックして行う。
-- 接続先として指定できるのは動画上の要素とする。
-- 接続作成中は、接続の途中であることと、接続先にできる要素が分かる表示を行う。
-- 接続作成中に何もない場所をクリックするか、取り消し操作を行うと、作成を中止する。
-- 同じ要素同士を同じ向きで重複して接続することはできない。
-- 要素自身への接続はできない。
-
-### 7.2 選択
-
-- 接続線をクリックして選択できる。
-- 接続線は通常の表示より選択しやすい判定範囲を持つ。
-- 選択時には接続線が明確に選択状態であることを確認できる。
-- 接続線を選択しても、近くの要素を誤って選択しない。
-- 接続線を右クリックした場合も接続線を対象として操作メニューを表示する。
-- 接続線を削除する操作は、接続線の操作メニューに含める。
-
-### 7.3 表示される時間
-
-- 接続線は、接続元と接続先の両方の要素が表示されている時間帯だけ表示する。
-- どちらかの要素が表示されていない時間帯は、接続線も表示しない。
-
-### 7.4 線形
-
-- 接続線は以下から選択できる。
-  - 直線
-  - 折れ線
-  - 波線
-- 線形の変更を動画領域へ即時反映する。
-- 折れ線・波線は接続元・接続先以外の要素の外周を横切らないように迂回して表示する。
-- 折れ線・波線の経路は、可能な限り他の要素と重ならないようにする。
-- 折れ線・波線の表示形式に、別の線種である破線を混在させない。
-
-### 7.5 線種
-
-- 接続線について線種を変更できる。
-- 線種は以下から選択できる。
-  - 実線
-  - 点線
-  - 破線
-  - 一点鎖線
-- 線種と線形は別々の属性として扱う。
-- 線形が折れ線または波線の場合でも、選択した線種だけで表示する。
-
-### 7.6 接続位置
-
-- 接続線の始点・終点を変更できる。
-- 要素の上・右・下・左などから接続位置を選択できる。
-- 「自動」を選べば、要素の位置関係から適切な位置を自動で決める。
-- 接続線の終端をマウス操作して接続位置を変更できる。
-- 接続位置の変更を接続線へ即時反映する。
-- 接続元・接続先の要素を移動した場合、接続線も追従する。
-
-### 7.7 終端
-
-- 接続線の始点・終点の形状を変更できる。
-- 終端のデフォルトは矢印なしとする。
-- 必要に応じて矢印・丸・四角などの終端形状を選択できる。
-- 変更結果を動画領域へ即時反映する。
-
----
-
-## 8. 選択対象に応じた操作メニュー
-
-- 未選択時は、動画選択や新規要素追加などの基本操作を表示する。
-- 要素を右クリックすると、その要素に対応した操作メニューを表示する。
-- コメント選択時はコメントに必要な操作だけを表示する。
-- 強調枠選択時は強調枠に必要な操作だけを表示する。
-- 拡大枠選択時は拡大枠に必要な操作だけを表示する。
-- スキップ選択時はスキップに必要な操作だけを表示する。
-- 接続線選択時は線種・線形・終端・接続位置・削除に必要な操作だけを表示する。
-- 複数選択時は複数選択に対して利用できる操作（まとめて削除、まとめて表示時間を揃えるなど）だけを表示する。
-- 選択対象が変わった場合、前の対象専用メニューを残さない。
-- 右側に常設の汎用プロパティ欄を設けない。
-
----
-
-## 9. 編集作業の保存
-
-### 9.1 保存対象
-
-- 保存対象は「現在編集中の編集作業」とする。
-- 「現在編集中の動画」は、編集作業を開始する際に選択したオリジナル動画を指す。
-- 編集作業を保存しても、オリジナル動画自体を上書き変更しない。
-- 保存するのは、要素・接続線・表示時間・属性など、現在の編集内容とする。
-- 保存した編集作業は、現在編集中のオリジナル動画の配下に置く。
-- タイムラインの倍率や表示範囲、再生位置は、編集内容ではないため、保存対象にしない。再開したときは全体表示から始める。
-
-### 9.2 保存と再開
-
-- 編集途中で現在の編集作業を保存できる。
-- 初めて保存するときは、編集作業の名前を入力できる。名前を省略した場合は、動画名をもとにした既定の名前とする。
-- 既に保存済みの編集作業を編集している場合は、「保存」で同じ編集作業に上書き保存する。
-- 「別の編集作業として保存」を選んだ場合は、同じオリジナル動画の配下に新しい編集作業を作る。元の編集作業は変更しない。
-- 保存した編集作業は、初期画面でオリジナル動画の配下から選択して再開できる。
-- 再開した場合は、保存時点の編集状態を表示する。
-- 編集作業を保存することと、編集結果を動画として出力することを明確に区別する。
-- 編集作業を保存せずに、自動的に別の編集作業として作成しない。
-
-### 9.3 編集作業の終了
-
-- 「編集作業を終了する」を実行すると、現在の編集作業を保存するか確認する。選択肢は「保存して終了」「保存せずに終了」「編集に戻る」とする。
-- 未保存の変更が無い場合は、確認せずに終了してもよい。
-- 編集作業を保存して終了した場合、初期画面へ戻る。
-- 初期画面では、動画の選択、または保存済み編集作業の再開を行える。
-- 終了後の初期画面では、直前まで編集していたオリジナル動画の配下に、保存した編集作業が表示されている。
-- 終了時は、再生中の動画を停止する。
-
----
-
-## 10. 編集結果を動画にする
-
-- 編集作業を終了する操作と、編集結果を動画にする操作を別の操作として扱う。
-- 「編集結果を動画にする」を選択すると、現在の編集内容を反映した動画を作成する。
-- 作成の途中は、進み具合が分かる表示を行う。
-- 作成した動画には名前を付けられる。名前を省略した場合は、動画名をもとにした既定の名前とする。
-- 編集結果として作成した動画は、オリジナル動画とは別の動画として扱う。
-- 編集結果を動画にした後も、元の編集作業とオリジナル動画は保持する。
-- 編集結果の動画は、作成元のオリジナル動画名と作成日時を確認できる。
-- 作成済み動画は初期画面から選択して再生できる。
-- 保存できる動画は10件までとする。
-- 10件を超える場合は、新しい動画を保存する前に削除を促し、どれを削除するか操作者が選べるようにする。
-- 編集内容に未保存の変更があっても、現在の編集内容をそのまま反映して動画にできる。この操作で編集作業は自動的には保存されない。
-- タイムラインの倍率や表示範囲は、作成する動画に影響しない。
-
----
-
-## 11. モックで確認する操作
-
-### 11.1 初期画面
-
-- 初期画面で動画が勝手に選択されていないことを確認できる。
-- 動画を明示的に選択できる。
-- 読み込めない動画を選んだ場合に、その旨が表示されることを確認できる。
-- オリジナル動画の一覧があり、各動画の配下に編集作業が入れ子で表示されることを確認できる。
-- 編集作業が無い動画には、その旨が表示されることを確認できる。
-- 取り込み済みの動画の行から、新しい編集作業を始められる。
-- 配下の編集作業から、保存した編集作業を再開できる。
-- 編集結果の動画が別の一覧に、元の動画名付きで表示される。
-- 各一覧の見出しに、現在の件数と上限が表示される。
-- 保存件数が10件を超える場合に削除を促すことを確認できる。
-- 配下に編集作業がある動画を削除する際に、配下の編集作業も削除されることが確認表示されることを確認できる。
-- 動画を削除しても、編集結果の動画が残ることを確認できる。
-
-### 11.2 編集画面の基本
-
-- 選択した動画を編集画面に表示できる。
-- 編集中の動画名と編集作業名が表示される。
-- 動画を再生・一時停止できる。
-- タイムラインの再生位置を操作できる。
-- 動画の再生に合わせてタイムラインのカーソルが移動することを確認できる。
-- 編集作業を終了すると、再生が止まり初期画面へ戻ることを確認できる。
-
-### 11.3 タイムラインと倍率
-
-- 編集画面を開いた直後は全体表示で、左端が動画の開始位置、右端が動画の終了位置になっていることを確認できる。
-- 時間軸を、「＋」「－」ボタン、スライダー、マウスホイールで拡大・縮小できる。
-- 拡大してもタイムラインの横幅が画面の外へ広がらず、画面全体が横にスクロールしないことを確認できる。
-- 拡大すると、見える時間の範囲が狭くなり、時間目盛りが細かくなることを確認できる。
-- 倍率が数値で表示され、全体表示のときはその旨が併記されることを確認できる。
-- 現在の表示範囲（開始〜終了の時間）と幅が数字で表示され、実時間との関係を確認できる。
-- 拡大したあとで、要素領域のドラッグ、左右の「◀」「▶」ボタン、全体の長さを示す帯の操作で、表示範囲を左右に移動できる。
-- 全体の長さを示す帯の上に、現在の表示範囲が示され、枠の移動と左右端のつまみによる範囲変更ができることを確認できる。
-- 帯の上に、再生位置と各要素の位置が示されることを確認できる。
-- 拡大・縮小・移動をしても、各要素の開始時間・終了時間や再生位置の実時間が変わらないことを確認できる。
-- 再生中に再生位置が表示範囲の外に出そうになったとき、表示範囲が追従することを確認できる。
-- 全体表示に戻す操作で、動画全体が一度に見渡せる状態に戻ることを確認できる。
-- 同じ時間帯の複数要素がタイムライン上で縦方向に並ぶことを確認できる。
-- 再生カーソルの上端にハンドルがあり、掴んで再生位置を動かせることを確認できる。
-- 再生ハンドルを掴んでいる間、表示範囲が動かないことを確認できる。
-- 範囲外の要素を示す専用の矢印表示が無いことを確認できる。
-
-### 11.4 要素の操作
-
-- 要素を追加・削除できる。
-- 要素を選択できる。
-- 複数要素を選択できる。
-- 要素を移動・サイズ変更できる。
-- 新規要素が不必要に大きなサイズで追加されないことを確認できる。
-- 要素の表示時間を変更できる。
-- 要素を右クリックして属性変更メニューを表示できる。
-- コメントの属性を変更できる。
-- 強調枠の属性を変更できる。
-- 強調枠を折れ線・波線にしても、選んだ線種だけで表示されることを確認できる。
-- 拡大枠の属性を変更できる。
-- 選択対象に応じて操作メニューが切り替わる。
-
-### 11.5 接続線
-
-- 接続線を作成できる。
-- 接続線を選択しやすいことを確認できる。
-- 接続線を直線・折れ線・波線に変更できる。
-- 接続線の線種を変更できる。
-- 折れ線・波線が要素の外周を不自然に横切らないことを確認できる。
-- 折れ線・波線に破線など別の線種が混在しないことを確認できる。
-- 接続線の終端を変更できる。
-- 接続線のデフォルトが矢印なしであることを確認できる。
-- 接続線の接続位置を変更できる。
-- 要素移動時に接続線が追従する。
-- 要素を削除すると、つながっている接続線も削除されることを確認できる。
-
-### 11.6 保存と出力
-
-- 編集作業を保存できる。
-- 保存した編集作業がオリジナル動画の配下に追加されることを確認できる。
-- 「別の編集作業として保存」で、同じ動画の配下に新しい編集作業が増えることを確認できる。
-- 保存した編集作業を初期画面から再開できる。
-- 編集作業を終了して初期画面へ戻れる。
-- 未保存の変更がある状態で終了しようとすると、保存の確認が出ることを確認できる。
-- 編集結果を動画にする操作と編集作業を保存する操作が区別されていることを確認できる。
-- 編集結果を動画にした後も、元の編集作業が保持されていることを確認できる。
-
----
-
-## 12. 禁止事項
-
-- 常設の汎用プロパティ欄。
-- 動画上に表示する要素とは別の、要素ブロック間の補助接続線。
-- 編集作業を保存せずに自動的に別の編集作業として作成すること。
-- オリジナル動画を編集内容で直接上書きすること。
-- 要素に対する操作を画面上にボタンとして置くこと。
-- 倍率を変えたときに、タイムラインの見える領域の横幅が画面の外へ広がること。
-- 倍率を変えたことで、要素の表示時間や動画の再生時間、再生位置の実時間が変わったように見えること。
-- 拡大中に、今どの時間の範囲を見ているかが分からなくなること。
-- 編集作業を、オリジナル動画と無関係な独立した一覧として表示すること。
-- 利用者の確認なしに、動画・編集作業・編集結果の動画を削除すること。
-- 範囲外の要素を示す専用の印（端のオレンジ色の矢印など）を、タイムライン内に表示すること。
-- 再生ハンドルを掴んでいる間に、表示範囲を動かしてしまうこと。
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>動画編集モック</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:"Yu Gothic",sans-serif;font-size:13px;color:#222;background:#f3f4f6;overflow-x:hidden}
+button{cursor:pointer;font-size:12px;padding:4px 8px;border:1px solid #999;background:#fff;border-radius:3px}
+button:hover{background:#eef}
+button.danger{color:#b00;border-color:#b00}
+button.primary{background:#2563eb;color:#fff;border-color:#2563eb}
+h2{margin:0 0 8px;font-size:15px}
+#home{padding:16px;display:grid;grid-template-columns:1.4fr 1fr;gap:16px}
+.panel{background:#fff;border:1px solid #ccc;border-radius:6px;padding:12px}
+.vrow{border:1px solid #bbb;border-radius:4px;margin-bottom:10px;background:#fafafa}
+.vhead{padding:8px;background:#e8edf5;display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap}
+.children{margin:6px 6px 8px 28px;border-left:3px solid #2563eb;padding-left:8px}
+.wrow{display:flex;justify-content:space-between;align-items:center;padding:4px;border-bottom:1px dotted #ccc;gap:6px}
+.empty{color:#888;padding:4px}
+.small{color:#666;font-size:11px}
+#edit{display:none;flex-direction:column;height:100vh}
+#topbar{background:#1f2937;color:#fff;padding:6px 10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#topbar button{background:#374151;color:#fff;border-color:#555}
+#topbar .info{margin-right:auto}
+#dirty{color:#fbbf24;font-weight:bold}
+#stage{flex:1;min-height:0;display:flex;justify-content:center;align-items:center;background:#111;padding:6px}
+#vwrap{position:relative;width:640px;height:360px;background:#000;overflow:hidden;user-select:none}
+#vcontent{position:absolute;left:0;top:0;width:640px;height:360px;transform-origin:0 0;background:linear-gradient(135deg,#1e3a8a,#059669 50%,#d97706)}
+#vcontent .grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.12) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.12) 1px,transparent 1px);background-size:40px 40px}
+#vlabel{position:absolute;left:8px;bottom:6px;color:#fff;font-size:12px;opacity:.8}
+.el{position:absolute;cursor:move}
+.el.sel{outline:2px dashed #fde047;outline-offset:2px}
+.el .rh{position:absolute;right:-5px;bottom:-5px;width:10px;height:10px;background:#fde047;border:1px solid #333;cursor:nwse-resize;display:none}
+.el.sel .rh{display:block}
+.el.target{outline:3px solid #22c55e}
+.cm{display:flex;align-items:center;justify-content:center;text-align:center;overflow:hidden;padding:2px}
+.zm{border:2px solid #38bdf8;background:rgba(56,189,248,.12)}
+#svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#svg .hit{pointer-events:stroke;cursor:pointer;stroke:transparent;stroke-width:16;fill:none}
+#banner{position:absolute;top:4px;left:50%;transform:translateX(-50%);background:#22c55e;color:#fff;padding:3px 10px;border-radius:10px;display:none;z-index:50;font-size:12px;white-space:nowrap}
+#ctl{background:#e5e7eb;padding:6px 10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-top:1px solid #aaa}
+#ctl .sp{margin-left:auto}
+#tlwrap{background:#fff;padding:4px 10px 8px;border-top:1px solid #ccc;height:290px;overflow:hidden}
+#tlinfo{display:flex;gap:12px;font-size:12px;margin-bottom:3px;flex-wrap:wrap}
+#tlrow{display:flex;gap:4px;align-items:stretch}
+#tlrow>button{width:26px;padding:0}
+#tlmain{flex:1;min-width:0;position:relative;padding-top:16px}
+#ruler{position:relative;height:24px;background:#f1f5f9;border:1px solid #bbb;cursor:pointer}
+.tick{position:absolute;top:0;height:100%;border-left:1px solid #888;font-size:10px;padding-left:2px;pointer-events:none;white-space:nowrap}
+.endmark{position:absolute;top:0;height:100%;border-left:3px solid #dc2626;pointer-events:none}
+.endmark span{position:absolute;top:-1px;left:3px;font-size:10px;color:#dc2626;background:#fff}
+#lanes{position:relative;height:150px;border:1px solid #bbb;border-top:none;background:#fff;overflow:hidden;cursor:grab}
+.tb{position:absolute;height:22px;border-radius:3px;color:#fff;font-size:11px;line-height:22px;padding:0 10px;overflow:hidden;white-space:nowrap;cursor:pointer;border:1px solid rgba(0,0,0,.4)}
+.tb.sel{outline:2px solid #fde047}
+.tb .hl,.tb .hr{position:absolute;top:0;width:7px;height:100%;background:rgba(0,0,0,.35);cursor:ew-resize}
+.tb .hl{left:0}.tb .hr{right:0}
+#cursor{position:absolute;top:0;width:0;border-left:2px solid #dc2626;z-index:10;pointer-events:none}
+#handle{position:absolute;top:0;left:-8px;width:16px;height:16px;border-radius:50%;background:#dc2626;border:2px solid #fff;cursor:ew-resize;pointer-events:auto}
+#overview{position:relative;height:26px;margin-top:6px;background:#e2e8f0;border:1px solid #94a3b8}
+#ovwin{position:absolute;top:0;height:100%;background:rgba(37,99,235,.25);border:2px solid #2563eb;cursor:grab}
+#ovwin .g{position:absolute;top:0;width:8px;height:100%;background:#2563eb;cursor:ew-resize}
+#ovwin .g.l{left:-2px}#ovwin .g.r{right:-2px}
+.ovitem{position:absolute;height:3px;background:rgba(0,0,0,.4);pointer-events:none}
+#ovplay{position:absolute;top:0;height:100%;border-left:2px solid #dc2626;pointer-events:none}
+#menu{position:fixed;z-index:1000;background:#fff;border:1px solid #666;border-radius:4px;box-shadow:0 3px 10px rgba(0,0,0,.3);padding:6px;min-width:200px;max-width:270px;display:none;max-height:85vh;overflow:auto}
+#menu .mt{font-weight:bold;border-bottom:1px solid #ccc;margin-bottom:4px;padding-bottom:2px}
+#menu .mi{display:block;width:100%;text-align:left;margin:2px 0;border:none;background:none;padding:4px 6px}
+#menu .mi:hover{background:#dbeafe}
+#menu .mr{margin:4px 0}
+#menu .mr>label{display:block;font-size:11px;color:#555}
+#menu input[type=text],#menu input[type=number]{width:100%}
+.sw{display:inline-block;width:18px;height:18px;border:1px solid #666;margin:1px;cursor:pointer}
+.sw.on{outline:2px solid #2563eb}
+.opt{display:inline-block;border:1px solid #999;margin:1px;padding:2px 4px;cursor:pointer;background:#fff;font-size:11px}
+.opt.on{outline:2px solid #2563eb;background:#dbeafe}
+.opt svg{display:block}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:2000}
+#modal .box{background:#fff;padding:16px;border-radius:6px;min-width:340px;max-width:520px;max-height:80vh;overflow:auto}
+#modal .btns{margin-top:12px;display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+#modal label.cand{display:block;padding:3px}
+#player{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1500;align-items:center;justify-content:center;flex-direction:column;color:#fff;gap:8px}
+#player .pv{width:560px;height:315px;background:linear-gradient(135deg,#7c3aed,#0ea5e9);display:flex;align-items:center;justify-content:center;font-size:18px;text-align:center;padding:10px}
+#progress{width:100%;height:14px;background:#ddd;border-radius:7px;overflow:hidden;margin-top:8px}
+#progress div{height:100%;width:0;background:#2563eb}
+</style>
+</head>
+<body>
+
+<div id="home">
+  <div class="panel">
+    <h2 id="hOrig"></h2>
+    <div style="margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap">
+      <button class="primary" id="btnPick">動画を選択</button>
+      <button id="btnSample">例題動画を取り込む</button>
+      <button id="btnBroken">読み込めない動画を選ぶ（テスト）</button>
+    </div>
+    <input type="file" id="file" accept="video/*" style="display:none">
+    <div id="homeMsg" style="color:#b00;margin-bottom:6px"></div>
+    <div id="origList"></div>
+    <div class="small">※編集対象の動画は未選択です。動画を選択するまで編集画面は開始しません。</div>
+  </div>
+  <div class="panel">
+    <h2 id="hRes"></h2>
+    <div id="resList"></div>
+  </div>
+</div>
+
+<div id="edit">
+  <div id="topbar">
+    <div class="info">動画：<b id="eVideo"></b> ／ 編集作業：<b id="eWork"></b> <span id="dirty"></span></div>
+    <button id="bSave">保存</button>
+    <button id="bSaveAs">別の編集作業として保存</button>
+    <button id="bExport">編集結果を動画にする</button>
+    <button id="bEnd">編集作業を終了する</button>
+  </div>
+  <div id="stage">
+    <div id="vwrap">
+      <div id="vcontent"><div class="grid"></div></div>
+      <svg id="svg"></svg>
+      <div id="vlabel"></div>
+      <div id="banner"></div>
+    </div>
+  </div>
+  <div id="ctl">
+    <button id="bPlay">▶ 再生</button>
+    <button id="bPause">⏸ 一時停止</button>
+    <button id="bStop">⏹ 停止</button>
+    <label><input type="checkbox" id="skipChk" checked> 再生時にスキップ範囲を飛ばす</label>
+    <span id="posInfo"></span>
+    <span class="sp"></span>
+    <button id="zOut">－</button>
+    <input type="range" id="zSlider" min="0" max="1000" value="0" style="width:140px">
+    <button id="zIn">＋</button>
+    <span id="zInfo"></span>
+    <button id="zReset">全体表示に戻す</button>
+  </div>
+  <div id="tlwrap">
+    <div id="tlinfo"><span id="rangeInfo"></span></div>
+    <div id="tlrow">
+      <button id="pLeft">◀</button>
+      <div id="tlmain">
+        <div id="ruler"></div>
+        <div id="lanes"></div>
+        <div id="cursor"><div id="handle"></div></div>
+      </div>
+      <button id="pRight">▶</button>
+    </div>
+    <div id="overview"><div id="ovwin"><div class="g l"></div><div class="g r"></div></div></div>
+  </div>
+</div>
+
+<div id="menu"></div>
+<div id="modal"><div class="box" id="mbox"></div></div>
+<div id="player"><div class="pv" id="pv"></div><button id="pClose">閉じる</button></div>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const LIM=10,MINVIS=0.5,MINDUR=0.3,DEF_DUR=5,VW=640,VH=360;
+const COLORS=["#000000","#ffffff","#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#6366f1","#a855f7","#ec4899","#6b7280"];
+const FONTS=["sans-serif","serif","monospace","cursive","Yu Mincho","Meiryo"];
+const DASH={solid:"",dot:"2 4",dash:"8 5",dashdot:"10 4 2 4"};
+const DASHN={solid:"実線",dot:"点線",dash:"破線",dashdot:"一点鎖線"};
+const SHAPEN={line:"直線",poly:"折れ線",wave:"波線"};
+const ENDN={none:"なし",arrow:"矢印",circle:"丸",square:"四角"};
+const SIDEN={auto:"自動",top:"上",right:"右",bottom:"下",left:"左"};
+const KIND={comment:"コメント",box:"強調枠",zoom:"拡大枠",skip:"スキップ"};
+const KCOL={comment:"#2563eb",box:"#dc2626",zoom:"#0891b2",skip:"#6b7280"};
+
+const S={videos:[],works:[],results:[],seq:1,cur:null,sel:[],selLine:null,time:0,dur:60,playing:false,vs:0,ve:60,connFrom:null};
+
+const uid=()=>S.seq++;
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function fmtT(t,fine){t=Math.max(0,t);const m=Math.floor(t/60),s=t-m*60;return m+":"+(fine?s.toFixed(2).padStart(5,"0"):String(Math.floor(s)).padStart(2,"0"))}
+function fmtD(ts){const d=new Date(ts);return d.getFullYear()+"/"+(d.getMonth()+1)+"/"+d.getDate()+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")}
+
+/* ---------- モーダル ---------- */
+function modal(html,btns){
+  $("mbox").innerHTML=html+'<div class="btns" id="mbtns"></div>';
+  btns.forEach(b=>{const e=document.createElement("button");e.textContent=b.t;if(b.c)e.className=b.c;
+    e.onclick=()=>{const v=b.f?b.f():null;if(v!==false)closeModal()};$("mbtns").appendChild(e)});
+  $("modal").style.display="flex";
+}
+function closeModal(){$("modal").style.display="none"}
+
+/* ---------- 初期画面 ---------- */
+function renderHome(){
+  $("hOrig").textContent=`オリジナル動画（${S.videos.length}/${LIM}件）`;
+  $("hRes").textContent=`編集結果の動画（${S.results.length}/${LIM}件）`;
+  let h=`<div class="small" style="margin-bottom:6px">編集作業 合計 ${S.works.length}/${LIM}件</div>`;
+  if(!S.videos.length)h+='<div class="empty">オリジナル動画はありません。「動画を選択」から取り込んでください。</div>';
+  S.videos.forEach(v=>{
+    const ws=S.works.filter(w=>w.videoId===v.id).sort((a,b)=>b.saved-a.saved);
+    h+=`<div class="vrow"><div class="vhead"><div><b>${esc(v.name)}</b><br><span class="small">取り込み：${fmtD(v.imported)} ／ 編集作業 ${ws.length}件</span></div>
+    <div><button class="primary" data-new="${v.id}">新しい編集作業を始める</button> <button class="danger" data-delv="${v.id}">削除</button></div></div><div class="children">`;
+    if(!ws.length)h+='<div class="empty">編集作業はありません</div>';
+    ws.forEach(w=>{h+=`<div class="wrow"><div>${esc(w.name)}<br><span class="small">最終保存：${fmtD(w.saved)}</span></div>
+      <div><button data-resume="${w.id}">再開</button> <button class="danger" data-delw="${w.id}">削除</button></div></div>`});
+    h+="</div></div>";
+  });
+  $("origList").innerHTML=h;
+  let r=S.results.length?"":'<div class="empty">編集結果の動画はありません</div>';
+  S.results.forEach(x=>{
+    const alive=S.videos.some(v=>v.id===x.videoId);
+    r+=`<div class="wrow"><div><b>${esc(x.name)}</b><br><span class="small">元の動画：${esc(x.origName)}${alive?"":"（削除済み）"} ／ 作成：${fmtD(x.created)}</span></div>
+    <div><button data-play="${x.id}">再生</button> <button class="danger" data-delr="${x.id}">削除</button></div></div>`});
+  $("resList").innerHTML=r;
+}
+$("origList").onclick=e=>{
+  const d=e.target.dataset;
+  if(d.new)startWork(+d.new);
+  else if(d.resume)resumeWork(+d.resume);
+  else if(d.delv)delVideo(+d.delv);
+  else if(d.delw)delWork(+d.delw);
+};
+$("resList").onclick=e=>{
+  const d=e.target.dataset;
+  if(d.play){const x=S.results.find(r=>r.id==d.play);$("pv").innerHTML=`編集結果の動画：${esc(x.name)}<br>元の動画：${esc(x.origName)}<br>（再生モック）`;$("player").style.display="flex"}
+  if(d.delr){const x=S.results.find(r=>r.id==d.delr);
+    modal(`編集結果の動画「${esc(x.name)}」を削除しますか？`,[{t:"削除する",c:"danger",f:()=>{S.results=S.results.filter(r=>r.id!=x.id);renderHome()}},{t:"キャンセル"}])}
+};
+$("pClose").onclick=()=>$("player").style.display="none";
+$("btnPick").onclick=()=>$("file").click();
+$("file").onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  const url=URL.createObjectURL(f),vd=document.createElement("video");
+  vd.preload="metadata";
+  vd.onloadedmetadata=()=>importVideo(f.name,isFinite(vd.duration)?vd.duration:60);
+  vd.onerror=()=>{$("homeMsg").textContent="選択した動画を読み込めませんでした。編集画面は開始しません。"};
+  vd.src=url;e.target.value="";
+};
+$("btnSample").onclick=()=>importVideo("例題動画.mp4",60);
+$("btnBroken").onclick=()=>{$("homeMsg").textContent="選択した動画「壊れた動画.mp4」を読み込めませんでした。編集画面は開始しません。"};
+
+function importVideo(name,dur){
+  $("homeMsg").textContent="";
+  const go=()=>{const v={id:uid(),name,dur,imported:Date.now()};S.videos.push(v);renderHome();startWork(v.id)};
+  if(S.videos.length<LIM){go();return}
+  let h="オリジナル動画が上限（10件）です。削除する動画を選んでください。<br><small>※配下の編集作業も一緒に削除されます。</small><br>";
+  S.videos.forEach((v,i)=>{const n=S.works.filter(w=>w.videoId===v.id).length;
+    h+=`<label class="cand"><input type="radio" name="cand" value="${v.id}" ${i?"":"checked"}> ${esc(v.name)}（編集作業${n}件も削除）</label>`});
+  modal(h,[{t:"削除して取り込む",c:"danger",f:()=>{
+    const id=+document.querySelector('input[name=cand]:checked').value;
+    S.videos=S.videos.filter(v=>v.id!==id);S.works=S.works.filter(w=>w.videoId!==id);go()}},{t:"キャンセル"}]);
+}
+function delVideo(id){
+  const v=S.videos.find(x=>x.id===id),n=S.works.filter(w=>w.videoId===id).length,rn=S.results.filter(r=>r.videoId===id).length;
+  modal(`動画「${esc(v.name)}」を削除しますか？`+(n?`<br><b>配下の編集作業${n}件も一緒に削除されます。</b>`:"")+(rn?`<br>作成済みの編集結果の動画（${rn}件）は残ります。`:""),
+    [{t:"削除する",c:"danger",f:()=>{S.videos=S.videos.filter(x=>x.id!==id);S.works=S.works.filter(w=>w.videoId!==id);renderHome()}},{t:"キャンセル"}]);
+}
+function delWork(id){
+  const w=S.works.find(x=>x.id===id);
+  modal(`編集作業「${esc(w.name)}」を削除しますか？<br>オリジナル動画と編集結果の動画には影響しません。`,
+    [{t:"削除する",c:"danger",f:()=>{S.works=S.works.filter(x=>x.id!==id);renderHome()}},{t:"キャンセル"}]);
+}
+
+/* ---------- 編集開始・再開・終了 ---------- */
+function startWork(vid){
+  const v=S.videos.find(x=>x.id===vid);
+  S.cur={video:v,work:null,data:{els:[],lines:[],nid:1},dirty:false};openEditor();
+}
+function resumeWork(wid){
+  const w=S.works.find(x=>x.id===wid),v=S.videos.find(x=>x.id===w.videoId);
+  S.cur={video:v,work:w,data:JSON.parse(JSON.stringify(w.data)),dirty:false};openEditor();
+}
+function openEditor(){
+  S.dur=S.cur.video.dur;S.time=0;S.vs=0;S.ve=S.dur;S.sel=[];S.selLine=null;S.connFrom=null;S.playing=false;
+  $("home").style.display="none";$("edit").style.display="flex";closeMenu();renderAll();
+}
+function markDirty(){S.cur.dirty=true;updateHead()}
+function updateHead(){
+  $("eVideo").textContent=S.cur.video.name;
+  $("eWork").textContent=S.cur.work?S.cur.work.name:"未保存の編集作業";
+  $("dirty").textContent=S.cur.dirty?"● 未保存の変更あり":"";
+  $("vlabel").textContent="元動画："+S.cur.video.name;
+}
+function endWork(){
+  pause();S.cur=null;closeMenu();
+  $("edit").style.display="none";$("home").style.display="grid";renderHome();
+}
+
+/* ---------- 保存・出力 ---------- */
+function workLimitCheck(then){
+  if(S.works.length<LIM){then();return}
+  let h="編集作業が上限（10件）です。削除する編集作業を選んでください。<br>";
+  S.works.forEach((w,i)=>{const v=S.videos.find(x=>x.id===w.videoId);
+    h+=`<label class="cand"><input type="radio" name="cw" value="${w.id}" ${i?"":"checked"}> ${esc(w.name)}（${esc(v?v.name:"")}）</label>`});
+  modal(h,[{t:"削除して保存",c:"danger",f:()=>{
+    const id=+document.querySelector('input[name=cw]:checked').value;
+    if(S.cur.work&&S.cur.work.id===id)S.cur.work=null;
+    S.works=S.works.filter(w=>w.id!==id);then()}},{t:"キャンセル"}]);
+}
+function doSave(name,cb){
+  const w={id:uid(),videoId:S.cur.video.id,name,saved:Date.now(),data:JSON.parse(JSON.stringify(S.cur.data))};
+  S.works.push(w);S.cur.work=w;S.cur.dirty=false;updateHead();if(cb)cb();
+}
+function overwrite(){S.cur.work.saved=Date.now();S.cur.work.data=JSON.parse(JSON.stringify(S.cur.data));S.cur.dirty=false;updateHead()}
+function askName(def,ok){
+  modal(`編集作業の名前：<br><input type="text" id="nm" value="${esc(def)}" style="width:100%">`,
+    [{t:"保存",c:"primary",f:()=>{const n=$("nm").value.trim()||def;setTimeout(()=>workLimitCheck(()=>ok(n)),0)}},{t:"キャンセル"}]);
+}
+$("bSave").onclick=()=>{if(S.cur.work)overwrite();else askName(S.cur.video.name+" の編集作業",n=>doSave(n))};
+$("bSaveAs").onclick=()=>askName((S.cur.work?S.cur.work.name:S.cur.video.name+" の編集作業")+"（別）",n=>doSave(n));
+$("bEnd").onclick=()=>{
+  if(!S.cur.dirty){endWork();return}
+  modal("未保存の変更があります。保存しますか？",[
+    {t:"保存して終了",c:"primary",f:()=>{
+      if(S.cur.work){overwrite();endWork()}
+      else askName(S.cur.video.name+" の編集作業",n=>doSave(n,endWork))}},
+    {t:"保存せずに終了",f:()=>{endWork()}},
+    {t:"編集に戻る"}]);
+};
+$("bExport").onclick=()=>{
+  const def=S.cur.video.name+" 編集結果";
+  modal(`編集結果の動画の名前：<br><input type="text" id="nm" value="${esc(def)}" style="width:100%"><div class="small">※編集作業は自動では保存されません。</div>`,
+    [{t:"作成する",c:"primary",f:()=>{
+      const n=$("nm").value.trim()||def;
+      setTimeout(()=>{
+        if(S.results.length<LIM){runExport(n);return}
+        let h="編集結果の動画が上限（10件）です。削除する動画を選んでください。<br>";
+        S.results.forEach((r,i)=>{h+=`<label class="cand"><input type="radio" name="cr" value="${r.id}" ${i?"":"checked"}> ${esc(r.name)}</label>`});
+        modal(h,[{t:"削除して作成",c:"danger",f:()=>{
+          const id=+document.querySelector('input[name=cr]:checked').value;
+          S.results=S.results.filter(r=>r.id!==id);setTimeout(()=>runExport(n),0)}},{t:"キャンセル"}]);
+      },0);
+    }},{t:"キャンセル"}]);
+};
+function runExport(n){
+  modal('編集結果を動画にしています…<div id="progress"><div></div></div>',[]);
+  let p=0;const t=setInterval(()=>{
+    p+=10;const b=document.querySelector("#progress div");if(b)b.style.width=p+"%";
+    if(p>=100){clearInterval(t);
+      S.results.push({id:uid(),name:n,videoId:S.cur.video.id,origName:S.cur.video.name,created:Date.now()});
+      modal(`「${esc(n)}」を作成しました。元の編集作業とオリジナル動画は保持されています。`,[{t:"OK"}])}
+  },150);
+}
+
+/* ---------- 再生 ---------- */
+let timer=null,lastTs=0;
+function play(){
+  if(S.playing)return;
+  if(S.time>=S.dur)S.time=0;
+  S.playing=true;lastTs=performance.now();timer=requestAnimationFrame(tick);
+}
+function pause(){S.playing=false;if(timer)cancelAnimationFrame(timer);timer=null}
+function tick(ts){
+  if(!S.playing)return;
+  S.time+=(ts-lastTs)/1000;lastTs=ts;
+  if($("skipChk").checked)S.cur.data.els.filter(e=>e.kind==="skip"&&S.time>=e.start&&S.time<e.end).forEach(e=>{S.time=e.end});
+  if(S.time>=S.dur){S.time=S.dur;S.playing=false}
+  followPlay();renderVideo();renderTimeline();renderPos();
+  if(S.playing)timer=requestAnimationFrame(tick);
+}
+function followPlay(){
+  if(dragHandle||userMoving)return;
+  const w=S.ve-S.vs;
+  if(w>=S.dur-1e-6)return;
+  if(S.time>S.ve-w*0.05||S.time<S.vs)setRange(S.time-w*0.2,S.time-w*0.2+w);
+}
+$("bPlay").onclick=play;$("bPause").onclick=pause;
+$("bStop").onclick=()=>{pause();S.time=0;renderAll()};
+
+/* ---------- 要素データ ---------- */
+const getEl=id=>S.cur.data.els.find(e=>e.id===id);
+const visible=(e,t)=>t>=e.start&&t<e.end;
+function addEl(kind,x,y){
+  const d=S.cur.data;
+  const b={id:d.nid++,kind,start:S.time,end:Math.min(S.dur,S.time+DEF_DUR)};
+  if(b.end-b.start<MINDUR)b.start=Math.max(0,b.end-DEF_DUR);
+  if(kind==="comment")Object.assign(b,{x:clamp(x-70,0,VW-140),y:clamp(y-20,0,VH-40),w:140,h:40,text:"コメント",lineOn:true,lw:2,lc:"#000000",tc:"#000000",bg:"#ffffff",fillOn:true,fs:16,font:"sans-serif"});
+  if(kind==="box")Object.assign(b,{x:clamp(x-60,0,VW-120),y:clamp(y-40,0,VH-80),w:120,h:80,lw:3,lc:"#ef4444",fillOn:false,fc:"#ef4444",dash:"solid"});
+  if(kind==="zoom")Object.assign(b,{x:clamp(x-60,0,VW-120),y:clamp(y-40,0,VH-80),w:120,h:80});
+  if(kind==="skip")b.end=Math.min(S.dur,S.time+3);
+  d.els.push(b);S.sel=[b.id];S.selLine=null;markDirty();renderAll();
+}
+function delEls(ids){
+  const d=S.cur.data,lines=d.lines.filter(l=>ids.includes(l.from)||ids.includes(l.to));
+  const go=()=>{d.els=d.els.filter(e=>!ids.includes(e.id));d.lines=d.lines.filter(l=>!lines.includes(l));S.sel=[];S.selLine=null;markDirty();renderAll()};
+  if(lines.length)modal(`要素を削除します。つながっている接続線${lines.length}本も一緒に削除されます。よろしいですか？`,[{t:"削除する",c:"danger",f:go},{t:"キャンセル"}]);
+  else go();
+}
+function activeZoom(){const z=S.cur.data.els.filter(e=>e.kind==="zoom"&&visible(e,S.time));return z.length?z[z.length-1]:null}
+function zk(){const z=activeZoom();return z?Math.min(VW/z.w,VH/z.h):1}
+function tr(px,py){const z=activeZoom();if(!z)return [px,py];const k=zk();return [(px-z.x)*k+(VW-z.w*k)/2,(py-z.y)*k+(VH-z.h*k)/2]}
+function elRect(e){const [x,y]=tr(e.x,e.y),k=zk();return {x,y,w:e.w*k,h:e.h*k}}
+
+/* ---------- 動画領域の描画 ---------- */
+function renderVideo(){
+  const c=$("vcontent"),w=$("vwrap"),az=activeZoom(),k=zk(),d=S.cur.data;
+  if(az)c.style.transform=`translate(${(VW-az.w*k)/2-az.x*k}px,${(VH-az.h*k)/2-az.y*k}px) scale(${k})`;
+  else c.style.transform="none";
+  w.querySelectorAll(".el").forEach(n=>n.remove());
+  d.els.forEach(e=>{
+    if(e.kind==="skip"||!visible(e,S.time)||(e.kind==="zoom"&&az))return;
+    const r=elRect(e),n=document.createElement("div");
+    n.className="el"+(S.sel.includes(e.id)?" sel":"")+(S.connFrom&&S.connFrom!==e.id?" target":"");
+    n.dataset.id=e.id;
+    n.style.cssText=`left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
+    if(e.kind==="comment"){
+      n.classList.add("cm");
+      n.style.fontSize=e.fs*k+"px";n.style.fontFamily=e.font;n.style.color=e.tc;
+      n.style.background=e.fillOn?e.bg:"transparent";
+      n.style.border=e.lineOn?`${e.lw*k}px solid ${e.lc}`:"none";
+      n.textContent=e.text;
+    }else if(e.kind==="box"){
+      n.style.background=e.fillOn?e.fc+"55":"transparent";
+      n.innerHTML=`<svg width="${r.w}" height="${r.h}" style="position:absolute;left:0;top:0;overflow:visible;pointer-events:none"><rect x="${e.lw*k/2}" y="${e.lw*k/2}" width="${Math.max(1,r.w-e.lw*k)}" height="${Math.max(1,r.h-e.lw*k)}" fill="none" stroke="${e.lc}" stroke-width="${e.lw*k}" stroke-dasharray="${DASH[e.dash]}"/></svg>`;
+    }else if(e.kind==="zoom")n.classList.add("zm");
+    n.insertAdjacentHTML("beforeend",'<div class="rh"></div>');
+    w.appendChild(n);
+  });
+  const zs=d.els.filter(e=>e.kind==="zoom"&&visible(e,S.time));
+  if(S.connFrom){$("banner").style.display="block";$("banner").textContent="接続作成中：接続先の要素をクリック（何もない場所で中止）"}
+  else if(zs.length){$("banner").style.display="block";$("banner").textContent=zs.length>1?`拡大枠が${zs.length}つ重なっています：後から追加した枠を優先して表示中`:"拡大枠を表示中"}
+  else $("banner").style.display="none";
+  renderLines();
+}
+
+/* ---------- 接続線 ---------- */
+function anchor(e,side,toward){
+  const r=elRect(e);
+  const P={top:[r.x+r.w/2,r.y],bottom:[r.x+r.w/2,r.y+r.h],left:[r.x,r.y+r.h/2],right:[r.x+r.w,r.y+r.h/2]};
+  if(side&&side!=="auto")return {p:P[side],s:side};
+  const dx=toward[0]-(r.x+r.w/2),dy=toward[1]-(r.y+r.h/2);
+  const s=Math.abs(dx)*r.h>Math.abs(dy)*r.w?(dx>0?"right":"left"):(dy>0?"bottom":"top");
+  return {p:P[s],s};
+}
+const centerOf=e=>{const r=elRect(e);return [r.x+r.w/2,r.y+r.h/2]};
+function segHit(p,q,r){
+  for(let i=0;i<=16;i++){const x=p[0]+(q[0]-p[0])*i/16,y=p[1]+(q[1]-p[1])*i/16;
+    if(x>r.x-2&&x<r.x+r.w+2&&y>r.y-2&&y<r.y+r.h+2)return true}
+  return false;
+}
+function lineGeom(l){
+  const a=getEl(l.from),b=getEl(l.to);
+  if(!a||!b||!visible(a,S.time)||!visible(b,S.time))return null;
+  const az=activeZoom();
+  if(az&&(a.kind==="zoom"||b.kind==="zoom"))return null;
+  const A=anchor(a,l.fs,centerOf(b)),B=anchor(b,l.ts,centerOf(a));
+  if(l.shape==="line")return [A.p,B.p];
+  const obs=S.cur.data.els.filter(e=>e.id!==a.id&&e.id!==b.id&&e.kind!=="skip"&&visible(e,S.time)&&!(e.kind==="zoom"&&az)).map(elRect);
+  const out=(p,s,d)=>({top:[p[0],p[1]-d],bottom:[p[0],p[1]+d],left:[p[0]-d,p[1]],right:[p[0]+d,p[1]]}[s]);
+  const a1=out(A.p,A.s,18),b1=out(B.p,B.s,18);
+  const horiz=Math.abs(b1[0]-a1[0])>=Math.abs(b1[1]-a1[1]);
+  const mid=[(a1[0]+b1[0])/2,(a1[1]+b1[1])/2];
+  let c1=horiz?[mid[0],a1[1]]:[a1[0],mid[1]],c2=horiz?[mid[0],b1[1]]:[b1[0],mid[1]];
+  const hit=(p,q)=>obs.some(o=>segHit(p,q,o));
+  if(hit(a1,c1)||hit(c1,c2)||hit(c2,b1)){
+    const cands=horiz?[10,VH-10].map(y=>[[a1[0],y],[b1[0],y]]):[10,VW-10].map(x=>[[x,a1[1]],[x,b1[1]]]);
+    const best=cands.find(c=>!hit(a1,c[0])&&!hit(c[0],c[1])&&!hit(c[1],b1))||cands[0];
+    c1=best[0];c2=best[1];
+  }
+  return [A.p,a1,c1,c2,b1,B.p];
+}
+function pathOf(pts,shape){
+  if(shape!=="wave")return "M"+pts.map(p=>p.join(",")).join(" L");
+  let d=`M${pts[0][0]},${pts[0][1]}`;
+  for(let i=1;i<pts.length;i++){
+    const p=pts[i-1],q=pts[i],dx=q[0]-p[0],dy=q[1]-p[1],len=Math.hypot(dx,dy)||1;
+    const n=Math.max(2,Math.round(len/14)),nx=-dy/len,ny=dx/len;
+    for(let j=1;j<=n;j++){
+      const tm=(j-.5)/n,t=j/n,amp=(j%2?1:-1)*4;
+      d+=` Q${p[0]+dx*tm+nx*amp},${p[1]+dy*tm+ny*amp} ${p[0]+dx*t},${p[1]+dy*t}`;
+    }
+  }
+  return d;
+}
+function endMark(p,q,type,col,w){
+  if(type==="none")return "";
+  const ang=Math.atan2(p[1]-q[1],p[0]-q[0]),s=8+w;
+  if(type==="arrow"){const a1=ang+2.6,a2=ang-2.6;
+    return `<polygon points="${p[0]},${p[1]} ${p[0]+s*Math.cos(a1)},${p[1]+s*Math.sin(a1)} ${p[0]+s*Math.cos(a2)},${p[1]+s*Math.sin(a2)}" fill="${col}"/>`}
+  if(type==="circle")return `<circle cx="${p[0]}" cy="${p[1]}" r="${s/2}" fill="${col}"/>`;
+  return `<rect x="${p[0]-s/2}" y="${p[1]-s/2}" width="${s}" height="${s}" fill="${col}"/>`;
+}
+function renderLines(){
+  let h="";
+  S.cur.data.lines.forEach(l=>{
+    const pts=lineGeom(l);if(!pts)return;
+    const d=pathOf(pts,l.shape),sel=S.selLine===l.id,col=sel?"#f59e0b":l.color,sw=sel?l.w+2:l.w;
+    h+=`<g><path d="${d}" fill="none" stroke="${col}" stroke-width="${sw}" stroke-dasharray="${DASH[l.dash]}"/>`
+      +endMark(pts[0],pts[1],l.startEnd,col,l.w)+endMark(pts[pts.length-1],pts[pts.length-2],l.endEnd,col,l.w)
+      +`<path class="hit" d="${d}" data-lid="${l.id}"/></g>`;
+  });
+  $("svg").innerHTML=h;
+}
+function renderAll(){if(!S.cur)return;updateHead();renderVideo();renderTimeline();renderPos()}
+
+/* ---------- 動画領域の操作 ---------- */
+let drag=null;
+const vpos=ev=>{const r=$("vwrap").getBoundingClientRect();return [ev.clientX-r.left,ev.clientY-r.top]};
+$("vwrap").addEventListener("mousedown",ev=>{
+  if(ev.button!==0)return;
+  closeMenu();
+  const lid=ev.target.dataset&&ev.target.dataset.lid,elN=ev.target.closest(".el");
+  if(S.connFrom){
+    if(elN&&+elN.dataset.id!==S.connFrom&&getEl(+elN.dataset.id).kind!=="skip"){
+      const to=+elN.dataset.id,d=S.cur.data;
+      if(d.lines.some(l=>l.from===S.connFrom&&l.to===to))alert("同じ向きの接続線がすでにあります");
+      else{d.lines.push({id:d.nid++,from:S.connFrom,to,shape:"line",dash:"solid",color:"#ffffff",w:2,startEnd:"none",endEnd:"none",fs:"auto",ts:"auto"});markDirty()}
+    }
+    S.connFrom=null;renderAll();return;
+  }
+  if(lid){S.selLine=+lid;S.sel=[];renderAll();return}
+  if(elN){
+    const id=+elN.dataset.id;
+    if(ev.shiftKey)S.sel=S.sel.includes(id)?S.sel.filter(x=>x!==id):[...S.sel,id];
+    else if(!S.sel.includes(id))S.sel=[id];
+    S.selLine=null;
+    drag={type:ev.target.classList.contains("rh")?"resize":"move",p:vpos(ev),k:zk(),
+      orig:S.sel.map(i=>{const e=getEl(i);return {id:i,x:e.x,y:e.y,w:e.w,h:e.h}})};
+    renderAll();
+  }else{S.sel=[];S.selLine=null;renderAll()}
+});
+window.addEventListener("keydown",e=>{if(e.key==="Escape"){S.connFrom=null;closeMenu();renderAll()}});
+
+/* ---------- タイムライン ---------- */
+let dragHandle=false,userMoving=false,rulerDrag=false,tdrag=null,odrag=null;
+const tlW=()=>$("lanes").clientWidth;
+const t2x=t=>(t-S.vs)/(S.ve-S.vs)*tlW();
+const x2t=x=>S.vs+x/tlW()*(S.ve-S.vs);
+function setRange(s,e){const w=clamp(e-s,MINVIS,S.dur);s=clamp(s,0,S.dur-w);S.vs=s;S.ve=s+w}
+function zoomAt(f,c){
+  const w=S.ve-S.vs,nw=clamp(w/f,MINVIS,S.dur),r=(c-S.vs)/w;
+  setRange(c-r*nw,c-r*nw+nw);renderTimeline();
+}
+const zoomCenter=()=>(S.time>=S.vs&&S.time<=S.ve)?S.time:(S.vs+S.ve)/2;
+$("zIn").onclick=()=>zoomAt(1.5,zoomCenter());
+$("zOut").onclick=()=>zoomAt(1/1.5,zoomCenter());
+$("zReset").onclick=()=>{setRange(0,S.dur);renderTimeline()};
+$("zSlider").oninput=e=>{
+  const z=Math.pow(S.dur/MINVIS,+e.target.value/1000),nw=clamp(S.dur/z,MINVIS,S.dur),c=zoomCenter(),r=(c-S.vs)/(S.ve-S.vs);
+  setRange(c-r*nw,c-r*nw+nw);renderTimeline(true);
+};
+$("pLeft").onclick=()=>{const w=S.ve-S.vs;setRange(S.vs-w*.25,S.ve-w*.25);renderTimeline()};
+$("pRight").onclick=()=>{const w=S.ve-S.vs;setRange(S.vs+w*.25,S.ve+w*.25);renderTimeline()};
+$("tlmain").addEventListener("wheel",ev=>{
+  ev.preventDefault();
+  zoomAt(ev.deltaY<0?1.25:1/1.25,x2t(ev.clientX-$("lanes").getBoundingClientRect().left));
+},{passive:false});
+
+function layoutLanes(){
+  const ends=[],res={};
+  [...S.cur.data.els].sort((a,b)=>a.start-b.start||a.id-b.id).forEach(e=>{
+    let i=0;while(ends[i]!==undefined&&ends[i]>e.start)i++;ends[i]=e.end;res[e.id]=i});
+  return res;
+}
+function tickStep(w){const s=[.1,.2,.5,1,2,5,10,15,30,60,120,300,600];return s.find(x=>x>=w/8)||600}
+function renderTimeline(skipSlider){
+  if(!S.cur)return;
+  const w=S.ve-S.vs,z=S.dur/w,step=tickStep(w),fine=step<1;
+  let h="";
+  for(let t=Math.ceil(S.vs/step)*step;t<=S.ve+1e-9;t+=step)h+=`<div class="tick" style="left:${t2x(t)}px">${fmtT(t,fine)}</div>`;
+  if(S.dur>=S.vs&&S.dur<=S.ve+1e-9)h+=`<div class="endmark" style="left:${Math.min(t2x(S.dur),tlW()-3)}px"><span>終了</span></div>`;
+  $("ruler").innerHTML=h;
+  const lanes=layoutLanes();let b="";
+  S.cur.data.els.forEach(e=>{
+    if(e.end<S.vs||e.start>S.ve)return;
+    const x1=t2x(e.start),x2=t2x(e.end);
+    b+=`<div class="tb${S.sel.includes(e.id)?" sel":""}" data-id="${e.id}" style="left:${x1}px;width:${Math.max(8,x2-x1)}px;top:${4+lanes[e.id]*26}px;background:${KCOL[e.kind]}"><div class="hl" data-h="l"></div>${esc(KIND[e.kind]+(e.kind==="comment"?"："+e.text:""))}<div class="hr" data-h="r"></div></div>`;
+  });
+  $("lanes").innerHTML=b;
+  const ow=$("overview").clientWidth;
+  $("ovwin").style.left=(S.vs/S.dur*ow)+"px";$("ovwin").style.width=(w/S.dur*ow)+"px";
+  $("overview").querySelectorAll(".ovitem,#ovplay").forEach(n=>n.remove());
+  S.cur.data.els.forEach(e=>{
+    const n=document.createElement("div");n.className="ovitem";
+    n.style.cssText=`left:${e.start/S.dur*ow}px;width:${Math.max(2,(e.end-e.start)/S.dur*ow)}px;top:${3+(lanes[e.id]%5)*4}px`;
+    $("overview").appendChild(n);
+  });
+  const pl=document.createElement("div");pl.id="ovplay";$("overview").appendChild(pl);
+  $("rangeInfo").textContent=`表示範囲：${fmtT(S.vs,true)} ~ ${fmtT(S.ve,true)}（幅 ${w.toFixed(2)}秒）`;
+  $("zInfo").textContent=`倍率 ${z.toFixed(z<10?1:0)}倍`+(w>=S.dur-1e-6?"（全体表示）":"");
+  if(!skipSlider)$("zSlider").value=Math.round(Math.log(z)/Math.log(S.dur/MINVIS)*1000);
+  renderPos();
+}
+function renderPos(){
+  if(!S.cur)return;
+  $("posInfo").textContent=`${fmtT(S.time,true)} / ${fmtT(S.dur,true)}`;
+  const vis=S.time>=S.vs&&S.time<=S.ve,c=$("cursor");
+  c.style.display=vis?"block":"none";
+  if(vis){
+    c.style.left=($("lanes").offsetLeft+1+t2x(S.time))+"px";
+    c.style.top=$("ruler").offsetTop-16+"px";
+    c.style.height=($("ruler").offsetHeight+$("lanes").offsetHeight+16)+"px";
+  }
+  const pl=$("ovplay");if(pl)pl.style.left=(S.time/S.dur*$("overview").clientWidth)+"px";
+}
+/* 再生位置の操作 */
+function seekFromRuler(ev){S.time=clamp(x2t(ev.clientX-$("ruler").getBoundingClientRect().left),0,S.dur);if(S.playing)lastTs=performance.now();renderVideo();renderPos()}
+$("ruler").addEventListener("mousedown",ev=>{if(ev.button!==0)return;rulerDrag=true;seekFromRuler(ev)});
+$("handle").addEventListener("mousedown",ev=>{ev.stopPropagation();ev.preventDefault();dragHandle=true});
+/* タイムライン要素の操作 */
+$("lanes").addEventListener("mousedown",ev=>{
+  if(ev.button!==0)return;
+  closeMenu();
+  const tb=ev.target.closest(".tb");
+  if(tb){
+    const id=+tb.dataset.id;
+    if(ev.shiftKey)S.sel=S.sel.includes(id)?S.sel.filter(x=>x!==id):[...S.sel,id];
+    else if(!S.sel.includes(id))S.sel=[id];
+    S.selLine=null;
+    const e=getEl(id);
+    tdrag={mode:ev.target.dataset.h||"body",id,x:ev.clientX,s:e.start,e:e.end};
+    userMoving=true;renderAll();return;
+  }
+  S.sel=[];S.selLine=null;
+  tdrag={mode:"pan",x:ev.clientX,vs:S.vs,ve:S.ve};userMoving=true;renderAll();
+});
+/* 全体帯の操作 */
+$("overview").addEventListener("mousedown",ev=>{
+  if(ev.button!==0)return;
+  const t=ev.target;
+  if(t.classList.contains("g")){odrag={mode:t.classList.contains("l")?"l":"r",x:ev.clientX,vs:S.vs,ve:S.ve};userMoving=true;return}
+  if(t.id==="ovwin"){odrag={mode:"move",x:ev.clientX,vs:S.vs,ve:S.ve};userMoving=true;return}
+  const r=$("overview").getBoundingClientRect(),c=(ev.clientX-r.left)/r.width*S.dur,w=S.ve-S.vs;
+  setRange(c-w/2,c+w/2);renderTimeline();
+});
+/* 共通 mousemove / mouseup */
+window.addEventListener("mousemove",ev=>{
+  if(!S.cur)return;
+  if(drag){
+    const p=vpos(ev),dx=(p[0]-drag.p[0])/drag.k,dy=(p[1]-drag.p[1])/drag.k;
+    drag.orig.forEach(o=>{const e=getEl(o.id);
+      if(drag.type==="move"){e.x=clamp(o.x+dx,0,VW-e.w);e.y=clamp(o.y+dy,0,VH-e.h)}
+      else{e.w=clamp(o.w+dx,20,VW-e.x);e.h=clamp(o.h+dy,16,VH-e.y)}});
+    markDirty();renderVideo();return;
+  }
+  if(dragHandle){
+    S.time=clamp(x2t(ev.clientX-$("ruler").getBoundingClientRect().left),0,S.dur);
+    if(S.playing)lastTs=performance.now();
+    renderVideo();renderPos();return;
+  }
+  if(rulerDrag){seekFromRuler(ev);return}
+  if(odrag){
+    const ow=$("overview").clientWidth,dt=(ev.clientX-odrag.x)/ow*S.dur;
+    if(odrag.mode==="move")setRange(odrag.vs+dt,odrag.ve+dt);
+    else if(odrag.mode==="l")setRange(clamp(odrag.vs+dt,0,odrag.ve-MINVIS),odrag.ve);
+    else setRange(odrag.vs,clamp(odrag.ve+dt,odrag.vs+MINVIS,S.dur));
+    renderTimeline();return;
+  }
+  if(tdrag){
+    const spp=(S.ve-S.vs)/tlW(),dt=(ev.clientX-tdrag.x)*spp;
+    if(tdrag.mode==="pan"){setRange(tdrag.vs-dt,tdrag.ve-dt);renderTimeline();return}
+    const e=getEl(tdrag.id),fine=(S.ve-S.vs)<S.dur*0.5?0.05:0.5,q=v=>Math.round(v/fine)*fine;
+    const r=$("lanes").getBoundingClientRect();
+    // 端までドラッグしたら表示範囲を自動移動
+    if(S.ve-S.vs<S.dur-1e-6){
+      const w=S.ve-S.vs;
+      if(ev.clientX>r.right-8)setRange(S.vs+w*.02,S.ve+w*.02);
+      else if(ev.clientX<r.left+8)setRange(S.vs-w*.02,S.ve-w*.02);
+    }
+    if(tdrag.mode==="body"){
+      const len=tdrag.e-tdrag.s,ns=clamp(q(tdrag.s+dt),0,S.dur-len);e.start=ns;e.end=ns+len;
+    }else if(tdrag.mode==="l")e.start=clamp(q(tdrag.s+dt),0,e.end-MINDUR);
+    else e.end=clamp(q(tdrag.e+dt),e.start+MINDUR,S.dur);
+    markDirty();renderVideo();renderTimeline();
+  }
+});
+window.addEventListener("mouseup",()=>{
+  drag=null;dragHandle=false;rulerDrag=false;tdrag=null;odrag=null;userMoving=false;
+});
+
+/* ---------- 右クリックメニュー ---------- */
+function closeMenu(){$("menu").style.display="none";$("menu").innerHTML=""}
+document.addEventListener("mousedown",ev=>{if(!ev.target.closest("#menu"))close
