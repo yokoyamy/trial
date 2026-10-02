@@ -1,1643 +1,235 @@
 <?php
-declare(strict_types=1);
-?>
-<!doctype html>
+?><!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>動画編集モック</title>
 <style>
-*{box-sizing:border-box}
-body{margin:0;background:#f3f5f8;color:#202733;font-family:Arial,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif}
-button,input,select{font:inherit}
-button{cursor:pointer}
-.hidden{display:none!important}
-
-.top{height:58px;background:#172033;color:#fff;display:flex;align-items:center;gap:12px;padding:0 18px}
-.top h1{margin:0;flex:1;font-size:17px}
-.top button{border:0;border-radius:6px;padding:8px 13px;background:#fff;color:#172033}
-.top .primary{background:#2563eb;color:#fff}
-
-#home{max-width:1100px;margin:auto;padding:24px}
-.panel{background:#fff;border:1px solid #d9dee7;border-radius:10px;padding:18px;margin-bottom:18px}
-.panel h2{font-size:16px;margin:0 0 14px}
-.video-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
-.video-card{border:1px solid #d9dee7;border-radius:8px;padding:14px;background:#fff}
-.video-card strong{display:block;margin-bottom:7px}
-.video-card small{display:block;color:#667085}
-.actions{display:flex;gap:7px;margin-top:12px}
-.actions button{border:1px solid #cfd5df;background:#fff;border-radius:5px;padding:6px 9px}
-.empty{color:#667085;padding:10px 0}
-
-#editor{display:none;height:calc(100vh - 58px);overflow:hidden}
-.editor-main{height:100%;display:flex;flex-direction:column;min-width:0}
-.stage-wrap{flex:1;min-height:320px;padding:14px;background:#252b36}
-.stage{position:relative;width:100%;height:100%;background:#111;overflow:hidden;border-radius:7px}
-.stage video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
-.overlay{position:absolute;inset:0;pointer-events:none}
-.el{position:absolute;pointer-events:auto;user-select:none;cursor:move}
-.el.selected{outline:2px solid #3b82f6;outline-offset:2px}
-.comment{padding:8px 11px;white-space:pre-wrap;min-width:100px}
-.zoom{border:2px solid #a855f7;background:rgba(168,85,247,.08)}
-.el .resize{position:absolute;right:-5px;bottom:-5px;width:10px;height:10px;background:#fff;border:2px solid #2563eb;border-radius:2px;cursor:nwse-resize}
-
-.line-layer{position:absolute;inset:0;width:100%;height:100%;z-index:8;overflow:visible;pointer-events:none}
-.line-group{pointer-events:none}
-.line-visible{fill:none;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
-.line-hit{fill:none;stroke:transparent;stroke-width:16;pointer-events:stroke;cursor:pointer}
-.line.selected .line-visible{filter:drop-shadow(0 0 3px #fff)}
-.temp-line{fill:none;stroke:#22c55e;stroke-width:3;stroke-dasharray:7 5;pointer-events:none}
-
-.connect-port{position:absolute;width:12px;height:12px;border:2px solid #fff;background:#22c55e;border-radius:50%;z-index:30;cursor:crosshair;display:none}
-.el.selected .connect-port{display:block}
-.connect-port.left{left:-6px;top:50%;margin-top:-6px}
-.connect-port.right{right:-6px;top:50%;margin-top:-6px}
-.connect-port.top{top:-6px;left:50%;margin-left:-6px}
-.connect-port.bottom{bottom:-6px;left:50%;margin-left:-6px}
-.el.connection-target{outline:3px dashed #38bdf8}
-
-.connecting{position:absolute;left:12px;top:12px;background:#f59e0b;color:#111;padding:7px 10px;border-radius:5px;font-size:12px;z-index:40}
-
-.bottom{height:285px;background:#fff;border-top:1px solid #ccd2dc;display:flex;flex-direction:column}
-.controls{height:48px;border-bottom:1px solid #e0e4ea;display:flex;align-items:center;gap:8px;padding:6px 10px}
-.controls button{border:1px solid #cbd2dc;background:#fff;border-radius:5px;padding:6px 10px}
-.controls .play{background:#2563eb;color:#fff;border-color:#2563eb}
-.time{font-variant-numeric:tabular-nums;min-width:105px}
-.scale{display:flex;align-items:center;gap:5px;margin-left:auto}
-.scale input{width:110px}
-
-.timeline-area{position:relative;flex:1;min-height:0;overflow:hidden}
-.timeline{position:absolute;inset:0}
-.ruler{height:30px;position:absolute;left:0;right:0;top:0;border-bottom:1px solid #d7dce4;background:#fafbfc}
-.tick{position:absolute;top:0;height:30px;border-left:1px solid #cfd5df;color:#667085;font-size:10px;padding-left:3px}
-.tracks{position:absolute;left:0;right:0;top:30px;bottom:0;overflow:hidden}
-.track-row{position:absolute;left:0;right:0;height:38px;border-bottom:1px solid #edf0f4}
-.track-label{position:absolute;left:7px;top:10px;width:72px;font-size:11px;color:#667085}
-.track-content{position:absolute;left:82px;right:0;top:0;bottom:0}
-.block{position:absolute;height:27px;top:5px;border-radius:4px;color:#fff;font-size:11px;padding:6px 13px;cursor:grab;overflow:hidden;white-space:nowrap}
-.block.selected{box-shadow:0 0 0 2px #2563eb inset}
-.block.comment{background:#2563eb}
-.block.highlight{background:#f97316}
-.block.zoom{background:#9333ea}
-.block.skip{background:#64748b}
-.handle{position:absolute;top:0;bottom:0;width:8px;cursor:ew-resize}
-.handle.l{left:0}.handle.r{right:0}
-.playhead{position:absolute;top:0;bottom:0;width:2px;background:#e11d48;z-index:30;pointer-events:none}
-.playhead:before{content:"";position:absolute;left:-5px;top:0;width:12px;height:12px;border-radius:50%;background:#e11d48}
-
-.context{position:fixed;display:none;z-index:1000;width:260px;max-height:80vh;overflow:auto;background:#fff;border:1px solid #cbd2dc;border-radius:7px;box-shadow:0 8px 28px #0003;padding:5px}
-.context button{display:block;width:100%;text-align:left;background:#fff;border:0;padding:8px 10px;border-radius:4px}
-.context button:hover{background:#eef4ff}
-.menu-title{font-size:11px;color:#667085;padding:6px 10px;border-bottom:1px solid #edf0f4}
-.menu-row{padding:7px 10px;font-size:12px}
-.menu-row label{display:block;margin-bottom:4px;color:#475467}
-.menu-row input[type=text],.menu-row input[type=number],.menu-row select{width:100%;padding:5px;border:1px solid #cbd2dc;border-radius:4px;background:#fff}
-.colors{display:flex;flex-wrap:wrap;gap:5px}
-.color{width:21px;height:21px;border-radius:4px;border:2px solid #fff;box-shadow:0 0 0 1px #b8bec8;cursor:pointer;padding:0}
-.color.active{outline:2px solid #111;outline-offset:1px}
-.sep{height:1px;background:#e7eaf0;margin:4px 0}
-
-.notice{position:fixed;right:15px;bottom:15px;background:#172033;color:#fff;border-radius:6px;padding:10px 14px;display:none;z-index:2000}
-.modal{position:fixed;inset:0;background:#0007;display:none;align-items:center;justify-content:center;z-index:1500}
-.modal-box{background:#fff;border-radius:9px;padding:20px;width:min(420px,90vw)}
-.modal-box h3{margin:0 0 14px}
-.modal-box input{width:100%;padding:8px;border:1px solid #cbd2dc;border-radius:5px}
-.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:15px}
-.modal-actions button{padding:7px 12px;border:1px solid #cbd2dc;background:#fff;border-radius:5px}
-.modal-actions .ok{background:#2563eb;color:#fff;border-color:#2563eb}
-
-@media(max-width:700px){
-  .bottom{height:300px}
-  .controls{flex-wrap:wrap;height:70px}
-  .scale{margin-left:0}
-}
+*{box-sizing:border-box}body{margin:0;background:#f3f4f6;color:#222;font:14px Arial,sans-serif}
+button,input,select{font:inherit}button{padding:7px 11px;border:1px solid #aaa;border-radius:4px;background:#fff;cursor:pointer}
+button.primary{background:#2563eb;color:#fff;border-color:#2563eb}button.danger{color:#b91c1c}
+.hidden{display:none!important}.wrap{max-width:1100px;margin:auto;padding:14px}
+.card{background:#fff;border:1px solid #d1d5db;border-radius:6px;padding:12px;margin-bottom:12px}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.grow{flex:1}.muted{color:#6b7280}
+.top{background:#1f2937;color:#fff;padding:9px 12px;border-radius:5px;margin-bottom:12px}
+.list{display:grid;gap:8px}.item{border:1px solid #d1d5db;padding:10px;border-radius:5px;background:#fff}
+.item .meta{color:#6b7280;font-size:12px;margin-top:3px}
+.videoBox{max-width:850px;margin:auto}.video{height:430px;background:#111;position:relative;overflow:hidden;user-select:none}
+.video>video{width:100%;height:100%;object-fit:contain;display:block;pointer-events:none}
+#layer{position:absolute;inset:0}#svg{position:absolute;inset:0;width:100%;height:100%;z-index:5;overflow:visible;pointer-events:none}
+.obj{position:absolute;z-index:10;cursor:grab;user-select:none}.obj.selected{outline:2px dashed #f59e0b}
+.obj.source{outline:3px solid #22c55e}.obj.target{outline:3px dashed #38bdf8}.obj:active{cursor:grabbing}
+.port{position:absolute;width:12px;height:12px;border-radius:50%;background:#16a34a;border:2px solid #fff;z-index:20;display:none}
+.obj.selected .port{display:block}.port.t{left:50%;top:-6px;transform:translateX(-50%)}.port.r{right:-6px;top:50%;transform:translateY(-50%)}
+.port.b{left:50%;bottom:-6px;transform:translateX(-50%)}.port.l{left:-6px;top:50%;transform:translateY(-50%)}
+.resize{position:absolute;right:-5px;bottom:-5px;width:12px;height:12px;background:#f59e0b;cursor:nwse-resize;z-index:25}
+.line{fill:none;stroke-linecap:round;stroke-linejoin:round}.lineHit{fill:none;stroke:transparent;stroke-width:18;pointer-events:stroke}
+.temp{fill:none;stroke:#22c55e;stroke-width:3;stroke-dasharray:6 5}
+.timeline{border:1px solid #9ca3af;border-radius:5px;background:#fff;overflow:hidden}
+.tViewport{height:245px;overflow-x:hidden;overflow-y:auto}.tInner{position:relative;min-width:100%;height:100%}
+.ruler{height:34px;border-bottom:1px solid #aaa;position:relative}.tick{position:absolute;top:0;height:100%;border-left:1px solid #aaa;padding:4px;font-size:10px}
+.lanes{position:relative;min-height:190px}.clip{position:absolute;height:28px;border-radius:4px;color:#fff;padding:6px 12px;white-space:nowrap;cursor:grab;font-size:11px;overflow:visible}
+.clip.selected{outline:2px solid #f59e0b}.clip.skip{background:#6b7280!important}.ch{position:absolute;top:0;bottom:0;width:8px;background:#ffffff77;cursor:ew-resize}.ch.l{left:0}.ch.r{right:0}
+.playhead{position:absolute;top:0;bottom:0;width:2px;background:#e11d48;z-index:30;pointer-events:none}.playhead:before{content:"";position:absolute;left:-5px;top:0;width:12px;height:12px;border-radius:50%;background:#e11d48}
+.scaleWrap{display:flex;align-items:center;gap:6px}.scaleWrap input{width:150px}
+.menu{position:fixed;z-index:1000;width:315px;max-height:80vh;overflow:auto;background:#fff;border:1px solid #aaa;border-radius:5px;box-shadow:0 6px 20px #0003;padding:12px}
+.menu h3{margin:0 0 8px;font-size:16px}.menu label{display:block;margin:8px 0}.menu input[type=text],.menu input[type=number],.menu select{width:100%;padding:5px}
+.choices{display:flex;gap:5px;flex-wrap:wrap;margin:5px 0}.choices button.active{background:#dbeafe;border-color:#2563eb}
+.colors{display:flex;gap:4px;flex-wrap:wrap}.color{width:22px;height:22px;padding:0}.color.active{outline:2px solid #2563eb}
+.sep{border:0;border-top:1px solid #ddd;margin:10px 0}.notice{background:#fef3c7;border:1px solid #f59e0b;border-radius:4px;padding:8px}
+.result{background:#ecfdf5;border:1px solid #22c55e;padding:8px;border-radius:4px;margin-top:8px}
 </style>
 </head>
 <body>
-
-<header class="top">
-  <h1 id="title">動画編集</h1>
-  <button id="backBtn">編集画面を終了</button>
-  <button id="saveBtn" class="primary">保存</button>
-  <button id="exportBtn">編集結果を動画にする</button>
-</header>
-
-<section id="home">
-  <div class="panel">
-    <h2>動画を選択</h2>
-    <input id="videoFile" type="file" accept="video/*">
-    <div id="videoList" class="video-list"></div>
-  </div>
-  <div class="panel">
-    <h2>保存済み編集作業</h2>
-    <div id="projectList" class="video-list"></div>
-  </div>
-  <div class="panel">
-    <h2>編集結果動画</h2>
-    <div id="resultList" class="video-list"></div>
-  </div>
-</section>
-
-<section id="editor">
-  <main class="editor-main">
-    <div class="stage-wrap">
-      <div id="stage" class="stage">
-        <video id="video" controls></video>
-        <svg id="lineLayer" class="line-layer"></svg>
-        <div id="overlay" class="overlay"></div>
-        <div id="connecting" class="connecting" style="display:none">
-          接続中：接続先の要素へドラッグしてください。
-        </div>
-      </div>
-    </div>
-
-    <div class="bottom">
-      <div class="controls">
-        <button id="playBtn" class="play">▶ 再生</button>
-        <button id="pauseBtn">Ⅱ 一時停止</button>
-        <span id="time" class="time">0:00 / 0:00</span>
-        <button id="zoomOut">－</button>
-        <button id="zoomIn">＋</button>
-        <div class="scale">
-          スケール
-          <input id="scale" type="range" min="50" max="200" value="100">
-        </div>
-      </div>
-
-      <div id="timelineArea" class="timeline-area">
-        <div id="timeline" class="timeline">
-          <div id="ruler" class="ruler"></div>
-          <div id="tracks" class="tracks"></div>
-          <div id="playhead" class="playhead"></div>
-        </div>
-      </div>
-    </div>
-  </main>
-</section>
-
-<div id="menu" class="context"></div>
-<div id="notice" class="notice"></div>
-
-<div id="modal" class="modal">
-  <div class="modal-box">
-    <h3 id="modalTitle"></h3>
-    <div id="modalBody"></div>
-    <div class="modal-actions">
-      <button id="modalCancel">キャンセル</button>
-      <button id="modalOk" class="ok">確定</button>
-    </div>
-  </div>
+<div id="home" class="wrap">
+<div class="card">
+<h2>動画編集</h2>
+<p class="muted">編集対象の動画を明示的に選択してください。</p>
+<div class="row"><button id="addVideo" class="primary">動画を追加</button><input id="videoFile" type="file" accept="video/*" class="hidden"></div>
 </div>
+<div class="card"><h3>動画一覧</h3><div id="videoList" class="list"></div></div>
+<div class="card"><h3>保存済み編集作業</h3><div id="workList" class="list"></div></div>
+<div class="card"><h3>編集結果動画</h3><div id="resultList" class="list"></div></div>
+</div>
+
+<div id="editor" class="wrap hidden">
+<div class="top row"><b id="title"></b><span class="grow"></span><span id="dirty" class="hidden">未保存</span><button id="save">保存</button><button id="output">編集結果を動画にする</button><button id="exit">編集作業を終了する</button></div>
+<div class="videoBox">
+<div id="video" class="video"></div>
+</div>
+<div class="card">
+<div class="row">
+<button id="play" class="primary">▶ 再生</button><button id="pause">⏸ 一時停止</button><button id="stop">■ 停止</button>
+<span id="time" class="muted"></span><span class="grow"></span>
+<div class="scaleWrap">タイムラインスケール <input id="scale" type="range" min="1" max="3" step=".1" value="1"><span id="scaleText">1.0x</span></div>
+</div>
+<p class="muted">動画領域またはタイムラインの空白部分を右クリックすると要素を追加できます。要素から別の要素へ接続点をドラッグすると接続線を作成できます。</p>
+</div>
+<div id="timeline" class="timeline"><div id="tViewport" class="tViewport"><div id="tInner" class="tInner"><div id="ruler" class="ruler"></div><div id="lanes" class="lanes"></div></div></div></div>
+</div>
+<div id="popup"></div>
 
 <script>
 "use strict";
-
-const $=id=>document.getElementById(id);
-
-const PALETTE=[
-  "#000000","#ffffff","#ef4444","#f97316","#f59e0b","#eab308",
-  "#84cc16","#22c55e","#14b8a6","#06b6d4","#3b82f6","#6366f1",
-  "#8b5cf6","#ec4899","#64748b","#92400e"
-];
-
-const state={
-  duration:60,
-  scale:1,
-  videoUrl:"",
-  videoName:"",
-  selected:new Set(),
-  contextId:null,
-  contextType:null,
-  connecting:null,
-  elements:[],
-  lines:[],
-  projects:JSON.parse(localStorage.getItem("mockProjects")||"[]"),
-  results:JSON.parse(localStorage.getItem("mockResults")||"[]"),
-  dirty:false,
-  nextId:1,
-  skipLock:false
-};
-
-function uid(prefix="e"){return prefix+(state.nextId++);}
-function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
-function esc(v){
-  return String(v).replace(/[&<>"']/g,c=>({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-  }[c]));
-}
-function fmt(t){
-  t=Math.max(0,Number(t)||0);
-  return Math.floor(t/60)+":"+String(Math.floor(t%60)).padStart(2,"0");
-}
-function active(id){return state.elements.find(e=>e.id===id);}
-function activeLine(id){return state.lines.find(l=>l.id===id);}
-
-function markDirty(){
-  state.dirty=true;
-  $("title").textContent="動画編集 *";
-}
-function toast(text){
-  $("notice").textContent=text;
-  $("notice").style.display="block";
-  clearTimeout(toast.timer);
-  toast.timer=setTimeout(()=>$("notice").style.display="none",1800);
-}
-
-function home(){
-  $("home").style.display="block";
-  $("editor").style.display="none";
-  hideMenu();
-  renderLists();
-}
-
-function openEditor(){
-  if(!state.videoUrl)return;
-  $("home").style.display="none";
-  $("editor").style.display="flex";
-  $("title").textContent=(state.videoName||"動画")+" - 編集";
-  render();
-}
-
-function renderLists(){
-  const list=$("videoList");
-  list.innerHTML="";
-
-  if(!state.videoUrl){
-    list.innerHTML="<div class='video-card'><strong>動画未選択</strong><small>上の「動画を選択」から動画ファイルを指定してください。</small></div>";
-  }else{
-    const card=document.createElement("div");
-    card.className="video-card";
-    card.innerHTML="<strong>"+esc(state.videoName)+"</strong><small>"+fmt(state.duration)+" / オリジナル動画</small><div class='actions'><button id='openCurrent'>編集する</button></div>";
-    list.appendChild(card);
-    $("openCurrent").onclick=openEditor;
-  }
-
-  $("projectList").innerHTML=state.projects.length
-    ?state.projects.map((p,i)=>`
-      <div class="video-card">
-        <strong>${esc(p.name)}</strong>
-        <small>${esc(p.videoName)} / ${esc(p.savedAt)}</small>
-        <div class="actions">
-          <button onclick="resumeProject(${i})">再開</button>
-          <button onclick="duplicateProject(${i})">複製</button>
-          <button onclick="deleteProject(${i})">削除</button>
-        </div>
-      </div>`).join("")
-    :"<div class='empty'>保存済み編集作業はありません。</div>";
-
-  $("resultList").innerHTML=state.results.length
-    ?state.results.map((r,i)=>`
-      <div class="video-card">
-        <strong>${esc(r.name)}</strong>
-        <small>編集結果動画 / 元動画: ${esc(r.videoName)}</small>
-        <div class="actions"><button onclick="useResult(${i})">編集対象にする</button></div>
-      </div>`).join("")
-    :"<div class='empty'>編集結果動画はありません。</div>";
-}
-
+const $=id=>document.getElementById(id), TYPES={comment:"コメント",highlight:"強調枠",zoom:"拡大枠",skip:"スキップ"};
+const COLORS=["#000000","#ffffff","#ef4444","#f97316","#eab308","#22c55e","#06b6d4","#3b82f6","#8b5cf6","#ec4899","#6b7280","#92400e"];
+let uid=1,state=null,playTimer=null,drag=null,connect=null;
+const id=p=>p+(uid++), clamp=(v,a,b)=>Math.max(a,Math.min(b,v)), fmt=v=>Math.floor(v/60)+":"+String(Math.floor(v%60)).padStart(2,"0");
+function mark(){state.dirty=true;$("dirty").classList.remove("hidden")}
+function clearPopup(){$("popup").innerHTML=""}
+function videoPoint(e){const r=$("video").getBoundingClientRect();return{x:clamp((e.clientX-r.left)/r.width,0,1),y:clamp((e.clientY-r.top)/r.height,0,1)}}
+function timePoint(e){const r=$("tInner").getBoundingClientRect();return clamp((e.clientX-r.left)/r.width,0,1)*state.dur}
+function selected(o){return state.sel.includes(o.id)}
+function object(idv){return state.objects.find(o=>o.id===idv)}
+function setPosition(t){state.pos=clamp(t,0,state.dur);state.video.currentTime=state.pos;render()}
+$("addVideo").onclick=()=>$("videoFile").click();
 $("videoFile").onchange=e=>{
-  const f=e.target.files[0];
-  if(!f)return;
-
-  const url=URL.createObjectURL(f);
-  const probe=document.createElement("video");
-  probe.preload="metadata";
-
-  probe.onloadedmetadata=()=>{
-    state.videoUrl=url;
-    state.videoName=f.name;
-    state.duration=probe.duration||60;
-    state.elements=[];
-    state.lines=[];
-    state.selected.clear();
-    state.dirty=false;
-
-    $("video").src=url;
-    $("video").onloadedmetadata=()=>{
-      state.duration=$("video").duration||state.duration;
-      home();
-      toast("動画を選択しました");
-    };
-    $("video").load();
-  };
-
-  probe.onerror=()=>toast("動画の読み込みに失敗しました。");
-  probe.src=url;
+ const f=e.target.files[0];if(!f)return;
+ const v=document.createElement("video");v.preload="metadata";v.src=URL.createObjectURL(f);
+ v.onloadedmetadata=()=>{const item={id:id("v"),name:f.name,url:v.src,dur:v.duration};const videos=JSON.parse(localStorage.videos||"[]");if(videos.length>=10){alert("オリジナル動画は10件までです。既存動画を削除してください。");return}videos.push(item);localStorage.videos=JSON.stringify(videos);renderHome()};
 };
-
-$("playBtn").onclick=()=>{
-  if(!$("video").src)return;
-  $("video").play();
-};
-
-$("pauseBtn").onclick=()=>$("video").pause();
-
-$("video").ontimeupdate=()=>{
-  skipIfNeeded();
-  updatePosition();
-};
-
-$("video").onended=()=>{
-  state.skipLock=false;
-  updatePosition();
-};
-
-function skipIfNeeded(){
-  const v=$("video");
-  if(v.paused||v.ended||state.skipLock)return;
-
-  const skip=state.elements
-    .filter(e=>e.type==="skip")
-    .find(e=>v.currentTime>=e.start && v.currentTime<e.end);
-
-  if(!skip)return;
-
-  const next=Math.min(skip.end+0.001,state.duration);
-
-  state.skipLock=true;
-
-  if(next>=state.duration){
-    v.currentTime=Math.max(0,state.duration-0.001);
-    state.skipLock=false;
-    return;
-  }
-
-  v.currentTime=next;
-
-  requestAnimationFrame(()=>{
-    state.skipLock=false;
-    if(!v.paused&&!v.ended)v.play().catch(()=>{});
-  });
+function renderHome(){
+ const videos=JSON.parse(localStorage.videos||"[]"),works=JSON.parse(localStorage.works||"[]"),results=JSON.parse(localStorage.results||"[]");
+ $("videoList").innerHTML=videos.length?videos.map(v=>`<div class="item"><b>${v.name}</b><div class="meta">${fmt(v.dur)}　オリジナル動画</div><div class="row" style="margin-top:6px"><button data-open="${v.id}">新しい編集作業</button><button class="danger" data-delv="${v.id}">削除</button></div></div>`).join(""):"<div class=\"muted\">動画はありません。</div>";
+ $("workList").innerHTML=works.length?works.map(w=>`<div class="item"><b>${w.name}</b><div class="meta">${w.videoName}　${w.saved}</div><div class="row" style="margin-top:6px"><button data-work="${w.id}">再開</button><button data-copy="${w.id}">複製</button><button class="danger" data-delw="${w.id}">削除</button></div></div>`).join(""):"<div class=\"muted\">保存済み編集作業はありません。</div>";
+ $("resultList").innerHTML=results.length?results.map(r=>`<div class="item"><b>${r.name}</b><div class="meta">${r.source}</div><div class="row" style="margin-top:6px"><button data-result="${r.id}">確認</button><button class="danger" data-delr="${r.id}">削除</button></div></div>`).join(""):"<div class=\"muted\">編集結果動画はありません。</div>";
+ document.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>startNew(b.dataset.open));
+ document.querySelectorAll("[data-work]").forEach(b=>b.onclick=()=>resumeWork(b.dataset.work));
+ document.querySelectorAll("[data-copy]").forEach(b=>b.onclick=()=>copyWork(b.dataset.copy));
+ document.querySelectorAll("[data-delv]").forEach(b=>b.onclick=()=>deleteVideo(b.dataset.delv));
+ document.querySelectorAll("[data-delw]").forEach(b=>b.onclick=()=>deleteWork(b.dataset.delw));
+ document.querySelectorAll("[data-delr]").forEach(b=>b.onclick=()=>deleteResult(b.dataset.delr));
+ document.querySelectorAll("[data-result]").forEach(b=>b.onclick=()=>previewResult(b.dataset.result));
 }
-
-function updatePosition(){
-  const v=$("video");
-  const dur=Math.max(0,state.duration);
-  $("time").textContent=fmt(v.currentTime)+" / "+fmt(dur);
-
-  const area=$("timelineArea");
-  if(area){
-    const w=area.clientWidth||1;
-    const x=dur?(v.currentTime/dur)*w:0;
-    $("playhead").style.left=x+"px";
-  }
-
-  renderVideo();
-  renderTimeline();
+function startNew(vid){const v=JSON.parse(localStorage.videos||"[]").find(x=>x.id===vid);if(v)openEditor(v,{id:null,name:"新しい編集作業",objects:[],lines:[]})}
+function resumeWork(wid){const w=JSON.parse(localStorage.works||"[]").find(x=>x.id===wid);const v=JSON.parse(localStorage.videos||"[]").find(x=>x.id===w.videoId);if(v)openEditor(v,w)}
+function copyWork(wid){const ws=JSON.parse(localStorage.works||"[]"),w=ws.find(x=>x.id===wid);if(!w)return;w.id=id("w");w.name=w.name+" のコピー";w.saved=new Date().toLocaleString("ja-JP");ws.push(w);if(ws.length>10){alert("編集作業は10件までです。");ws.pop();return}localStorage.works=JSON.stringify(ws);renderHome()}
+function deleteVideo(vid){if(!confirm("この動画を削除しますか？"))return;const ws=JSON.parse(localStorage.works||"[]");if(ws.some(w=>w.videoId===vid)&&!confirm("関連する編集作業があります。影響を確認したうえで削除しますか？"))return;localStorage.videos=JSON.stringify(JSON.parse(localStorage.videos||"[]").filter(v=>v.id!==vid));renderHome()}
+function deleteWork(wid){if(!confirm("この編集作業を削除しますか？"))return;localStorage.works=JSON.stringify(JSON.parse(localStorage.works||"[]").filter(w=>w.id!==wid));renderHome()}
+function deleteResult(rid){if(!confirm("この編集結果動画を削除しますか？"))return;localStorage.results=JSON.stringify(JSON.parse(localStorage.results||"[]").filter(r=>r.id!==rid));renderHome()}
+function previewResult(rid){const r=JSON.parse(localStorage.results||"[]").find(x=>x.id===rid);if(r&&r.url){const w=window.open("");w.document.write(`<video controls autoplay style="max-width:100%" src="${r.url}"></video>`)}else alert("このモックでは結果動画の実ファイル生成は行いません。")}
+function openEditor(v,w){
+ state={videoId:v.id,name:w.name,dur:v.dur,url:v.url,objects:w.objects||[],lines:w.lines||[],sel:[],line:null,pos:0,scale:1,dirty:false,workId:w.id};
+ $("home").classList.add("hidden");$("editor").classList.remove("hidden");$("title").textContent=v.name+" ／ "+w.name;
+ $("video").innerHTML="<video preload=\"auto\"></video><div id=\"layer\"><svg id=\"svg\"></svg></div>";state.video=$("video").querySelector("video");state.video.src=v.url;
+ state.video.onended=()=>{stopPlay();state.pos=state.dur;render()};state.video.ontimeupdate=()=>{if(!state.video.seeking){state.pos=state.video.currentTime;renderTimelineOnly()}};
+ render();
 }
-
-$("scale").oninput=e=>{
-  state.scale=Number(e.target.value)/100;
-  renderTimeline();
-};
-
-$("zoomIn").onclick=()=>{
-  $("scale").value=Math.min(200,Number($("scale").value)+10);
-  $("scale").oninput();
-};
-
-$("zoomOut").onclick=()=>{
-  $("scale").value=Math.max(50,Number($("scale").value)-10);
-  $("scale").oninput();
-};
-
-function render(){
-  if(!$("stage")||!$("timelineArea"))return;
-  renderVideo();
-  renderLines();
-  renderTimeline();
-  updatePositionOnly();
+function closeEditor(){stopPlay();state=null;$("editor").classList.add("hidden");$("home").classList.remove("hidden");renderHome()}
+function render(){renderObjects();renderLines();renderTimeline();updateTime()}
+function updateTime(){$("time").textContent=fmt(state.pos)+" / "+fmt(state.dur)}
+function renderObjects(){
+ const layer=$("layer"),svg=$("svg");Array.from(layer.children).forEach(x=>{if(x!==svg)x.remove()});
+ state.objects.forEach(o=>{
+  if(o.type==="skip"||state.pos<o.s||state.pos>o.e)return;
+  const d=document.createElement("div");d.className="obj"+(selected(o)?" selected":"")+(connect&&connect.from===o.id?" source":"")+(connect&&connect.target===o.id?" target":"");d.dataset.id=o.id;
+  d.style.left=o.x*100+"%";d.style.top=o.y*100+"%";d.style.width=o.w*100+"%";d.style.height=o.h*100+"%";
+  if(o.type==="comment"){d.textContent=o.a.text;d.style.color=o.a.textColor;d.style.fontSize=o.a.size+"px";d.style.fontFamily=o.a.font;d.style.background=o.a.fill?o.a.bg:"transparent";d.style.border=o.a.border?`${o.a.borderWidth}px solid ${o.a.borderColor}`:"none";d.style.padding="5px"}
+  if(o.type==="highlight"){d.style.border=`${o.a.width}px ${o.a.style} ${o.a.color}`;d.style.background=o.a.fill?o.a.fillColor:"transparent"}
+  if(o.type==="zoom"){d.style.border="2px solid #059669";d.style.background="#05966922";d.innerHTML=`<span style="background:#059669;color:#fff;padding:2px 5px">${o.a.zoom}倍</span>`}
+  if(selected(o)){["t","r","b","l"].forEach(s=>{const p=document.createElement("i");p.className="port "+s;p.dataset.port=s;d.appendChild(p)});const r=document.createElement("i");r.className="resize";d.appendChild(r)}
+  layer.appendChild(d);
+ });
 }
-
-function updatePositionOnly(){
-  const v=$("video");
-  $("time").textContent=fmt(v.currentTime)+" / "+fmt(state.duration);
-  const area=$("timelineArea");
-  const w=area?area.clientWidth:1;
-  $("playhead").style.left=(state.duration?v.currentTime/state.duration*w:0)+"px";
+function anchor(o,s){if(s==="t")return{x:o.x+o.w/2,y:o.y};if(s==="r")return{x:o.x+o.w,y:o.y+o.h/2};if(s==="b")return{x:o.x+o.w/2,y:o.y+o.h};return{x:o.x,y:o.y+o.h/2}}
+function side(o,p){const a={t:Math.abs(p.y-o.y),r:Math.abs(p.x-o.x-o.w),b:Math.abs(p.y-o.y-o.h),l:Math.abs(p.x-o.x)};return Object.keys(a).sort((x,y)=>a[x]-a[y])[0]}
+function blocked(a,b,skip){return state.objects.filter(o=>o.id!==skip.from&&o.id!==skip.to&&o.type!=="skip").some(o=>Math.max(a.x,b.x)>=o.x-.01&&Math.min(a.x,b.x)<=o.x+o.w+.01&&Math.max(a.y,b.y)>=o.y-.01&&Math.min(a.y,b.y)<=o.y+o.h+.01)}
+function pathFor(l){
+ const a=object(l.from),b=object(l.to);if(!a||!b)return"";const p=anchor(a,l.fs),q=anchor(b,l.ts);
+ if(l.shape==="直線")return`M${p.x*100} ${p.y*100} L${q.x*100} ${q.y*100}`;
+ if(l.shape==="波線"){let d=`M${p.x*100} ${p.y*100}`,dx=q.x-p.x,dy=q.y-p.y,len=Math.hypot(dx,dy)||1,nx=-dy/len*.018,ny=dx/len*.018;for(let i=1;i<=24;i++){const t=i/24,o=i%2?1:-1;d+=` L${(p.x+dx*t+nx*o)*100} ${(p.y+dy*t+ny*o)*100}`}return d}
+ const mx=(p.x+q.x)/2,my=(p.y+q.y)/2,c=[[p,{x:mx,y:p.y},{x:mx,y:q.y},q],[p,{x:p.x,y:my},{x:q.x,y:my},q]],best=c.find(v=>v.slice(0,-1).every((x,i)=>!blocked(x,v[i+1],l)))||c[0];
+ return best.map((x,i)=>(i?"L":"M")+x.x*100+" "+x.y*100).join(" ");
 }
-
-function renderVideo(){
-  const overlay=$("overlay");
-  overlay.innerHTML="";
-
-  const v=$("video");
-  const now=v.currentTime||0;
-
-  state.elements
-    .filter(e=>e.type!=="skip"&&now>=e.start&&now<=e.end)
-    .forEach(e=>{
-      const d=document.createElement("div");
-      d.className="el "+e.type+(state.selected.has(e.id)?" selected":"");
-      d.dataset.id=e.id;
-      d.style.left=e.x+"%";
-      d.style.top=e.y+"%";
-      d.style.width=e.w+"%";
-      d.style.height=e.h+"%";
-
-      if(state.connecting&&state.connecting.from!==e.id){
-        d.classList.add("connection-target");
-      }
-
-      if(e.type==="comment"){
-        d.classList.add("comment");
-        d.textContent=e.text;
-        d.style.color=e.textColor;
-        d.style.background=e.fill?e.bg:"transparent";
-        d.style.border=e.border
-          ?e.borderWidth+"px "+e.borderStyle+" "+e.borderColor
-          :"none";
-        d.style.fontSize=e.fontSize+"px";
-        d.style.fontFamily=e.font;
-      }
-
-      if(e.type==="highlight"){
-        d.style.border=e.borderWidth+"px "+e.borderStyle+" "+e.borderColor;
-        d.style.background=e.fill?e.fillColor:"transparent";
-      }
-
-      if(e.type==="zoom"){
-        d.style.border="2px solid #a855f7";
-        d.style.background="rgba(168,85,247,.08)";
-        d.innerHTML="<span style='background:#9333ea;color:#fff;padding:3px 5px;font-size:11px'>拡大枠</span>";
-      }
-
-      if(state.selected.has(e.id)){
-        ["left","right","top","bottom"].forEach(side=>{
-          const p=document.createElement("i");
-          p.className="connect-port "+side;
-          p.dataset.port=side;
-          p.onpointerdown=ev=>startConnection(ev,e,side);
-          d.appendChild(p);
-        });
-
-        const resize=document.createElement("i");
-        resize.className="resize";
-        resize.onpointerdown=ev=>startResize(ev,e);
-        d.appendChild(resize);
-      }
-
-      d.onpointerdown=ev=>{
-        if(ev.target.classList.contains("resize")||
-           ev.target.classList.contains("connect-port"))return;
-        startMove(ev,e);
-      };
-
-      d.onclick=ev=>{
-        ev.stopPropagation();
-        if(state.connecting){
-          finishConnection(e);
-          return;
-        }
-        select(e.id,ev.shiftKey);
-      };
-
-      d.oncontextmenu=ev=>{
-        ev.preventDefault();
-        ev.stopPropagation();
-        select(e.id,false);
-        showMenu(ev.clientX,ev.clientY,e.id,e.type);
-      };
-
-      overlay.appendChild(d);
-    });
-
-  renderLines();
-}
-
-function anchor(e,side,W,H){
-  const x=e.x/100*W;
-  const y=e.y/100*H;
-  const w=e.w/100*W;
-  const h=e.h/100*H;
-
-  if(side==="left")return{x:x,y:y+h/2};
-  if(side==="top")return{x:x+w/2,y:y};
-  if(side==="bottom")return{x:x+w/2,y:y+h};
-  return{x:x+w,y:y+h/2};
-}
-
-function rectOf(e,W,H){
-  return{
-    x:e.x/100*W,
-    y:e.y/100*H,
-    w:e.w/100*W,
-    h:e.h/100*H
-  };
-}
-
-function intersects(a,b){
-  return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
-}
-
-function route(line,a,b,W,H){
-  if(line.shape==="straight")return[a,b];
-
-  const others=state.elements
-    .filter(e=>e.id!==line.from&&e.id!==line.to&&e.type!=="skip")
-    .map(e=>rectOf(e,W,H));
-
-  if(line.shape==="elbow"){
-    const candidates=[
-      [a,{x:b.x,y:a.y},b],
-      [a,{x:a.x,y:b.y},b],
-      [a,{x:(a.x+b.x)/2,y:a.y},{x:(a.x+b.x)/2,y:b.y},b],
-      [a,{x:a.x,y:(a.y+b.y)/2},{x:b.x,y:(a.y+b.y)/2},b]
-    ];
-
-    for(const points of candidates){
-      let blocked=false;
-      for(let i=0;i<points.length-1&&!blocked;i++){
-        const p=points[i],q=points[i+1];
-        const box={
-          x:Math.min(p.x,q.x)-8,
-          y:Math.min(p.y,q.y)-8,
-          w:Math.abs(q.x-p.x)+16,
-          h:Math.abs(q.y-p.y)+16
-        };
-        if(others.some(o=>intersects(box,o)))blocked=true;
-      }
-      if(!blocked)return points;
-    }
-
-    return candidates[0];
-  }
-
-  const points=[a];
-  const dx=b.x-a.x;
-  const dy=b.y-a.y;
-
-  for(let i=1;i<8;i++){
-    const t=i/8;
-    points.push({
-      x:a.x+dx*t,
-      y:a.y+dy*t+Math.sin(t*Math.PI*4)*14
-    });
-  }
-
-  points.push(b);
-  return points;
-}
-
-function pathD(points,shape){
-  if(shape==="wavy"){
-    let d="M "+points[0].x+" "+points[0].y;
-
-    for(let i=1;i<points.length;i++){
-      const a=points[i-1],b=points[i];
-      const dx=b.x-a.x,dy=b.y-a.y;
-      const len=Math.hypot(dx,dy)||1;
-      const nx=-dy/len*6,ny=dx/len*6;
-
-      d+=" C "+
-        (a.x+dx/3+nx)+" "+(a.y+dy/3+ny)+" "+
-        (a.x+dx*2/3-nx)+" "+(a.y+dy*2/3-ny)+" "+
-        b.x+" "+b.y;
-    }
-
-    return d;
-  }
-
-  return points.map((p,i)=>
-    (i?"L ":"M ")+p.x+" "+p.y
-  ).join(" ");
-}
-
-function markerId(kind,color){
-  return "mk_"+kind+"_"+color.replace("#","");
-}
-
 function renderLines(){
-  const svg=$("lineLayer");
-  if(!svg)return;
-
-  svg.replaceChildren();
-
-  const W=$("stage").clientWidth||1;
-  const H=$("stage").clientHeight||1;
-
-  svg.setAttribute("viewBox","0 0 "+W+" "+H);
-  svg.setAttribute("preserveAspectRatio","none");
-
-  const defs=document.createElementNS("http://www.w3.org/2000/svg","defs");
-
-  ["arrow","circle"].forEach(kind=>{
-    PALETTE.forEach(color=>{
-      const marker=document.createElementNS("http://www.w3.org/2000/svg","marker");
-      marker.id=markerId(kind,color);
-      marker.setAttribute("markerWidth","8");
-      marker.setAttribute("markerHeight","8");
-      marker.setAttribute("refX",kind==="arrow"?"7":"4");
-      marker.setAttribute("refY","4");
-      marker.setAttribute("orient","auto");
-      marker.setAttribute("markerUnits","userSpaceOnUse");
-
-      if(kind==="arrow"){
-        const p=document.createElementNS("http://www.w3.org/2000/svg","path");
-        p.setAttribute("d","M0,0 L8,4 L0,8 Z");
-        p.setAttribute("fill",color);
-        marker.appendChild(p);
-      }else{
-        const c=document.createElementNS("http://www.w3.org/2000/svg","circle");
-        c.setAttribute("cx","4");
-        c.setAttribute("cy","4");
-        c.setAttribute("r","3");
-        c.setAttribute("fill",color);
-        marker.appendChild(c);
-      }
-
-      defs.appendChild(marker);
-    });
-  });
-
-  svg.appendChild(defs);
-
-  state.lines.forEach(line=>{
-    const a=active(line.from);
-    const b=active(line.to);
-    if(!a||!b)return;
-
-    const p1=anchor(a,line.fromSide||"right",W,H);
-    const p2=anchor(b,line.toSide||"left",W,H);
-    const points=route(line,p1,p2,W,H);
-    const d=pathD(points,line.shape);
-
-    const g=document.createElementNS("http://www.w3.org/2000/svg","g");
-    g.classList.add("line-group");
-    g.dataset.line=line.id;
-
-    if(state.selected.has(line.id))g.classList.add("line","selected");
-    else g.classList.add("line");
-
-    const visible=document.createElementNS("http://www.w3.org/2000/svg","path");
-    visible.classList.add("line-visible");
-    visible.setAttribute("d",d);
-    visible.setAttribute("stroke",line.color);
-    visible.setAttribute("stroke-width",line.width);
-
-    if(line.dash)visible.setAttribute("stroke-dasharray",line.dash);
-
-    if(line.end!=="none"){
-      visible.setAttribute(
-        "marker-end",
-        "url(#"+markerId(line.end,line.color)+")"
-      );
-    }
-
-    const hit=document.createElementNS("http://www.w3.org/2000/svg","path");
-    hit.classList.add("line-hit");
-    hit.setAttribute("d",d);
-    hit.dataset.line=line.id;
-
-    hit.onpointerdown=ev=>{
-      ev.stopPropagation();
-      selectLine(line.id,ev.shiftKey);
-    };
-
-    hit.oncontextmenu=ev=>{
-      ev.preventDefault();
-      ev.stopPropagation();
-      selectLine(line.id,false);
-      showMenu(ev.clientX,ev.clientY,line.id,"line");
-    };
-
-    g.appendChild(visible);
-    g.appendChild(hit);
-    svg.appendChild(g);
-  });
-
-  if(state.connecting){
-    const p=state.connecting.start;
-    const q=state.connecting.current;
-    const temp=document.createElementNS("http://www.w3.org/2000/svg","path");
-    temp.classList.add("temp-line");
-    temp.setAttribute("d","M "+p.x+" "+p.y+" L "+q.x+" "+q.y);
-    svg.appendChild(temp);
-  }
+ const svg=$("svg");while(svg.firstChild)svg.firstChild.remove();
+ state.lines.forEach(l=>{
+  const d=pathFor(l),g=document.createElementNS("http://www.w3.org/2000/svg","g"),hit=document.createElementNS("http://www.w3.org/2000/svg","path"),p=document.createElementNS("http://www.w3.org/2000/svg","path");
+  hit.setAttribute("d",d);hit.classList.add("lineHit");hit.dataset.line=l.id;p.setAttribute("d",d);p.setAttribute("stroke",l.color);p.setAttribute("stroke-width",l.width);p.setAttribute("stroke-dasharray",l.dash);p.classList.add("line");if(state.line===l.id)p.setAttribute("stroke","#f59e0b");
+  if(l.end==="arrow"){const m=document.createElementNS("http://www.w3.org/2000/svg","marker"),idv="a"+l.id;m.id=idv;m.setAttribute("viewBox","0 0 10 10");m.setAttribute("refX","9");m.setAttribute("refY","5");m.setAttribute("markerWidth","6");m.setAttribute("markerHeight","6");m.setAttribute("orient","auto");const z=document.createElementNS("http://www.w3.org/2000/svg","path");z.setAttribute("d","M0 0L10 5L0 10Z");z.setAttribute("fill",l.color);m.appendChild(z);const defs=document.createElementNS("http://www.w3.org/2000/svg","defs");defs.appendChild(m);g.appendChild(defs);p.setAttribute("marker-end",`url(#${idv})`)}
+  g.appendChild(hit);g.appendChild(p);svg.appendChild(g);
+ });
+ if(connect){const p=document.createElementNS("http://www.w3.org/2000/svg","path");p.classList.add("temp");p.setAttribute("d",`M${connect.start.x*100} ${connect.start.y*100} L${connect.cur.x*100} ${connect.cur.y*100}`);svg.appendChild(p)}
 }
-
+function renderTimelineOnly(){const ph=document.querySelector(".playhead");if(ph)ph.style.left=state.pos/state.dur*100+"%";updateTime()}
 function renderTimeline(){
-  const area=$("timelineArea");
-  if(!area)return;
-
-  const width=area.clientWidth||1;
-  const dur=Math.max(1,state.duration);
-
-  $("ruler").innerHTML="";
-  const step=dur<=30?5:dur<=120?10:dur<=300?30:60;
-
-  for(let t=0;t<=dur;t+=step){
-    const tick=document.createElement("div");
-    tick.className="tick";
-    tick.style.left=(t/dur*width)+"px";
-    tick.textContent=fmt(t);
-    $("ruler").appendChild(tick);
-  }
-
-  const sorted=state.elements
-    .slice()
-    .sort((a,b)=>a.start-b.start);
-
-  const rows=[];
-
-  sorted.forEach(e=>{
-    let row=0;
-    while(rows[row]&&rows[row].some(x=>x.start<e.end&&x.end>e.start))row++;
-    if(!rows[row])rows[row]=[];
-    rows[row].push(e);
-    e._row=row;
-  });
-
-  $("tracks").innerHTML="";
-  $("tracks").style.height=Math.max(38,rows.length*38)+"px";
-
-  rows.forEach((_,i)=>{
-    const row=document.createElement("div");
-    row.className="track-row";
-    row.style.top=(i*38)+"px";
-    row.innerHTML="<div class='track-label'>トラック "+(i+1)+"</div><div class='track-content'></div>";
-    $("tracks").appendChild(row);
-  });
-
-  sorted.forEach(e=>{
-    const row=$("tracks").children[e._row];
-    if(!row)return;
-
-    const content=row.querySelector(".track-content");
-    const b=document.createElement("div");
-
-    b.className="block "+e.type+(state.selected.has(e.id)?" selected":"");
-    b.dataset.id=e.id;
-
-    const left=e.start/dur*width;
-    const w=Math.max(12,(e.end-e.start)/dur*width);
-
-    b.style.left=left+"px";
-    b.style.width=w+"px";
-    b.textContent=
-      e.type==="comment"?e.text:
-      e.type==="highlight"?"強調枠":
-      e.type==="zoom"?"拡大枠":"スキップ";
-
-    b.onpointerdown=ev=>startBlock(ev,e);
-    b.onclick=ev=>{
-      ev.stopPropagation();
-      select(e.id,ev.shiftKey);
-    };
-    b.oncontextmenu=ev=>{
-      ev.preventDefault();
-      ev.stopPropagation();
-      select(e.id,false);
-      showMenu(ev.clientX,ev.clientY,e.id,e.type);
-    };
-
-    const l=document.createElement("i");
-    const r=document.createElement("i");
-    l.className="handle l";
-    r.className="handle r";
-
-    l.onpointerdown=ev=>startTimeResize(ev,e,"start");
-    r.onpointerdown=ev=>startTimeResize(ev,e,"end");
-
-    b.append(l,r);
-    content.appendChild(b);
-  });
+ const vp=$("tViewport"),inner=$("tInner"),w=vp.clientWidth||700;inner.style.width="100%";const ruler=$("ruler"),lanes=$("lanes");
+ ruler.innerHTML="";const step=state.dur<=30?5:state.dur<=120?10:state.dur<=300?30:60;
+ for(let t=0;t<=state.dur;t+=step){const x=document.createElement("i");x.className="tick";x.style.left=t/state.dur*100+"%";x.textContent=fmt(t);ruler.appendChild(x)}
+ const rows=[];lanes.innerHTML="";
+ state.objects.forEach(o=>{let row=0;while(rows[row]!=null&&rows[row]>o.s)row++;rows[row]=o.e;const c=document.createElement("div");c.className="clip"+(selected(o)?" selected":"")+(o.type==="skip"?" skip":"");c.dataset.id=o.id;c.style.left=o.s/state.dur*100+"%";c.style.width=Math.max((o.e-o.s)/state.dur*100,.8)+"%";c.style.top=8+row*32+"px";c.style.background=o.type==="skip"?"#6b7280":o.type==="comment"?"#2563eb":o.type==="highlight"?"#dc2626":"#059669";c.textContent=TYPES[o.type]+" "+fmt(o.s)+"-"+fmt(o.e);const l=document.createElement("i"),r=document.createElement("i");l.className="ch l";r.className="ch r";c.prepend(l);c.appendChild(r);lanes.appendChild(c)});
+ const ph=document.createElement("div");ph.className="playhead";ph.style.left=state.pos/state.dur*100+"%";lanes.appendChild(ph);
+ $("scaleText").textContent=state.scale.toFixed(1)+"x";
 }
-
-function select(id,multi=false){
-  if(!multi)state.selected.clear();
-  state.selected.add(id);
-  hideMenu();
-  render();
+function addObject(type,t,p){
+ const s=clamp(t,0,Math.max(0,state.dur-5)),o={id:id("e"),type,s,e:Math.min(state.dur,s+5),x:clamp(p.x-.16,0,.68),y:clamp(p.y-.1,0,.7),w:.32,h:.2,a:{}};
+ if(type==="comment")o.a={text:"コメント",border:true,borderWidth:2,borderColor:"#2563eb",textColor:"#000",fill:true,bg:"#fff",size:18,font:"Arial"};
+ if(type==="highlight")o.a={width:3,color:"#ef4444",fill:true,fillColor:"#ef444455",style:"solid",shape:"直線"};
+ if(type==="zoom")o.a={zoom:1.5};state.objects.push(o);state.sel=[o.id];state.line=null;mark();clearPopup();render();
 }
-
-function selectLine(id,multi=false){
-  select(id,multi);
+function addMenu(x,y,t,p){menu(x,y,`<h3>要素を追加</h3><div class="muted">開始位置 ${fmt(t)}</div><div class="choices"><button data-add="comment">コメント</button><button data-add="highlight">強調枠</button><button data-add="zoom">拡大枠</button><button data-add="skip">スキップ</button></div>`);document.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>addObject(b.dataset.add,t,p))}
+function menu(x,y,html){clearPopup();$("popup").innerHTML=`<div class="menu">${html}</div>`;const m=$("popup").firstElementChild;m.style.left=Math.min(x,innerWidth-m.offsetWidth-8)+"px";m.style.top=Math.min(y,innerHeight-m.offsetHeight-8)+"px"}
+function colorButtons(prop,current){return COLORS.map(c=>`<button class="color ${c===current?"active":""}" data-cprop="${prop}" data-c="${c}" style="background:${c}"></button>`).join("")}
+function elementMenu(x,y,o){
+ let h=`<h3>${TYPES[o.type]}</h3>`;
+ if(o.type==="comment")h+=`<label>本文<input id="text" type="text" value="${o.a.text.replace(/"/g,"&quot;")}"></label><label>文字サイズ<input id="size" type="number" min="8" max="72" value="${o.a.size}"></label><label>フォント<select id="font"><option>Arial</option><option>serif</option><option>sans-serif</option><option>monospace</option></select></label><label>線<input id="border" type="checkbox" ${o.a.border?"checked":""}></label><label>塗り潰し<input id="fill" type="checkbox" ${o.a.fill?"checked":""}></label><div>文字色</div><div class="colors">${colorButtons("textColor",o.a.textColor)}</div><div>線色</div><div class="colors">${colorButtons("borderColor",o.a.borderColor)}</div><div>背景色</div><div class="colors">${colorButtons("bg",o.a.bg)}</div>`;
+ if(o.type==="highlight")h+=`<div>線の太さ</div><div class="choices">${[2,3,5,8].map(v=>`<button data-width="${v}">${v}px</button>`).join("")}</div><div>線種</div><div class="choices">${[["solid","実線"],["dotted","点線"],["dashed","破線"],["dashdot","一点鎖線"]].map(v=>`<button data-hstyle="${v[0]}">${v[1]}</button>`).join("")}</div><div>線形</div><div class="choices">${["直線","折れ線","波線"].map(v=>`<button data-hshape="${v}">${v}</button>`).join("")}</div><label>塗り潰し<input id="hfill" type="checkbox" ${o.a.fill?"checked":""}></label><label>塗り潰し色<input id="hcolor" type="color" value="${o.a.fillColor.substring(0,7)}"></label><div>線色</div><div class="colors">${colorButtons("color",o.a.color)}</div>`;
+ if(o.type==="zoom")h+=`<label>拡大倍率<select id="zoom"><option value="1.25">1.25倍</option><option value="1.5">1.5倍</option><option value="2">2倍</option><option value="3">3倍</option></select></label>`;
+ if(o.type==="skip")h+=`<div class="notice">スキップは動画領域には表示されません。</div>`;
+ h+=`<hr class="sep"><button id="del" class="danger">この要素を削除</button>`;
+ menu(x,y,h);
+ $("text")?.addEventListener("input",e=>{o.a.text=e.target.value;mark();render()});$("size")?.addEventListener("change",e=>{o.a.size=+e.target.value;mark();render()});$("font")?.addEventListener("change",e=>{o.a.font=e.target.value;mark();render()});$("border")?.addEventListener("change",e=>{o.a.border=e.target.checked;mark();render()});$("fill")?.addEventListener("change",e=>{o.a.fill=e.target.checked;mark();render()});$("hfill")?.addEventListener("change",e=>{o.a.fill=e.target.checked;mark();render()});$("hcolor")?.addEventListener("input",e=>{o.a.fillColor=e.target.value+"55";mark();render()});$("zoom")?.addEventListener("change",e=>{o.a.zoom=+e.target.value;mark();render()});
+ document.querySelectorAll("[data-cprop]").forEach(b=>b.onclick=()=>{o.a[b.dataset.cprop]=b.dataset.c;mark();render();elementMenu(x,y,o)});
+ document.querySelectorAll("[data-width]").forEach(b=>b.onclick=()=>{o.a.width=+b.dataset.width;mark();render();elementMenu(x,y,o)});
+ document.querySelectorAll("[data-hstyle]").forEach(b=>b.onclick=()=>{o.a.style=b.dataset.hstyle;mark();render();elementMenu(x,y,o)});
+ document.querySelectorAll("[data-hshape]").forEach(b=>b.onclick=()=>{o.a.shape=b.dataset.hshape;mark();render();elementMenu(x,y,o)});
+ $("del").onclick=()=>{state.objects=state.objects.filter(v=>v.id!==o.id);state.lines=state.lines.filter(l=>l.from!==o.id&&l.to!==o.id);state.sel=state.sel.filter(v=>v!==o.id);state.line=null;mark();clearPopup();render()};
 }
-
-$("stage").onclick=()=>{
-  state.selected.clear();
-  cancelConnection();
-  hideMenu();
-  render();
-};
-
-$("timelineArea").onclick=ev=>{
-  if(ev.target.closest(".block"))return;
-  seekFromTimeline(ev.clientX);
-};
-
-function seekFromTimeline(clientX){
-  const r=$("timelineArea").getBoundingClientRect();
-  const t=clamp(
-    (clientX-r.left)/Math.max(1,r.width)*state.duration,
-    0,
-    state.duration
-  );
-  $("video").currentTime=t;
-  updatePositionOnly();
+function lineMenu(x,y,l){
+ const sides=[["t","上"],["r","右"],["b","下"],["l","左"]];
+ menu(x,y,`<h3>接続線</h3><div>線形</div><div class="choices">${["直線","折れ線","波線"].map(v=>`<button data-shape="${v}">${v}</button>`).join("")}</div><div>線種</div><div class="choices">${[["","実線"],["2 5","点線"],["8 5","破線"],["10 5 2 5","一点鎖線"]].map(v=>`<button data-dash="${v[0]}">${v[1]}</button>`).join("")}</div><label>太さ<select id="lw"><option>2</option><option>3</option><option>5</option></select></label><div>接続元</div><div class="choices">${sides.map(v=>`<button data-fs="${v[0]}">${v[1]}</button>`).join("")}</div><div>接続先</div><div class="choices">${sides.map(v=>`<button data-ts="${v[0]}">${v[1]}</button>`).join("")}</div><label>終端<select id="end"><option value="none">なし</option><option value="arrow">矢印</option></select></label><div>色</div><div class="colors">${colorButtons("color",l.color)}</div><hr class="sep"><button id="dell" class="danger">接続線を削除</button>`);
+ document.querySelectorAll("[data-shape]").forEach(b=>b.onclick=()=>{l.shape=b.dataset.shape;mark();render();lineMenu(x,y,l)});document.querySelectorAll("[data-dash]").forEach(b=>b.onclick=()=>{l.dash=b.dataset.dash;mark();render();lineMenu(x,y,l)});document.querySelectorAll("[data-fs]").forEach(b=>b.onclick=()=>{l.fs=b.dataset.fs;mark();render();lineMenu(x,y,l)});document.querySelectorAll("[data-ts]").forEach(b=>b.onclick=()=>{l.ts=b.dataset.ts;mark();render();lineMenu(x,y,l)});document.querySelectorAll("[data-cprop]").forEach(b=>b.onclick=()=>{l[b.dataset.cprop]=b.dataset.c;mark();render();lineMenu(x,y,l)});$("lw").onchange=e=>{l.width=+e.target.value;mark();render()};$("end").onchange=e=>{l.end=e.target.value;mark();render()};$("dell").onclick=()=>{state.lines=state.lines.filter(v=>v.id!==l.id);state.line=null;mark();clearPopup();render()};
 }
-
-function startMove(ev,e){
-  if(ev.button!==0)return;
-  if(ev.target.classList.contains("resize")||
-     ev.target.classList.contains("connect-port"))return;
-
-  if(state.connecting){
-    finishConnection(e);
-    return;
-  }
-
-  select(e.id,ev.shiftKey);
-
-  const rect=$("stage").getBoundingClientRect();
-  const sx=ev.clientX,sy=ev.clientY;
-  const ox=e.x,oy=e.y;
-
-  const move=mv=>{
-    e.x=clamp(
-      ox+(mv.clientX-sx)/Math.max(1,rect.width)*100,
-      0,
-      100-e.w
-    );
-    e.y=clamp(
-      oy+(mv.clientY-sy)/Math.max(1,rect.height)*100,
-      0,
-      100-e.h
-    );
-    markDirty();
-    render();
-  };
-
-  const up=()=>{
-    document.removeEventListener("pointermove",move);
-    document.removeEventListener("pointerup",up);
-  };
-
-  document.addEventListener("pointermove",move);
-  document.addEventListener("pointerup",up);
-}
-
-function startResize(ev,e){
-  ev.stopPropagation();
-
-  const rect=$("stage").getBoundingClientRect();
-  const sx=ev.clientX,sy=ev.clientY;
-  const ow=e.w,oh=e.h;
-
-  const move=mv=>{
-    e.w=clamp(
-      ow+(mv.clientX-sx)/Math.max(1,rect.width)*100,
-      5,
-      100-e.x
-    );
-    e.h=clamp(
-      oh+(mv.clientY-sy)/Math.max(1,rect.height)*100,
-      5,
-      100-e.y
-    );
-    markDirty();
-    render();
-  };
-
-  const up=()=>{
-    document.removeEventListener("pointermove",move);
-    document.removeEventListener("pointerup",up);
-  };
-
-  document.addEventListener("pointermove",move);
-  document.addEventListener("pointerup",up);
-}
-
-function startConnection(ev,e,side){
-  ev.stopPropagation();
-  ev.preventDefault();
-
-  const r=$("stage").getBoundingClientRect();
-  const p=anchor(e,side,r.width,r.height);
-
-  state.connecting={
-    from:e.id,
-    fromSide:side,
-    start:p,
-    current:p
-  };
-
-  $("connecting").style.display="block";
-
-  const move=mv=>{
-    state.connecting.current={
-      x:clamp(mv.clientX-r.left,0,r.width),
-      y:clamp(mv.clientY-r.top,0,r.height)
-    };
-    renderLines();
-  };
-
-  const up=mv=>{
-    const target=mv.target.closest(".el");
-
-    if(target){
-      const id=target.dataset.id;
-      if(id&&id!==e.id){
-        finishConnection(active(id));
-      }else{
-        cancelConnection();
-      }
-    }else{
-      cancelConnection();
-    }
-
-    document.removeEventListener("pointermove",move);
-    document.removeEventListener("pointerup",up);
-  };
-
-  document.addEventListener("pointermove",move);
-  document.addEventListener("pointerup",up);
-}
-
-function finishConnection(target){
-  if(!state.connecting||!target)return;
-
-  if(target.id===state.connecting.from){
-    cancelConnection();
-    return;
-  }
-
-  createLine(
-    state.connecting.from,
-    target.id,
-    state.connecting.fromSide
-  );
-
-  cancelConnection();
-  render();
-}
-
-function cancelConnection(){
-  state.connecting=null;
-  $("connecting").style.display="none";
-}
-
-function startBlock(ev,e){
-  if(ev.target.classList.contains("handle"))return;
-  ev.stopPropagation();
-
-  select(e.id,ev.shiftKey);
-
-  const r=$("timelineArea").getBoundingClientRect();
-  const sx=ev.clientX;
-  const os=e.start;
-  const oe=e.end;
-  const len=oe-os;
-
-  const move=mv=>{
-    const dt=(mv.clientX-sx)/Math.max(1,r.width)*state.duration;
-    e.start=clamp(os+dt,0,state.duration-len);
-    e.end=e.start+len;
-    markDirty();
-    renderTimeline();
-    renderVideo();
-  };
-
-  const up=()=>{
-    document.removeEventListener("pointermove",move);
-    document.removeEventListener("pointerup",up);
-  };
-
-  document.addEventListener("pointermove",move);
-  document.addEventListener("pointerup",up);
-}
-
-function startTimeResize(ev,e,which){
-  ev.stopPropagation();
-
-  const r=$("timelineArea").getBoundingClientRect();
-  const sx=ev.clientX;
-  const os=e.start;
-  const oe=e.end;
-
-  const move=mv=>{
-    const dt=(mv.clientX-sx)/Math.max(1,r.width)*state.duration;
-
-    if(which==="start"){
-      e.start=clamp(os+dt,0,e.end-.1);
-    }else{
-      e.end=clamp(oe+dt,e.start+.1,state.duration);
-    }
-
-    markDirty();
-    renderTimeline();
-    renderVideo();
-  };
-
-  const up=()=>{
-    document.removeEventListener("pointermove",move);
-    document.removeEventListener("pointerup",up);
-  };
-
-  document.addEventListener("pointermove",move);
-  document.addEventListener("pointerup",up);
-}
-
-function createElement(type){
-  const now=clamp($("video").currentTime||0,0,state.duration);
-  const end=Math.min(state.duration,now+8);
-
-  const e={
-    id:uid(),
-    type,
-    start:now,
-    end:Math.max(now+.5,end),
-    x:12,
-    y:15,
-    w:type==="comment"?28:25,
-    h:type==="comment"?15:25
-  };
-
-  if(type==="comment"){
-    Object.assign(e,{
-      text:"コメント",
-      border:true,
-      borderWidth:2,
-      borderStyle:"solid",
-      borderColor:"#2563eb",
-      textColor:"#111827",
-      bg:"#ffffff",
-      fill:true,
-      fontSize:18,
-      font:"Arial"
-    });
-  }
-
-  if(type==="highlight"){
-    Object.assign(e,{
-      borderWidth:3,
-      borderStyle:"solid",
-      borderColor:"#ef4444",
-      fill:true,
-      fillColor:"#fecaca"
-    });
-  }
-
-  if(type==="skip"){
-    e.x=0;e.y=0;e.w=0;e.h=0;
-  }
-
-  state.elements.push(e);
-  state.selected.clear();
-  state.selected.add(e.id);
-  markDirty();
-  hideMenu();
-  render();
-}
-
-function createLine(from,to,fromSide="right"){
-  if(!from||!to||from===to)return;
-  if(state.lines.some(l=>l.from===from&&l.to===to))return;
-
-  state.lines.push({
-    id:uid("l"),
-    from,
-    to,
-    shape:"straight",
-    dash:"",
-    width:3,
-    color:"#111827",
-    end:"none",
-    fromSide,
-    toSide:"left"
-  });
-
-  markDirty();
-  toast("接続線を作成しました");
-}
-
-$("stage").addEventListener("contextmenu",ev=>{
-  if(ev.target.closest(".el"))return;
-  ev.preventDefault();
-  showAddMenu(ev.clientX,ev.clientY);
+$("video").addEventListener("contextmenu",e=>{
+ e.preventDefault();const line=e.target.closest("[data-line]"),obj=e.target.closest(".obj");if(line){state.sel=[];state.line=line.dataset.line;render();lineMenu(e.clientX,e.clientY,objectLine(line.dataset.line));return}
+ if(obj){const o=object(obj.dataset.id);state.sel=[o.id];state.line=null;render();elementMenu(e.clientX,e.clientY,o);return}addMenu(e.clientX,e.clientY,state.pos,videoPoint(e));
 });
-
-$("timelineArea").addEventListener("contextmenu",ev=>{
-  if(ev.target.closest(".block"))return;
-  ev.preventDefault();
-  showAddMenu(ev.clientX,ev.clientY);
+function objectLine(idv){return state.lines.find(l=>l.id===idv)}
+$("video").addEventListener("pointerdown",e=>{
+ if(e.button!==0)return;const port=e.target.closest(".port");
+ if(port){const o=object(e.target.closest(".obj").dataset.id);connect={from:o.id,start:anchor(o,port.dataset.port),cur:anchor(o,port.dataset.port),target:null};const move=ev=>{connect.cur=videoPoint(ev);const n=document.elementsFromPoint(ev.clientX,ev.clientY).find(x=>x.classList?.contains("obj"));connect.target=n&&n.dataset.id!==o.id?object(n.dataset.id):null;renderLines()};const up=ev=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",up);if(connect?.target){const t=connect.target;state.lines.push({id:id("l"),from:o.id,to:t.id,fs:port.dataset.port,ts:side(t,connect.cur),shape:"直線",dash:"",width:3,color:"#2563eb",end:"none"});state.sel=[];state.line=state.lines[state.lines.length-1].id;mark()}connect=null;render()};window.addEventListener("pointermove",move);window.addEventListener("pointerup",up);return}
+ const resize=e.target.closest(".resize"),n=e.target.closest(".obj");if(!n)return;
+ const o=object(n.dataset.id);state.sel=e.shiftKey?(state.sel.includes(o.id)?state.sel.filter(v=>v!==o.id):[...state.sel,o.id]):[o.id];state.line=null;render();
+ if(resize){resizeObject(o,e);return}moveObject(o,e);
 });
-
-function showAddMenu(x,y){
-  const m=$("menu");
-
-  m.innerHTML=
-    "<div class='menu-title'>ここへ追加</div>"+
-    ["comment:コメント","highlight:強調枠","zoom:拡大枠","skip:スキップ"]
-      .map(v=>{
-        const [a,b]=v.split(":");
-        return "<button data-add='"+a+"'>"+b+"</button>";
-      }).join("");
-
-  m.querySelectorAll("[data-add]").forEach(b=>{
-    b.onclick=()=>createElement(b.dataset.add);
-  });
-
-  positionMenu(x,y);
-}
-
-function showMenu(x,y,id,type){
-  const m=$("menu");
-  const e=active(id);
-  const l=activeLine(id);
-
-  let html="<div class='menu-title'>"+label(type)+"</div>";
-
-  if(type==="line")html+=lineMenu(l);
-  else if(type==="comment")html+=commentMenu(e);
-  else if(type==="highlight")html+=highlightMenu(e);
-  else if(type==="zoom")html+=zoomMenu(e);
-  else if(type==="skip")html+=skipMenu(e);
-
-  html+="<div class='sep'></div>";
-
-  if(type!=="line"&&type!=="skip"){
-    html+="<button id='connectBtn'>この要素から接続</button>";
-  }
-
-  html+="<button id='deleteBtn'>削除</button>";
-
-  m.innerHTML=html;
-  bindMenu(type,id);
-  positionMenu(x,y);
-}
-
-function label(t){
-  return{
-    comment:"コメント",
-    highlight:"強調枠",
-    zoom:"拡大枠",
-    skip:"スキップ",
-    line:"接続線"
-  }[t]||t;
-}
-
-function commentMenu(e){
-  return `
-    <div class="menu-row">
-      <label>本文</label>
-      <input id="mText" type="text" value="${esc(e.text)}">
-    </div>
-    <div class="menu-row">
-      <label>線</label>
-      <select id="mBorder">
-        <option value="1" ${e.border?"selected":""}>あり</option>
-        <option value="0" ${!e.border?"selected":""}>なし</option>
-      </select>
-    </div>
-    <div class="menu-row">
-      <label>線種</label>
-      <select id="mBorderStyle">${styles(e.borderStyle)}</select>
-    </div>
-    <div class="menu-row">
-      <label>線の太さ</label>
-      <select id="mBorderWidth">
-        ${[1,2,3,4].map(v=>`<option ${e.borderWidth===v?"selected":""}>${v}</option>`).join("")}
-      </select>
-    </div>
-    <div class="menu-row">
-      <label>文字色</label>
-      <div class="colors">${palette("mTextColor",e.textColor)}</div>
-    </div>
-    <div class="menu-row">
-      <label>背景色</label>
-      <div class="colors">${palette("mBg",e.bg)}</div>
-    </div>
-    <div class="menu-row">
-      <label>塗り潰し</label>
-      <select id="mFill">
-        <option value="1" ${e.fill?"selected":""}>あり</option>
-        <option value="0" ${!e.fill?"selected":""}>なし</option>
-      </select>
-    </div>`;
-}
-
-function highlightMenu(e){
-  return `
-    <div class="menu-row">
-      <label>線種</label>
-      <select id="mBorderStyle">${styles(e.borderStyle)}</select>
-    </div>
-    <div class="menu-row">
-      <label>線の太さ</label>
-      <select id="mBorderWidth">
-        ${[1,2,3,4,6].map(v=>`<option ${e.borderWidth===v?"selected":""}>${v}</option>`).join("")}
-      </select>
-    </div>
-    <div class="menu-row">
-      <label>線色</label>
-      <div class="colors">${palette("mBorderColor",e.borderColor)}</div>
-    </div>
-    <div class="menu-row">
-      <label>塗り潰し色</label>
-      <div class="colors">${palette("mFillColor",e.fillColor)}</div>
-    </div>
-    <div class="menu-row">
-      <label>塗り潰し</label>
-      <select id="mFill">
-        <option value="1" ${e.fill?"selected":""}>あり</option>
-        <option value="0" ${!e.fill?"selected":""}>なし</option>
-      </select>
-    </div>`;
-}
-
-function zoomMenu(){
-  return `<div class="menu-row">指定範囲を拡大表示する枠です。</div>`;
-}
-
-function skipMenu(e){
-  return `
-    <div class="menu-row">
-      <label>開始</label>
-      <input id="mStart" type="number" min="0" max="${state.duration}" step=".1" value="${e.start.toFixed(1)}">
-    </div>
-    <div class="menu-row">
-      <label>終了</label>
-      <input id="mEnd" type="number" min="0" max="${state.duration}" step=".1" value="${e.end.toFixed(1)}">
-    </div>`;
-}
-
-function lineMenu(l){
-  return `
-    <div class="menu-row">
-      <label>線形</label>
-      <select id="mShape">
-        <option value="straight" ${l.shape==="straight"?"selected":""}>直線</option>
-        <option value="elbow" ${l.shape==="elbow"?"selected":""}>折れ線</option>
-        <option value="wavy" ${l.shape==="wavy"?"selected":""}>波線</option>
-      </select>
-    </div>
-    <div class="menu-row">
-      <label>線種</label>
-      <select id="mDash">
-        <option value="" ${!l.dash?"selected":""}>実線</option>
-        <option value="2 5" ${l.dash==="2 5"?"selected":""}>点線</option>
-        <option value="9 5" ${l.dash==="9 5"?"selected":""}>破線</option>
-        <option value="12 5 2 5" ${l.dash==="12 5 2 5"?"selected":""}>一点鎖線</option>
-      </select>
-    </div>
-    <div class="menu-row">
-      <label>太さ</label>
-      <select id="mWidth">
-        ${[2,3,4,6].map(v=>`<option ${l.width===v?"selected":""}>${v}</option>`).join("")}
-      </select>
-    </div>
-    <div class="menu-row">
-      <label>色</label>
-      <div class="colors">${palette("mLineColor",l.color)}</div>
-    </div>
-    <div class="menu-row">
-      <label>終端</label>
-      <select id="mEnd">
-        <option value="none" ${l.end==="none"?"selected":""}>なし</option>
-        <option value="arrow" ${l.end==="arrow"?"selected":""}>矢印</option>
-        <option value="circle" ${l.end==="circle"?"selected":""}>丸</option>
-      </select>
-    </div>
-    <div class="menu-row">
-      <label>始点位置</label>
-      <select id="mFromSide">${sides(l.fromSide)}</select>
-    </div>
-    <div class="menu-row">
-      <label>終点位置</label>
-      <select id="mToSide">${sides(l.toSide)}</select>
-    </div>`;
-}
-
-function styles(v){
-  return[
-    ["solid","実線"],
-    ["dotted","点線"],
-    ["dashed","破線"],
-    ["dashdot","一点鎖線"]
-  ].map(x=>`<option value="${x[0]}" ${v===x[0]?"selected":""}>${x[1]}</option>`).join("");
-}
-
-function sides(v){
-  return[
-    ["left","左"],
-    ["right","右"],
-    ["top","上"],
-    ["bottom","下"]
-  ].map(x=>`<option value="${x[0]}" ${v===x[0]?"selected":""}>${x[1]}</option>`).join("");
-}
-
-function palette(id,current){
-  return PALETTE.map(c=>`
-    <button
-      type="button"
-      class="color ${current===c?"active":""}"
-      data-color="${id}"
-      data-value="${c}"
-      style="background:${c}"
-      title="${c}">
-    </button>`).join("");
-}
-
-function bindMenu(type,id){
-  const e=active(id);
-  const l=activeLine(id);
-
-  $("menu").querySelectorAll("[data-color]").forEach(b=>{
-    b.onclick=()=>{
-      const key=b.dataset.color;
-      const value=b.dataset.value;
-
-      if(type==="highlight"){
-        if(key==="mBorderColor")e.borderColor=value;
-        if(key==="mFillColor")e.fillColor=value;
-      }
-
-      if(type==="comment"){
-        if(key==="mTextColor")e.textColor=value;
-        if(key==="mBg")e.bg=value;
-      }
-
-      if(type==="line"&&key==="mLineColor")l.color=value;
-
-      markDirty();
-      showMenu($("menu").offsetLeft,$("menu").offsetTop,id,type);
-      render();
-    };
-  });
-
-  const set=(idn,fn)=>{
-    const x=$(idn);
-    if(!x)return;
-    x.oninput=x.onchange=()=>{
-      fn(x.value);
-      markDirty();
-      render();
-    };
-  };
-
-  if(type==="comment"){
-    set("mText",v=>e.text=v);
-    set("mBorder",v=>e.border=v==="1");
-    set("mBorderStyle",v=>e.borderStyle=v);
-    set("mBorderWidth",v=>e.borderWidth=Number(v));
-    set("mFill",v=>e.fill=v==="1");
-  }
-
-  if(type==="highlight"){
-    set("mBorderStyle",v=>e.borderStyle=v);
-    set("mBorderWidth",v=>e.borderWidth=Number(v));
-    set("mFill",v=>e.fill=v==="1");
-  }
-
-  if(type==="skip"){
-    set("mStart",v=>{
-      e.start=clamp(Number(v)||0,0,e.end-.1);
-    });
-    set("mEnd",v=>{
-      e.end=clamp(Number(v)||0,e.start+.1,state.duration);
-    });
-  }
-
-  if(type==="line"){
-    set("mShape",v=>l.shape=v);
-    set("mDash",v=>l.dash=v);
-    set("mWidth",v=>l.width=Number(v));
-    set("mEnd",v=>l.end=v);
-    set("mFromSide",v=>l.fromSide=v);
-    set("mToSide",v=>l.toSide=v);
-  }
-
-  const connect=$("connectBtn");
-  if(connect){
-    connect.onclick=()=>{
-      if(!e)return;
-      state.connecting={
-        from:e.id,
-        fromSide:"right",
-        start:anchor(
-          e,
-          "right",
-          $("stage").clientWidth||1,
-          $("stage").clientHeight||1
-        ),
-        current:anchor(
-          e,
-          "right",
-          $("stage").clientWidth||1,
-          $("stage").clientHeight||1
-        )
-      };
-      $("connecting").style.display="block";
-      hideMenu();
-      render();
-      toast("接続先の要素へドラッグしてください");
-    };
-  }
-
-  $("deleteBtn").onclick=()=>removeSelected();
-}
-
-function positionMenu(x,y){
-  const m=$("menu");
-  m.style.display="block";
-
-  requestAnimationFrame(()=>{
-    const mw=m.offsetWidth||260;
-    const mh=m.offsetHeight||200;
-    m.style.left=Math.max(8,Math.min(x,innerWidth-mw-8))+"px";
-    m.style.top=Math.max(8,Math.min(y,innerHeight-mh-8))+"px";
-  });
-}
-
-function hideMenu(){
-  $("menu").style.display="none";
-}
-
-document.addEventListener("pointerdown",ev=>{
-  if(!$("menu").contains(ev.target))hideMenu();
+function moveObject(o,e){const r=$("video").getBoundingClientRect(),sx=e.clientX,sy=e.clientY,ox=o.x,oy=o.y;const mv=ev=>{o.x=clamp(ox+(ev.clientX-sx)/r.width,0,1-o.w);o.y=clamp(oy+(ev.clientY-sy)/r.height,0,1-o.h);mark();render()};const up=()=>{window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up)};window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up)}
+function resizeObject(o,e){const r=$("video").getBoundingClientRect(),sx=e.clientX,sy=e.clientY,ow=o.w,oh=o.h;const mv=ev=>{o.w=clamp(ow+(ev.clientX-sx)/r.width,.05,1-o.x);o.h=clamp(oh+(ev.clientY-sy)/r.height,.05,1-o.y);mark();render()};const up=()=>{window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up)};window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up)}
+$("lanes").addEventListener("pointerdown",e=>{
+ const c=e.target.closest(".clip");if(!c){timelineSeek(e);return}const o=object(c.dataset.id);state.sel=e.shiftKey?(state.sel.includes(o.id)?state.sel.filter(v=>v!==o.id):[...state.sel,o.id]):[o.id];state.line=null;render();
+ const h=e.target.closest(".ch");if(h){resizeTime(o,h.classList.contains("l"),e);return}moveTime(o,e);
 });
-
-function removeSelected(){
-  const ids=[...state.selected];
-  if(!ids.length)return;
-
-  state.elements=state.elements.filter(e=>!ids.includes(e.id));
-  state.lines=state.lines.filter(l=>
-    !ids.includes(l.from)&&
-    !ids.includes(l.to)&&
-    !ids.includes(l.id)
-  );
-
-  state.selected.clear();
-  cancelConnection();
-  markDirty();
-  hideMenu();
-  render();
-}
-
-function saveProject(name){
-  if(state.projects.length>=10){
-    toast("保存できる編集作業は10件までです。既存データを削除してください。");
-    return;
-  }
-
-  state.projects.push({
-    name,
-    videoName:state.videoName,
-    savedAt:new Date().toLocaleString("ja-JP"),
-    duration:state.duration,
-    elements:JSON.parse(JSON.stringify(state.elements)),
-    lines:JSON.parse(JSON.stringify(state.lines))
-  });
-
-  localStorage.setItem("mockProjects",JSON.stringify(state.projects));
-  state.dirty=false;
-  $("title").textContent=(state.videoName||"動画")+" - 編集";
-  toast("保存しました");
-  renderLists();
-}
-
-$("saveBtn").onclick=()=>{
-  if(!state.videoUrl)return;
-
-  showModal(
-    "編集作業を保存",
-    "<input id='projectName' value='新しい編集作業'>",
-    ()=>{
-      const name=$("projectName").value.trim()||"編集作業";
-      saveProject(name);
-    }
-  );
+function timelineSeek(e){const r=$("tInner").getBoundingClientRect();setPosition(clamp((e.clientX-r.left)/r.width,0,1)*state.dur);const mv=ev=>{const q=$("tInner").getBoundingClientRect();setPosition(clamp((ev.clientX-q.left)/q.width,0,1)*state.dur)};const up=()=>{window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up)};window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up)}
+function moveTime(o,e){const r=$("tInner").getBoundingClientRect(),sx=e.clientX,os=o.s,oe=o.e,d=oe-os;const mv=ev=>{const dt=(ev.clientX-sx)/r.width*state.dur;o.s=clamp(os+dt,0,state.dur-d);o.e=o.s+d;mark();render()};const up=()=>{window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up)};window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up)}
+function resizeTime(o,left,e){const r=$("tInner").getBoundingClientRect(),sx=e.clientX,os=o.s,oe=o.e;const mv=ev=>{const dt=(ev.clientX-sx)/r.width*state.dur;if(left)o.s=clamp(os+dt,0,oe-.1);else o.e=clamp(oe+dt,o.s+.1,state.dur);mark();render()};const up=()=>{window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up)};window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up)}
+$("timeline").addEventListener("contextmenu",e=>{e.preventDefault();const c=e.target.closest(".clip");if(c){const o=object(c.dataset.id);state.sel=[o.id];state.line=null;render();elementMenu(e.clientX,e.clientY,o)}else addMenu(e.clientX,e.clientY,timePoint(e),{x:.25,y:.25})});
+$("ruler").addEventListener("pointerdown",timelineSeek);
+$("scale").oninput=e=>{state.scale=+e.target.value;const vp=$("tViewport"),old=vp.scrollLeft,center=old+vp.clientWidth/2;renderTimeline();vp.scrollLeft=center*state.scale/state.scale-center*0+old;};
+$("play").onclick=()=>{if(playTimer)return;state.video.currentTime=state.pos;state.video.play();playTimer=setInterval(()=>{state.pos=state.video.currentTime;const s=state.objects.find(o=>o.type==="skip"&&state.pos>=o.s&&state.pos<o.e);if(s){state.pos=s.e;state.video.currentTime=s.e}renderTimelineOnly()},50)};
+$("pause").onclick=()=>stopPlay();
+$("stop").onclick=()=>{stopPlay();state.video.pause();state.pos=0;state.video.currentTime=0;render()};
+function stopPlay(){if(playTimer){clearInterval(playTimer);playTimer=null}if(state?.video)state.video.pause()}
+$("save").onclick=()=>{
+ const ws=JSON.parse(localStorage.works||"[]"),name=state.workId?(ws.find(w=>w.id===state.workId)||{}).name:prompt("編集作業名を入力してください","編集作業");
+ if(name===null||name===undefined)return;
+ const data={id:state.workId||id("w"),name,videoId:state.videoId,videoName:$("title").textContent.split(" ／ ")[0],saved:new Date().toLocaleString("ja-JP"),objects:state.objects,lines:state.lines};
+ const i=ws.findIndex(w=>w.id===data.id);if(i<0&&ws.length>=10){alert("編集作業は10件までです。既存編集作業を削除してください。");return}if(i<0)ws.push(data);else ws[i]=data;localStorage.works=JSON.stringify(ws);state.workId=data.id;state.dirty=false;$("dirty").classList.add("hidden");$("title").textContent=data.videoName+" ／ "+data.name;alert("保存しました。");
 };
-
-$("backBtn").onclick=()=>{
-  if(!state.dirty){
-    home();
-    return;
-  }
-
-  showModal(
-    "未保存の変更があります",
-    "保存して終了しますか？",
-    ()=>{
-      saveProject("編集作業");
-      home();
-    },
-    "保存して終了",
-    "破棄して終了",
-    ()=>{
-      state.dirty=false;
-      home();
-    }
-  );
-};
-
-$("exportBtn").onclick=()=>{
-  if(!state.videoUrl)return;
-
-  if(state.results.length>=10){
-    toast("編集結果動画は10件までです。");
-    return;
-  }
-
-  showModal(
-    "編集結果を動画にする",
-    "現在の編集内容を使って編集結果動画を作成します。",
-    ()=>{
-      state.results.push({
-        name:"編集結果 "+(state.results.length+1),
-        videoName:state.videoName,
-        createdAt:new Date().toLocaleString("ja-JP")
-      });
-
-      localStorage.setItem("mockResults",JSON.stringify(state.results));
-      toast("編集結果動画を作成しました（モック）");
-      renderLists();
-    },
-    "作成"
-  );
-};
-
-function showModal(title,body,ok,okText="確定",cancelText="キャンセル",alt){
-  $("modalTitle").textContent=title;
-  $("modalBody").innerHTML=body;
-  $("modalOk").textContent=okText;
-  $("modalCancel").textContent=cancelText;
-  $("modal").style.display="flex";
-
-  $("modalOk").onclick=()=>{
-    closeModal();
-    if(ok)ok();
-  };
-
-  $("modalCancel").onclick=()=>{
-    closeModal();
-    if(alt)alt();
-  };
-}
-
-function closeModal(){
-  $("modal").style.display="none";
-}
-
-function resumeProject(i){
-  const p=state.projects[i];
-  if(!p)return;
-
-  if(!state.videoUrl){
-    toast("元動画ファイルをもう一度選択してください");
-    return;
-  }
-
-  state.videoName=p.videoName;
-  state.duration=p.duration;
-  state.elements=JSON.parse(JSON.stringify(p.elements||[]));
-  state.lines=JSON.parse(JSON.stringify(p.lines||[]));
-  state.selected.clear();
-  state.dirty=false;
-
-  $("video").load();
-  openEditor();
-}
-
-function deleteProject(i){
-  if(!confirm("この編集作業を削除しますか？"))return;
-
-  state.projects.splice(i,1);
-  localStorage.setItem("mockProjects",JSON.stringify(state.projects));
-  renderLists();
-}
-
-function duplicateProject(i){
-  if(state.projects.length>=10){
-    toast("編集作業は10件までです。");
-    return;
-  }
-
-  const p=JSON.parse(JSON.stringify(state.projects[i]));
-  p.name=p.name+" の複製";
-  p.savedAt=new Date().toLocaleString("ja-JP");
-
-  state.projects.push(p);
-  localStorage.setItem("mockProjects",JSON.stringify(state.projects));
-  renderLists();
-}
-
-function useResult(i){
-  const r=state.results[i];
-  if(!r)return;
-
-  toast("編集対象にする場合は元動画ファイルを選択してください");
-}
-
-window.addEventListener("resize",()=>{
-  if($("editor").style.display!=="none")render();
-});
-
-renderLists();
+$("output").onclick=()=>{if(state.dirty&&!confirm("未保存の変更があります。保存してから作成しますか？"))return;if(state.dirty)$("save").click();const rs=JSON.parse(localStorage.results||"[]");if(rs.length>=10){alert("編集結果動画は10件までです。既存動画を削除してください。");return}rs.push({id:id("r"),name:$("title").textContent+" 編集結果",source:$("title").textContent,url:state.url});localStorage.results=JSON.stringify(rs);alert("編集結果動画を作成しました。モックでは元動画を結果動画として確認できます。")};
+$("exit").onclick=()=>{if(state.dirty){const r=confirm("未保存の変更があります。保存して終了しますか？");if(r)$("save").click();else if(!confirm("保存せずに終了しますか？"))return}closeEditor()};
+document.addEventListener("pointerdown",e=>{if(!e.target.closest(".menu"))clearPopup()});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){connect=null;clearPopup();if(state)render()}});
+renderHome();
 </script>
 </body>
 </html>
