@@ -1,249 +1,610 @@
 <?php
 declare(strict_types=1);
 ?>
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>動画編集</title>
+<title>動画編集モック</title>
 <style>
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;font-family:Arial,"Noto Sans JP",sans-serif;color:#222}
-button{font:inherit;cursor:pointer}
-:root{--accent:#2864d7;--border:#d9dde4;--bg:#f5f6f8}
-.app{height:100vh;display:flex;flex-direction:column;background:var(--bg);overflow:hidden}
-.header{height:56px;flex:none;background:#fff;border-bottom:1px solid var(--border);
- display:flex;align-items:center;padding:0 18px}
-.title{font-size:18px;font-weight:700}
-.header-actions{margin-left:auto;display:flex;align-items:center;gap:12px}
-.selected-video{font-size:13px;color:#666}
-.primary{border:0;border-radius:6px;background:var(--accent);color:#fff;padding:9px 16px;font-weight:700}
-.main{flex:1;min-height:0;padding:12px;display:flex;flex-direction:column;gap:12px}
-.preview{height:38%;min-height:220px;background:#111;border-radius:8px;position:relative;
- display:flex;align-items:center;justify-content:center;overflow:hidden}
-.preview video{width:100%;height:100%;object-fit:contain;background:#111}
-.preview.empty{color:#aaa}
-.video-label{position:absolute;left:10px;top:10px;background:#000b;color:#fff;
- padding:5px 8px;border-radius:4px;font-size:12px;display:none}
-.editor{flex:1;min-height:0;background:#fff;border:1px solid var(--border);border-radius:8px;
- display:flex;flex-direction:column;overflow:hidden}
-.editor-head{height:46px;flex:none;border-bottom:1px solid var(--border);
- display:flex;align-items:center;padding:0 12px;gap:8px}
-.editor-head button{border:1px solid #ccd1d9;background:#fff;border-radius:5px;padding:6px 11px}
-.editor-head button.active{border-color:var(--accent);background:#eef4ff;color:var(--accent)}
-.help{margin-left:auto;font-size:12px;color:#777}
-.stage-wrap{flex:1;min-height:180px;overflow:auto;background:#fafbfc}
-.stage{position:relative;min-width:100%;min-height:100%;height:100%;
- background-image:linear-gradient(#e9edf2 1px,transparent 1px),
- linear-gradient(90deg,#e9edf2 1px,transparent 1px);
- background-size:24px 24px}
-.connections{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
-.element{position:absolute;width:150px;min-height:62px;padding:10px 28px 10px 11px;
- background:#fff;border:2px solid var(--accent);border-radius:7px;z-index:2;
- box-shadow:0 2px 7px #0001;user-select:none;cursor:move}
-.element.selected{outline:2px solid var(--accent);outline-offset:3px}
-.element.hidden{display:none}
-.element-name{font-size:13px;font-weight:700}
-.element-time{font-size:11px;color:#777;margin-top:5px}
-.element-delete{position:absolute;right:5px;top:3px;border:0;background:transparent;
- color:#888;font-size:16px;padding:0}
-.element-delete:hover{color:#d22}
-.timeline{height:108px;flex:none;border-top:1px solid var(--border);padding:8px 12px;background:#fff}
-.timeline-head{height:24px;display:flex;align-items:center}
-.time{font-size:12px;color:#555}
-.scale{margin-left:auto;display:flex;align-items:center;gap:6px}
-.scale button{width:28px;height:25px;border:1px solid #ccd1d9;background:#fff;border-radius:4px}
-.scale-value{width:54px;text-align:center;font-size:12px}
-.ruler-wrap{height:62px;overflow:auto;margin-top:4px}
-.ruler{position:relative;height:58px;min-width:100%;border-top:1px solid #999}
-.tick{position:absolute;top:0;height:100%;border-left:1px solid #bcc1c8}
-.tick span{position:absolute;top:4px;left:4px;font-size:10px;color:#666;white-space:nowrap}
-.playhead{position:absolute;top:0;height:100%;width:2px;background:#e23b3b;z-index:5;pointer-events:none}
-.scrub{position:absolute;inset:0;cursor:pointer;z-index:4}
-.modal{position:fixed;inset:0;background:#0008;display:none;align-items:center;justify-content:center;z-index:20}
+html,body{
+  margin:0;height:100%;
+  font-family:Arial,"Noto Sans JP",sans-serif;
+  color:#222;background:#f3f4f6
+}
+button,input,select{font:inherit}
+button{cursor:pointer}
+.app{height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+.header{
+  height:54px;background:#fff;border-bottom:1px solid #d7d9dd;
+  display:flex;align-items:center;padding:0 18px;gap:16px;flex:none
+}
+.logo{font-size:18px;font-weight:700}
+.header-right{
+  margin-left:auto;display:flex;align-items:center;gap:10px
+}
+.video-name{font-size:13px;color:#666}
+.primary{
+  border:0;background:#2864d7;color:#fff;border-radius:6px;
+  padding:8px 14px;font-weight:700
+}
+.secondary{
+  border:1px solid #2864d7;background:#fff;color:#2454c5;
+  border-radius:6px;padding:7px 13px;font-weight:700
+}
+
+.workspace{
+  flex:1;min-height:0;
+  display:grid;grid-template-columns:220px 1fr 260px;
+  gap:10px;padding:10px
+}
+.panel{
+  background:#fff;border:1px solid #d8dbe0;border-radius:8px;
+  min-height:0;overflow:hidden
+}
+.panel-title{
+  height:42px;padding:12px 14px;
+  border-bottom:1px solid #e1e3e6;font-weight:700
+}
+.panel-body{
+  padding:12px;overflow:auto;height:calc(100% - 42px)
+}
+
+.action-list{display:grid;gap:9px}
+.action-button{
+  width:100%;text-align:left;border:1px solid #d4d8de;
+  background:#fff;border-radius:7px;padding:12px
+}
+.action-button:hover{
+  border-color:#2864d7;background:#eef4ff
+}
+.action-button strong{display:block;margin-bottom:4px}
+.action-button small{color:#666;line-height:1.5}
+
+.current{
+  margin-top:16px;padding:10px;border-radius:6px;
+  background:#f4f6f8;font-size:12px;line-height:1.6
+}
+.help{
+  font-size:12px;line-height:1.7;color:#666;margin-top:15px
+}
+
+.center{
+  display:flex;flex-direction:column;gap:10px;
+  min-width:0;min-height:0
+}
+
+.preview{
+  background:#111;border-radius:8px;min-height:270px;
+  display:flex;align-items:center;justify-content:center;
+  position:relative;overflow:hidden
+}
+.preview video{
+  width:100%;height:100%;max-height:340px;
+  display:block;background:#111
+}
+.preview.empty{
+  color:#aaa;font-size:15px;flex-direction:column;gap:14px
+}
+.preview-empty-actions{
+  display:flex;gap:8px
+}
+.preview-label{
+  position:absolute;top:10px;left:10px;color:#fff;
+  background:#0009;padding:5px 8px;border-radius:4px;
+  font-size:12px;z-index:2
+}
+
+.editor{
+  background:#fff;border:1px solid #d8dbe0;border-radius:8px;
+  display:flex;flex-direction:column;min-height:0;flex:1;overflow:hidden
+}
+.editor-toolbar{
+  height:48px;border-bottom:1px solid #e1e3e6;
+  display:flex;align-items:center;gap:7px;padding:7px 10px;flex:none
+}
+.editor-toolbar button{
+  border:1px solid #d4d8de;background:#fff;
+  border-radius:5px;padding:6px 10px
+}
+.editor-toolbar button.active{
+  border-color:#2864d7;background:#edf3ff;color:#2454c5
+}
+.status{margin-left:auto;font-size:12px;color:#666}
+
+.canvas-wrap{
+  position:relative;flex:1;min-height:260px;
+  overflow:auto;background:#f8f9fb
+}
+.object-area{
+  position:relative;width:100%;height:100%;min-height:300px;
+  background-image:
+    linear-gradient(#e8ebef 1px,transparent 1px),
+    linear-gradient(90deg,#e8ebef 1px,transparent 1px);
+  background-size:24px 24px
+}
+.connections{
+  position:absolute;inset:0;width:100%;height:100%;
+  pointer-events:none;overflow:visible
+}
+.object{
+  position:absolute;width:130px;min-height:58px;
+  background:#fff;border:2px solid #2864d7;
+  border-radius:7px;padding:10px;
+  box-shadow:0 2px 6px #0001;
+  user-select:none;cursor:move;z-index:2
+}
+.object.selected{
+  outline:2px solid #2864d7;outline-offset:3px
+}
+.object.hidden{display:none}
+.object-name{font-weight:700;font-size:13px}
+.object-time{font-size:11px;color:#777;margin-top:5px}
+.object-delete{
+  position:absolute;right:4px;top:3px;
+  border:0;background:transparent;color:#888;
+  font-size:15px;padding:0
+}
+.object-delete:hover{color:#d22}
+
+.timeline{
+  height:122px;border-top:1px solid #dfe2e6;
+  background:#fff;flex:none;padding:9px 12px
+}
+.timeline-head{
+  display:flex;align-items:center;height:25px
+}
+.time-label{font-size:12px;color:#555}
+.scale{
+  margin-left:auto;display:flex;align-items:center;gap:6px
+}
+.scale button{
+  width:28px;height:25px;border:1px solid #d4d8de;
+  background:#fff;border-radius:4px
+}
+.scale span{width:58px;text-align:center;font-size:12px}
+.ruler{
+  height:72px;position:relative;margin-top:3px;
+  overflow:hidden;border-top:1px solid #aaa
+}
+.tick{
+  position:absolute;top:0;height:100%;
+  border-left:1px solid #bfc3c9
+}
+.tick span{
+  position:absolute;top:5px;left:4px;
+  font-size:10px;color:#666;white-space:nowrap
+}
+.playhead{
+  position:absolute;top:0;width:2px;height:100%;
+  background:#e23b3b;z-index:4;pointer-events:none
+}
+.scrub{
+  position:absolute;inset:0;cursor:pointer
+}
+
+.inspector-row{margin-bottom:14px}
+.inspector-row label{
+  display:block;font-size:12px;color:#666;margin-bottom:5px
+}
+.inspector-row input,
+.inspector-row select{
+  width:100%;padding:7px;
+  border:1px solid #d4d8de;border-radius:5px
+}
+.obj-buttons{display:grid;gap:7px}
+.obj-buttons button{
+  border:1px solid #d4d8de;background:#fff;
+  border-radius:5px;padding:8px;text-align:left
+}
+.empty-state{
+  color:#888;text-align:center;padding:25px 10px
+}
+
+.modal{
+  position:fixed;inset:0;background:#0007;
+  display:none;align-items:center;justify-content:center;
+  z-index:20
+}
 .modal.show{display:flex}
-.modal-box{width:400px;max-width:calc(100vw - 30px);background:#fff;border-radius:9px;
- padding:20px;box-shadow:0 15px 45px #0005}
-.modal-box h2{margin:0 0 16px;font-size:18px}
-.video-list{display:grid;gap:9px}
-.video-choice{width:100%;text-align:left;border:1px solid #d4d9e0;background:#fff;
- border-radius:7px;padding:13px}
-.video-choice:hover,.video-choice.selected{border-color:var(--accent);background:#eef4ff}
-.video-choice strong{display:block;margin-bottom:4px}
-.video-choice small{color:#666}
-.modal-foot{display:flex;justify-content:flex-end;margin-top:16px}
-.context-menu{position:fixed;display:none;z-index:30;background:#fff;border:1px solid #ccd1d9;
- border-radius:6px;box-shadow:0 8px 24px #0003;padding:4px}
-.context-menu.show{display:block}
-.context-menu button{display:block;border:0;background:#fff;width:150px;text-align:left;
- padding:8px 10px;border-radius:4px}
-.context-menu button:hover{background:#eef4ff;color:var(--accent)}
-.notice{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
- color:#888;font-size:13px;pointer-events:none}
+.modal-box{
+  width:420px;max-width:calc(100vw - 30px);
+  background:#fff;border-radius:9px;
+  box-shadow:0 15px 45px #0005;padding:20px
+}
+.modal-box h2{margin:0 0 15px;font-size:18px}
+.modal-list{display:grid;gap:9px}
+.modal-choice{
+  width:100%;text-align:left;
+  border:1px solid #d4d8de;background:#fff;
+  border-radius:7px;padding:13px
+}
+.modal-choice:hover{
+  border-color:#2864d7;background:#eef4ff
+}
+.modal-choice strong{display:block;margin-bottom:4px}
+.modal-choice small{color:#666}
+.modal-actions{
+  display:flex;justify-content:flex-end;
+  gap:8px;margin-top:18px
+}
+
+.notice{
+  padding:9px 11px;border-radius:5px;
+  background:#f1f5ff;color:#3159a7;
+  font-size:12px;margin-bottom:10px
+}
+
+@media(max-width:1000px){
+  .workspace{grid-template-columns:190px 1fr}
+  .right-panel{display:none}
+}
 @media(max-width:700px){
- .help{display:none}
- .preview{height:32%}
- .element{width:135px}
+  .workspace{grid-template-columns:1fr}
+  .left-panel{display:none}
 }
 </style>
 </head>
+
 <body>
 <div class="app">
 
 <header class="header">
-  <div class="title">動画編集</div>
-  <div class="header-actions">
-    <span class="selected-video" id="selectedVideo">動画未選択</span>
-    <button class="primary" id="openVideo">動画を選択</button>
+  <div class="logo">動画編集</div>
+
+  <div class="header-right">
+    <span class="video-name" id="selectedVideoText">編集対象：未選択</span>
+    <button class="secondary" id="openVideo">動画を開く</button>
+    <button class="primary" id="resumeWork">編集作業を再開する</button>
   </div>
 </header>
 
-<main class="main">
+<div class="workspace">
 
-  <div class="preview empty" id="preview">
-    <span id="previewEmpty">動画を選択してください</span>
-    <video id="video" controls playsinline style="display:none"></video>
-    <div class="video-label" id="videoLabel"></div>
-  </div>
+  <aside class="panel left-panel">
+    <div class="panel-title">編集対象</div>
+    <div class="panel-body">
 
-  <section class="editor">
-    <div class="editor-head">
-      <button id="connectButton">接続</button>
-      <button id="hideButton">表示／非表示</button>
-      <button id="deleteButton">削除</button>
-      <span class="help" id="operationHelp">右クリックで要素を追加できます</span>
-    </div>
-
-    <div class="stage-wrap" id="stageWrap">
-      <div class="stage" id="stage">
-        <svg class="connections" id="connections"></svg>
-        <div class="notice" id="stageNotice">右クリックで要素を追加</div>
+      <div class="notice">
+        編集対象を読み込んでから編集を開始します。
       </div>
+
+      <div class="action-list">
+        <button class="action-button" id="sideOpen">
+          <strong>動画を開く</strong>
+          <small>オリジナル動画を編集対象として開きます。</small>
+        </button>
+
+        <button class="action-button" id="sideResume">
+          <strong>編集作業を再開する</strong>
+          <small>前回の編集途中の状態を読み込みます。</small>
+        </button>
+      </div>
+
+      <div class="current">
+        <strong>現在の編集対象</strong><br>
+        <span id="sideCurrent">未選択</span>
+      </div>
+
+      <div class="help">
+        「動画を開く」は元の動画から編集を開始します。<br>
+        「編集作業を再開する」は途中までの編集状態を読み込みます。
+      </div>
+
+    </div>
+  </aside>
+
+  <main class="center">
+
+    <div class="preview empty" id="preview">
+
+      <span id="emptyMessage">編集する動画を読み込んでください</span>
+
+      <div class="preview-empty-actions" id="emptyActions">
+        <button class="secondary" id="previewOpen">動画を開く</button>
+        <button class="primary" id="previewResume">編集作業を再開する</button>
+      </div>
+
+      <video id="video" controls playsinline style="display:none"></video>
+      <div class="preview-label" id="videoLabel" style="display:none"></div>
+
     </div>
 
-    <div class="timeline">
-      <div class="timeline-head">
-        <span class="time" id="timeText">00:00.0 / 00:00.0</span>
-        <div class="scale">
-          <button id="zoomOut">−</button>
-          <span class="scale-value" id="scaleText">1.0x</span>
-          <button id="zoomIn">＋</button>
+    <section class="editor">
+
+      <div class="editor-toolbar">
+        <button id="addObject">＋ オブジェクト</button>
+        <button id="connectMode">接続</button>
+        <button id="hideObject">表示／非表示</button>
+        <button id="deleteObject">削除</button>
+        <span class="status" id="modeStatus">通常操作</span>
+      </div>
+
+      <div class="canvas-wrap">
+        <div class="object-area" id="objectArea">
+          <svg class="connections" id="connections"></svg>
         </div>
       </div>
-      <div class="ruler-wrap" id="rulerWrap">
+
+      <div class="timeline">
+
+        <div class="timeline-head">
+          <span class="time-label" id="currentTime">
+            00:00.0 / 00:30.0
+          </span>
+
+          <div class="scale">
+            <button id="zoomOut">−</button>
+            <span id="scaleText">1.0x</span>
+            <button id="zoomIn">＋</button>
+          </div>
+        </div>
+
         <div class="ruler" id="ruler">
           <div class="scrub" id="scrub"></div>
           <div class="playhead" id="playhead"></div>
         </div>
-      </div>
-    </div>
-  </section>
 
-</main>
+      </div>
+
+    </section>
+  </main>
+
+  <aside class="panel right-panel">
+    <div class="panel-title">オブジェクト操作</div>
+
+    <div class="panel-body">
+
+      <div id="inspectorEmpty" class="empty-state">
+        オブジェクトを選択してください。
+      </div>
+
+      <div id="inspector" style="display:none">
+
+        <div class="inspector-row">
+          <label>名前</label>
+          <input id="objectName" type="text">
+        </div>
+
+        <div class="inspector-row">
+          <label>表示状態</label>
+          <select id="objectVisible">
+            <option value="1">表示</option>
+            <option value="0">非表示</option>
+          </select>
+        </div>
+
+        <div class="obj-buttons">
+          <button id="connectFrom">
+            このオブジェクトを接続元にする
+          </button>
+
+          <button id="connectTo">
+            このオブジェクトを接続先にする
+          </button>
+        </div>
+
+        <div class="help">
+          接続モードでは、接続元を選択したあと接続先を選択します。
+          オブジェクトを移動すると接続線も追従します。
+        </div>
+
+      </div>
+
+    </div>
+  </aside>
+
+</div>
 </div>
 
 <div class="modal" id="videoModal">
-  <div class="modal-box">
-    <h2>動画を選択</h2>
-    <div class="video-list">
-      <button class="video-choice" data-video="original">
-        <strong>オリジナル動画</strong>
-        <small>録画した元の動画</small>
-      </button>
-      <button class="video-choice" data-video="work">
-        <strong>作業動画</strong>
-        <small>編集中の作業動画</small>
-      </button>
-    </div>
-    <div class="modal-foot">
-      <button id="closeVideo">キャンセル</button>
-    </div>
-  </div>
-</div>
 
-<div class="context-menu" id="contextMenu">
-  <button id="addElement">要素を追加</button>
+  <div class="modal-box">
+
+    <h2>動画を開く</h2>
+
+    <div class="modal-list">
+
+      <button class="modal-choice" id="openOriginal">
+        <strong>オリジナル動画を開く</strong>
+        <small>録画した元の動画を編集対象として読み込みます。</small>
+      </button>
+
+      <button class="modal-choice" id="openWork">
+        <strong>作業動画を開く</strong>
+        <small>現在の編集途中の動画を読み込みます。</small>
+      </button>
+
+    </div>
+
+    <div class="modal-actions">
+      <button id="closeModal">キャンセル</button>
+    </div>
+
+  </div>
+
 </div>
 
 <script>
 const state={
   video:null,
-  duration:0,
-  time:0,
-  scale:1,
   objects:[],
   connections:[],
   selected:null,
   connectMode:false,
   connectSource:null,
-  nextId:1
+  nextId:1,
+  scale:1,
+  duration:30,
+  time:0
 };
+
+const area=document.getElementById('objectArea');
+const svg=document.getElementById('connections');
+const video=document.getElementById('video');
+const preview=document.getElementById('preview');
+const playhead=document.getElementById('playhead');
+const ruler=document.getElementById('ruler');
+const currentTime=document.getElementById('currentTime');
+const scaleText=document.getElementById('scaleText');
+const status=document.getElementById('modeStatus');
+const modal=document.getElementById('videoModal');
 
 const videoSources={
   original:'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
   work:'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm'
 };
 
-const stage=document.getElementById('stage');
-const stageWrap=document.getElementById('stageWrap');
-const svg=document.getElementById('connections');
-const video=document.getElementById('video');
-const preview=document.getElementById('preview');
-const previewEmpty=document.getElementById('previewEmpty');
-const videoLabel=document.getElementById('videoLabel');
-const selectedVideo=document.getElementById('selectedVideo');
-const modal=document.getElementById('videoModal');
-const contextMenu=document.getElementById('contextMenu');
-const ruler=document.getElementById('ruler');
-const playhead=document.getElementById('playhead');
-const timeText=document.getElementById('timeText');
-const scaleText=document.getElementById('scaleText');
-const connectButton=document.getElementById('connectButton');
-const operationHelp=document.getElementById('operationHelp');
-
-function formatTime(sec){
-  sec=Math.max(0,Number(sec)||0);
-  const min=Math.floor(sec/60);
-  const s=(sec%60).toFixed(1).padStart(4,'0');
-  return String(min).padStart(2,'0')+':'+s;
+function fmt(sec){
+  sec=Math.max(0,sec);
+  return String(Math.floor(sec/60)).padStart(2,'0')+':'+
+    (sec%60).toFixed(1).padStart(4,'0');
 }
 
-function openVideoSelector(){
-  modal.classList.add('show');
+function clearObjects(){
+  state.objects=[];
+  state.connections=[];
+  state.selected=null;
+  state.connectSource=null;
+  state.nextId=1;
 }
 
-function closeVideoSelector(){
-  modal.classList.remove('show');
+function createResumeObjects(){
+  clearObjects();
+
+  const a={
+    id:state.nextId++,
+    name:'開始部分',
+    x:70,
+    y:70,
+    visible:true
+  };
+
+  const b={
+    id:state.nextId++,
+    name:'編集ポイント',
+    x:300,
+    y:180,
+    visible:true
+  };
+
+  const c={
+    id:state.nextId++,
+    name:'終了部分',
+    x:520,
+    y:80,
+    visible:true
+  };
+
+  state.objects.push(a,b,c);
+  state.connections=[
+    {from:a.id,to:b.id},
+    {from:b.id,to:c.id}
+  ];
 }
 
-document.getElementById('openVideo').onclick=openVideoSelector;
-document.getElementById('closeVideo').onclick=closeVideoSelector;
+function createOriginalObjects(){
+  clearObjects();
 
-document.querySelectorAll('.video-choice').forEach(button=>{
-  button.addEventListener('click',()=>{
-    selectVideo(button.dataset.video);
-  });
-});
+  const a={
+    id:state.nextId++,
+    name:'編集ポイント 1',
+    x:70,
+    y:70,
+    visible:true
+  };
 
-function selectVideo(type){
+  const b={
+    id:state.nextId++,
+    name:'編集ポイント 2',
+    x:320,
+    y:180,
+    visible:true
+  };
+
+  state.objects.push(a,b);
+}
+
+function loadVideo(type,resume){
   state.video=type;
-  state.time=0;
-  video.pause();
+
   video.src=videoSources[type];
   video.style.display='block';
+
   preview.classList.remove('empty');
-  previewEmpty.style.display='none';
-  videoLabel.style.display='block';
-  videoLabel.textContent=type==='original'?'オリジナル動画':'作業動画';
-  selectedVideo.textContent=type==='original'?'オリジナル動画':'作業動画';
-  closeVideoSelector();
-  video.load();
+  document.getElementById('emptyMessage').style.display='none';
+  document.getElementById('emptyActions').style.display='none';
+
+  const label=document.getElementById('videoLabel');
+  label.style.display='block';
+
+  if(type==='original'){
+    label.textContent='オリジナル動画';
+    document.getElementById('selectedVideoText').textContent=
+      '編集対象：オリジナル動画';
+    document.getElementById('sideCurrent').textContent=
+      'オリジナル動画';
+    createOriginalObjects();
+  }else{
+    label.textContent='作業動画';
+    document.getElementById('selectedVideoText').textContent=
+      '編集対象：作業動画（編集途中）';
+    document.getElementById('sideCurrent').textContent=
+      '作業動画（編集途中）';
+    createResumeObjects();
+  }
+
+  modal.classList.remove('show');
+
+  video.currentTime=0;
+  state.time=0;
+
+  renderObjects();
+  updateInspector();
   updateTimeline();
 }
 
+function openVideoDialog(){
+  modal.classList.add('show');
+}
+
+document.getElementById('openVideo').onclick=openVideoDialog;
+document.getElementById('sideOpen').onclick=openVideoDialog;
+document.getElementById('previewOpen').onclick=openVideoDialog;
+
+document.getElementById('resumeWork').onclick=()=>{
+  loadVideo('work',true);
+};
+
+document.getElementById('sideResume').onclick=()=>{
+  loadVideo('work',true);
+};
+
+document.getElementById('previewResume').onclick=()=>{
+  loadVideo('work',true);
+};
+
+document.getElementById('openOriginal').onclick=()=>{
+  loadVideo('original',false);
+};
+
+document.getElementById('openWork').onclick=()=>{
+  loadVideo('work',true);
+};
+
+document.getElementById('closeModal').onclick=()=>{
+  modal.classList.remove('show');
+};
+
 video.addEventListener('loadedmetadata',()=>{
-  state.duration=Number.isFinite(video.duration)?video.duration:0;
+  state.duration=
+    Number.isFinite(video.duration)&&video.duration>0
+      ?video.duration
+      :30;
+
   updateTimeline();
 });
 
@@ -252,50 +613,58 @@ video.addEventListener('timeupdate',()=>{
   updateTimeline();
 });
 
-video.addEventListener('durationchange',()=>{
-  if(Number.isFinite(video.duration))state.duration=video.duration;
-  updateTimeline();
-});
-
 function updateTimeline(){
-  timeText.textContent=formatTime(state.time)+' / '+formatTime(state.duration);
-  const ratio=state.duration>0?state.time/state.duration:0;
+  currentTime.textContent=
+    fmt(state.time)+' / '+fmt(state.duration);
+
+  const ratio=state.duration
+    ?state.time/state.duration
+    :0;
+
   playhead.style.left=(ratio*100)+'%';
+
   renderRuler();
 }
 
-function scaleSettings(){
-  if(state.scale===0.5)return {seconds:10,pixels:10};
-  if(state.scale===1)return {seconds:5,pixels:22};
-  if(state.scale===2)return {seconds:1,pixels:44};
-  return {seconds:0.5,pixels:70};
+function getInterval(){
+  if(state.scale>=2)return 1;
+  if(state.scale===1)return 5;
+  return 10;
 }
 
 function renderRuler(){
-  ruler.querySelectorAll('.tick').forEach(el=>el.remove());
+  ruler.querySelectorAll('.tick').forEach(e=>e.remove());
 
-  const settings=scaleSettings();
-  const duration=Math.max(state.duration,1);
-  const width=Math.max(
-    stageWrap.clientWidth,
-    duration*settings.pixels+20
-  );
+  const interval=getInterval();
+  const pxPerSecond=22*state.scale;
+  const totalWidth=
+    Math.max(ruler.clientWidth,state.duration*pxPerSecond);
 
-  ruler.style.width=width+'px';
-  stage.style.minWidth=Math.max(stageWrap.clientWidth,width)+'px';
+  ruler.style.minWidth=totalWidth+'px';
 
-  for(let t=0;t<=duration+0.0001;t+=settings.seconds){
+  const count=Math.ceil(state.duration/interval);
+
+  for(let i=0;i<=count;i++){
+
+    const t=i*interval;
+
+    if(t>state.duration)break;
+
     const tick=document.createElement('div');
     tick.className='tick';
-    tick.style.left=(t*settings.pixels)+'px';
+    tick.style.left=(t*pxPerSecond)+'px';
 
     const label=document.createElement('span');
-    label.textContent=formatTime(t);
+    label.textContent=fmt(t);
+
     tick.appendChild(label);
     ruler.appendChild(tick);
   }
 
-  const ratio=state.duration>0?state.time/state.duration:0;
+  const ratio=state.duration
+    ?state.time/state.duration
+    :0;
+
   playhead.style.left=(ratio*100)+'%';
 }
 
@@ -306,89 +675,84 @@ document.getElementById('zoomIn').onclick=()=>{
 };
 
 document.getElementById('zoomOut').onclick=()=>{
-  state.scale=Math.max(0.5,state.scale/2);
+  state.scale=Math.max(.5,state.scale/2);
   scaleText.textContent=state.scale.toFixed(1)+'x';
   updateTimeline();
 };
 
 document.getElementById('scrub').onclick=e=>{
-  if(!state.video||!state.duration)return;
+  if(!state.video)return;
 
   const rect=ruler.getBoundingClientRect();
-  const settings=scaleSettings();
-  const x=Math.max(0,e.clientX-rect.left);
-  const t=Math.max(0,Math.min(state.duration,x/settings.pixels));
+  const x=e.clientX-rect.left;
 
-  video.currentTime=t;
+  const ratio=Math.max(
+    0,
+    Math.min(1,x/rect.width)
+  );
+
+  video.currentTime=ratio*state.duration;
 };
 
-stage.addEventListener('contextmenu',e=>{
-  e.preventDefault();
-
-  const rect=stage.getBoundingClientRect();
-  const x=Math.max(0,e.clientX-rect.left);
-  const y=Math.max(0,e.clientY-rect.top);
-
-  contextMenu.dataset.x=String(x);
-  contextMenu.dataset.y=String(y);
-  contextMenu.style.left=e.clientX+'px';
-  contextMenu.style.top=e.clientY+'px';
-  contextMenu.classList.add('show');
-});
-
-document.addEventListener('click',e=>{
-  if(!contextMenu.contains(e.target))contextMenu.classList.remove('show');
-});
-
-document.getElementById('addElement').onclick=()=>{
-  const x=Number(contextMenu.dataset.x||40);
-  const y=Number(contextMenu.dataset.y||40);
+function addObject(){
 
   const id=state.nextId++;
-  state.objects.push({
+
+  const obj={
     id,
-    name:'要素 '+id,
-    x,
-    y,
+    name:'オブジェクト '+id,
+    x:40+(id%4)*155,
+    y:35+Math.floor((id-1)/4)*95,
     visible:true
-  });
+  };
 
-  contextMenu.classList.remove('show');
-  state.selected=id;
+  state.objects.push(obj);
+
   renderObjects();
-};
+  selectObject(id);
+}
 
-function getObject(id){
+document.getElementById('addObject').onclick=addObject;
+
+function objectById(id){
   return state.objects.find(o=>o.id===id);
 }
 
 function selectObject(id){
   state.selected=id;
   renderObjects();
+  updateInspector();
 }
 
 function renderObjects(){
-  stage.querySelectorAll('.element').forEach(el=>el.remove());
+
+  area.querySelectorAll('.object').forEach(e=>e.remove());
 
   state.objects.forEach(obj=>{
-    if(!obj.visible)return;
 
     const el=document.createElement('div');
-    el.className='element'+(state.selected===obj.id?' selected':'');
+
+    el.className=
+      'object'+
+      (state.selected===obj.id?' selected':'')+
+      (!obj.visible?' hidden':'');
+
     el.dataset.id=obj.id;
     el.style.left=obj.x+'px';
     el.style.top=obj.y+'px';
 
     const name=document.createElement('div');
-    name.className='element-name';
+    name.className='object-name';
     name.textContent=obj.name;
+    el.appendChild(name);
 
-    const time=document.createElement('div');
-    time.className='element-time';
-    time.textContent='編集要素';
+    const tm=document.createElement('div');
+    tm.className='object-time';
+    tm.textContent='編集オブジェクト';
+    el.appendChild(tm);
 
     const del=document.createElement('button');
-    del.className='element-delete';
+    del.className='object-delete';
     del.textContent='×';
     del.title='削除';
 
@@ -397,59 +761,38 @@ function renderObjects(){
       deleteObject(obj.id);
     };
 
-    el.appendChild(name);
-    el.appendChild(time);
     el.appendChild(del);
 
     el.addEventListener('mousedown',startDrag);
+
     el.addEventListener('click',e=>{
-      if(e.target!==del)handleObjectClick(obj.id);
+      if(e.target!==del){
+
+        selectObject(obj.id);
+
+        if(state.connectMode){
+          handleConnectClick(obj.id);
+        }
+      }
     });
 
-    stage.appendChild(el);
+    area.appendChild(el);
   });
 
   drawConnections();
-  document.getElementById('stageNotice').style.display=
-    state.objects.length?'none':'block';
-}
-
-function handleObjectClick(id){
-  if(state.connectMode){
-    if(state.connectSource===null){
-      state.connectSource=id;
-      state.selected=id;
-      operationHelp.textContent='接続先を選択してください';
-      renderObjects();
-      return;
-    }
-
-    if(state.connectSource!==id){
-      createConnection(state.connectSource,id);
-      state.connectSource=null;
-      state.selected=id;
-      operationHelp.textContent='接続元を選択してください';
-      renderObjects();
-      return;
-    }
-
-    return;
-  }
-
-  selectObject(id);
 }
 
 let drag=null;
 
 function startDrag(e){
-  if(e.button!==0||state.connectMode)return;
+
+  if(e.button!==0)return;
 
   const id=Number(e.currentTarget.dataset.id);
-  const obj=getObject(id);
-  if(!obj)return;
 
-  state.selected=id;
-  renderObjects();
+  selectObject(id);
+
+  const obj=objectById(id);
 
   drag={
     id,
@@ -464,15 +807,24 @@ function startDrag(e){
 }
 
 function moveDrag(e){
+
   if(!drag)return;
 
-  const obj=getObject(drag.id);
-  if(!obj)return;
+  const obj=objectById(drag.id);
 
-  obj.x=Math.max(0,drag.x+e.clientX-drag.startX);
-  obj.y=Math.max(0,drag.y+e.clientY-drag.startY);
+  obj.x=Math.max(
+    0,
+    drag.x+e.clientX-drag.startX
+  );
 
-  const el=stage.querySelector('.element[data-id="'+drag.id+'"]');
+  obj.y=Math.max(
+    0,
+    drag.y+e.clientY-drag.startY
+  );
+
+  const el=area.querySelector(
+    '.object[data-id="'+drag.id+'"]'
+  );
 
   if(el){
     el.style.left=obj.x+'px';
@@ -488,50 +840,165 @@ function endDrag(){
 }
 
 function deleteObject(id){
-  state.objects=state.objects.filter(obj=>obj.id!==id);
-  state.connections=state.connections.filter(c=>c.from!==id&&c.to!==id);
 
-  if(state.selected===id)state.selected=null;
-  if(state.connectSource===id)state.connectSource=null;
+  state.connections=
+    state.connections.filter(
+      c=>c.from!==id&&c.to!==id
+    );
+
+  state.objects=
+    state.objects.filter(o=>o.id!==id);
+
+  if(state.selected===id){
+    state.selected=null;
+  }
+
+  if(state.connectSource===id){
+    state.connectSource=null;
+  }
 
   renderObjects();
+  updateInspector();
 }
 
-document.getElementById('deleteButton').onclick=()=>{
-  if(state.selected!==null)deleteObject(state.selected);
+function updateInspector(){
+
+  const obj=objectById(state.selected);
+
+  const empty=document.getElementById('inspectorEmpty');
+  const inspector=document.getElementById('inspector');
+
+  if(!obj){
+
+    empty.style.display='block';
+    inspector.style.display='none';
+
+    return;
+  }
+
+  empty.style.display='none';
+  inspector.style.display='block';
+
+  document.getElementById('objectName').value=obj.name;
+  document.getElementById('objectVisible').value=
+    obj.visible?'1':'0';
+}
+
+document.getElementById('objectName').oninput=e=>{
+
+  const obj=objectById(state.selected);
+
+  if(!obj)return;
+
+  obj.name=e.target.value;
+
+  const el=area.querySelector(
+    '.object[data-id="'+obj.id+'"] .object-name'
+  );
+
+  if(el){
+    el.textContent=obj.name;
+  }
 };
 
-document.getElementById('hideButton').onclick=()=>{
-  const obj=getObject(state.selected);
+document.getElementById('objectVisible').onchange=e=>{
+
+  const obj=objectById(state.selected);
+
+  if(!obj)return;
+
+  obj.visible=e.target.value==='1';
+
+  renderObjects();
+  updateInspector();
+};
+
+document.getElementById('hideObject').onclick=()=>{
+
+  const obj=objectById(state.selected);
+
   if(!obj)return;
 
   obj.visible=!obj.visible;
 
-  if(!obj.visible){
-    state.connections=state.connections.filter(c=>c.from!==obj.id);
-  }
-
   renderObjects();
+  updateInspector();
 };
 
-connectButton.onclick=()=>{
+document.getElementById('deleteObject').onclick=()=>{
+
+  if(state.selected!==null){
+    deleteObject(state.selected);
+  }
+};
+
+document.getElementById('connectMode').onclick=()=>{
+
   state.connectMode=!state.connectMode;
   state.connectSource=null;
 
-  connectButton.classList.toggle('active',state.connectMode);
+  document.getElementById('connectMode')
+    .classList.toggle('active',state.connectMode);
 
-  operationHelp.textContent=state.connectMode
-    ?'接続元を選択してください'
-    :'右クリックで要素を追加できます';
-
-  renderObjects();
+  status.textContent=
+    state.connectMode
+      ?'接続元を選択してください'
+      :'通常操作';
 };
 
-function createConnection(from,to){
-  const source=getObject(from);
-  const target=getObject(to);
+document.getElementById('connectFrom').onclick=()=>{
 
-  if(!source||!target||!source.visible||!target.visible)return;
+  if(state.selected===null)return;
+
+  state.connectMode=true;
+  state.connectSource=state.selected;
+
+  status.textContent='接続先を選択してください';
+
+  document.getElementById('connectMode')
+    .classList.add('active');
+};
+
+document.getElementById('connectTo').onclick=()=>{
+
+  if(
+    state.connectSource===null||
+    state.selected===null
+  )return;
+
+  createConnection(
+    state.connectSource,
+    state.selected
+  );
+
+  state.connectSource=null;
+  status.textContent='接続元を選択してください';
+};
+
+function handleConnectClick(id){
+
+  if(state.connectSource===null){
+
+    state.connectSource=id;
+    status.textContent='接続先を選択してください';
+
+    return;
+  }
+
+  if(state.connectSource===id)return;
+
+  createConnection(
+    state.connectSource,
+    id
+  );
+
+  state.connectSource=null;
+  status.textContent='接続元を選択してください';
+}
+
+function createConnection(from,to){
+
+  if(!objectById(from)||!objectById(to))return;
 
   const exists=state.connections.some(
     c=>c.from===from&&c.to===to
@@ -545,35 +1012,54 @@ function createConnection(from,to){
 }
 
 function drawConnections(){
-  while(svg.firstChild)svg.removeChild(svg.firstChild);
 
-  state.connections=state.connections.filter(c=>{
-    const from=getObject(c.from);
-    const to=getObject(c.to);
-    return !!from&&!!to&&from.visible&&to.visible;
-  });
+  while(svg.firstChild){
+    svg.removeChild(svg.firstChild);
+  }
 
-  const stageRect=stage.getBoundingClientRect();
+  const areaRect=area.getBoundingClientRect();
+
+  state.connections=
+    state.connections.filter(c=>{
+      return !!objectById(c.from)&&!!objectById(c.to);
+    });
 
   state.connections.forEach(c=>{
-    const from=getObject(c.from);
-    const to=getObject(c.to);
-    if(!from||!to||!from.visible||!to.visible)return;
 
-    const fromEl=stage.querySelector('.element[data-id="'+from.id+'"]');
-    const toEl=stage.querySelector('.element[data-id="'+to.id+'"]');
+    const from=objectById(c.from);
+    const to=objectById(c.to);
 
-    if(!fromEl||!toEl)return;
+    if(!from||!to||!from.visible)return;
 
-    const a=fromEl.getBoundingClientRect();
-    const b=toEl.getBoundingClientRect();
+    const a=area.querySelector(
+      '.object[data-id="'+from.id+'"]'
+    );
 
-    const x1=a.left-stageRect.left+a.width;
-    const y1=a.top-stageRect.top+a.height/2;
-    const x2=b.left-stageRect.left;
-    const y2=b.top-stageRect.top+b.height/2;
+    const b=area.querySelector(
+      '.object[data-id="'+to.id+'"]'
+    );
 
-    const bend=Math.max(30,Math.abs(x2-x1)*0.4);
+    if(!a||!b)return;
+
+    const ar=a.getBoundingClientRect();
+    const br=b.getBoundingClientRect();
+
+    const x1=
+      ar.left-areaRect.left+ar.width;
+
+    const y1=
+      ar.top-areaRect.top+ar.height/2;
+
+    const x2=
+      br.left-areaRect.left;
+
+    const y2=
+      br.top-areaRect.top+br.height/2;
+
+    const bend=Math.max(
+      35,
+      Math.abs(x2-x1)*.45
+    );
 
     const path=document.createElementNS(
       'http://www.w3.org/2000/svg',
@@ -582,30 +1068,53 @@ function drawConnections(){
 
     path.setAttribute(
       'd',
-      'M '+x1+' '+y1+
-      ' C '+(x1+bend)+' '+y1+
-      ', '+(x2-bend)+' '+y2+
-      ', '+x2+' '+y2
+      `M ${x1} ${y1}
+       C ${x1+bend} ${y1},
+         ${x2-bend} ${y2},
+         ${x2} ${y2}`
     );
 
     path.setAttribute('fill','none');
-    path.setAttribute('stroke','var(--accent)');
+    path.setAttribute('stroke','#2864d7');
     path.setAttribute('stroke-width','2');
     path.setAttribute('stroke-linecap','round');
 
+    const arrow=document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'polygon'
+    );
+
+    const size=6;
+
+    arrow.setAttribute(
+      'points',
+      `${x2},${y2}
+       ${x2-size},${y2-size/2}
+       ${x2-size},${y2+size/2}`
+    );
+
+    arrow.setAttribute('fill','#2864d7');
+
     svg.appendChild(path);
+    svg.appendChild(arrow);
   });
 }
 
 window.addEventListener('resize',()=>{
+  renderObjects();
   updateTimeline();
-  drawConnections();
 });
 
-stageWrap.addEventListener('scroll',drawConnections);
+setInterval(()=>{
+  if(state.objects.length){
+    drawConnections();
+  }
+},100);
 
-updateTimeline();
 renderObjects();
+updateInspector();
+updateTimeline();
 </script>
+
 </body>
 </html>
