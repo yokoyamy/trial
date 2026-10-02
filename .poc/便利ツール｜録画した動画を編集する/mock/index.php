@@ -1,598 +1,803 @@
 <?php
-declare(strict_types=1);
-?>
-<!DOCTYPE html>
+?><!doctype html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8">
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>動画編集モック</title>
+<title>動画編集</title>
 <style>
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;font-family:Arial,"Noto Sans JP",sans-serif;color:#222;background:#f3f4f6}
-button,select,input{font:inherit}
-button{cursor:pointer}
-.app{height:100vh;display:flex;flex-direction:column;overflow:hidden}
-.header{height:54px;background:#fff;border-bottom:1px solid #d7d9dd;display:flex;align-items:center;padding:0 18px;gap:18px;flex:none}
-.logo{font-size:18px;font-weight:700}
-.menu{display:flex;gap:6px}
-.menu button{border:0;background:#fff;padding:8px 14px;border-radius:6px}
-.menu button.active{background:#e9eefc;color:#2454c5;font-weight:700}
-.header-right{margin-left:auto;display:flex;align-items:center;gap:10px}
-.primary{border:0;background:#2864d7;color:#fff;border-radius:6px;padding:8px 14px;font-weight:700}
-.workspace{flex:1;min-height:0;display:grid;grid-template-columns:260px 1fr 260px;gap:10px;padding:10px}
-.panel{background:#fff;border:1px solid #d8dbe0;border-radius:8px;min-height:0;overflow:hidden}
-.panel-title{height:42px;padding:12px 14px;border-bottom:1px solid #e1e3e6;font-weight:700}
-.panel-body{padding:12px;overflow:auto;height:calc(100% - 42px)}
-.video-list{display:grid;gap:8px}
-.video-choice{width:100%;text-align:left;border:1px solid #d7dbe2;background:#fafafa;border-radius:7px;padding:12px}
-.video-choice:hover,.video-choice.selected{border-color:#2864d7;background:#eef4ff}
-.video-choice strong{display:block;margin-bottom:5px}
-.video-choice small{color:#666}
-.center{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}
-.preview{background:#111;border-radius:8px;min-height:270px;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
-.preview video{width:100%;height:100%;max-height:340px;display:block;background:#111}
-.preview.empty{color:#aaa;font-size:15px}
-.preview-label{position:absolute;top:10px;left:10px;color:#fff;background:#0009;padding:5px 8px;border-radius:4px;font-size:12px;z-index:2}
-.editor{background:#fff;border:1px solid #d8dbe0;border-radius:8px;display:flex;flex-direction:column;min-height:0;flex:1;overflow:hidden}
-.editor-toolbar{height:48px;border-bottom:1px solid #e1e3e6;display:flex;align-items:center;gap:7px;padding:7px 10px;flex:none}
-.editor-toolbar button{border:1px solid #d4d8de;background:#fff;border-radius:5px;padding:6px 10px}
-.editor-toolbar button.active{border-color:#2864d7;background:#edf3ff;color:#2454c5}
-.status{margin-left:auto;font-size:12px;color:#666}
-.canvas-wrap{position:relative;flex:1;min-height:260px;overflow:auto;background:#f8f9fb}
-.object-area{position:relative;width:100%;height:100%;min-height:300px;background-image:linear-gradient(#e8ebef 1px,transparent 1px),linear-gradient(90deg,#e8ebef 1px,transparent 1px);background-size:24px 24px}
-.connections{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
-.object{position:absolute;width:130px;min-height:58px;background:#fff;border:2px solid #2864d7;border-radius:7px;padding:10px;box-shadow:0 2px 6px #0001;user-select:none;cursor:move;z-index:2}
-.object.selected{outline:2px solid #2864d7;outline-offset:3px}
-.object.hidden{display:none}
-.object-name{font-weight:700;font-size:13px}
-.object-time{font-size:11px;color:#777;margin-top:5px}
-.object-delete{position:absolute;right:4px;top:3px;border:0;background:transparent;color:#888;font-size:15px;padding:0}
-.object-delete:hover{color:#d22}
-.timeline{height:122px;border-top:1px solid #dfe2e6;background:#fff;flex:none;padding:9px 12px}
-.timeline-head{display:flex;align-items:center;height:25px}
-.time-label{font-size:12px;color:#555}
-.scale{margin-left:auto;display:flex;align-items:center;gap:6px}
-.scale button{width:28px;height:25px;border:1px solid #d4d8de;background:#fff;border-radius:4px}
-.scale span{width:58px;text-align:center;font-size:12px}
-.ruler{height:72px;position:relative;margin-top:3px;overflow:hidden;border-top:1px solid #aaa}
-.tick{position:absolute;top:0;height:100%;border-left:1px solid #bfc3c9}
-.tick span{position:absolute;top:5px;left:4px;font-size:10px;color:#666;white-space:nowrap}
-.playhead{position:absolute;top:0;width:2px;height:100%;background:#e23b3b;z-index:4;pointer-events:none}
-.scrub{position:absolute;inset:0;cursor:pointer}
-.inspector-row{margin-bottom:14px}
-.inspector-row label{display:block;font-size:12px;color:#666;margin-bottom:5px}
-.inspector-row input,.inspector-row select{width:100%;padding:7px;border:1px solid #d4d8de;border-radius:5px}
-.obj-buttons{display:grid;gap:7px}
-.obj-buttons button{border:1px solid #d4d8de;background:#fff;border-radius:5px;padding:8px;text-align:left}
-.help{font-size:12px;line-height:1.7;color:#666;margin-top:15px}
-.empty-state{color:#888;text-align:center;padding:25px 10px}
-.modal{position:fixed;inset:0;background:#0007;display:none;align-items:center;justify-content:center;z-index:20}
-.modal.show{display:flex}
-.modal-box{width:420px;max-width:calc(100vw - 30px);background:#fff;border-radius:9px;box-shadow:0 15px 45px #0005;padding:20px}
-.modal-box h2{margin:0 0 15px;font-size:18px}
-.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
-.notice{padding:9px 11px;border-radius:5px;background:#f1f5ff;color:#3159a7;font-size:12px;margin-bottom:10px}
-@media(max-width:1000px){
-.workspace{grid-template-columns:210px 1fr}
-.right-panel{display:none}
+html,body{margin:0;width:100%;height:100%;font-family:Arial,"Noto Sans JP",sans-serif;color:#222;background:#f5f6f8}
+button,input{font:inherit}
+button{border:1px solid #bbb;background:#fff;border-radius:5px;padding:8px 14px;cursor:pointer}
+button:hover{background:#f0f2f5}
+button.primary{background:#2563eb;color:#fff;border-color:#2563eb}
+button.danger{color:#c62828}
+.hidden{display:none!important}
+
+#app{width:100%;min-height:100vh}
+#main{width:100%;padding:18px}
+.header{height:48px;background:#202938;color:#fff;display:flex;align-items:center;padding:0 16px;margin:-18px -18px 18px}
+.header h1{font-size:18px;margin:0}
+.header .spacer{flex:1}
+
+.mainAction{display:flex;justify-content:center;margin:35px 0 25px}
+.mainAction button{font-size:16px;padding:12px 28px}
+
+.selection{width:100%;border:1px solid #ccc;background:#fff;border-radius:7px;padding:18px;margin-bottom:18px}
+.selection h2{font-size:17px;margin:0 0 15px}
+.videoChoices{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.videoChoice{border:1px solid #ccc;border-radius:6px;padding:13px;background:#fff}
+.videoChoice strong{display:block;margin-bottom:5px}
+.videoChoice small{color:#666}
+.videoChoice .actions{margin-top:10px;display:flex;gap:7px}
+
+.editor{width:100%;padding:12px}
+.editorHeader{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.editorHeader h2{font-size:17px;margin:0}
+.editorHeader .spacer{flex:1}
+.status{font-size:12px;color:#777}
+
+.videoArea{width:100%;height:min(58vh,620px);min-height:360px;background:#111;position:relative;overflow:hidden;border-radius:5px}
+#videoPlayer{width:100%;height:100%;display:block;object-fit:contain}
+#objectsLayer{position:absolute;inset:0}
+#connections{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:20}
+.object{position:absolute;z-index:30;cursor:move;user-select:none}
+.object.selected{outline:2px solid #f59e0b}
+.object.connectSource{outline:2px solid #f59e0b}
+.object.connectTarget{outline:2px dashed #f59e0b}
+.object.comment{padding:7px;background:rgba(255,255,255,.9);border:1px solid #555;border-radius:3px}
+.object.highlight{border:2px solid #f59e0b;background:rgba(245,158,11,.12)}
+.object.zoom{border:2px solid #2563eb;background:rgba(37,99,235,.12)}
+.object.skip{background:rgba(80,80,80,.35);border:2px dashed #666}
+.deleteHandle{position:absolute;right:-8px;top:-8px;width:18px;height:18px;border-radius:50%;background:#c62828;color:#fff;font-size:12px;line-height:18px;text-align:center;cursor:pointer;z-index:50}
+.objectLabel{position:absolute;left:4px;top:3px;font-size:11px;color:#555;background:#fff8;padding:1px 3px}
+
+.connection{fill:none;stroke:#f59e0b;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.connectionHit{fill:none;stroke:transparent;stroke-width:12;pointer-events:stroke}
+
+.controlBar{display:flex;align-items:center;gap:7px;padding:10px 0}
+.controlBar .time{min-width:105px;color:#555}
+.controlBar .spacer{flex:1}
+
+.timeline{border:1px solid #bbb;background:#fff;border-radius:5px;overflow:hidden}
+.timelineTop{height:42px;display:flex;align-items:center;gap:8px;padding:5px 9px;border-bottom:1px solid #ccc}
+.timelineTop .spacer{flex:1}
+.scaleLabel{font-size:13px}
+.scale{width:150px}
+.timelineViewport{height:205px;overflow-x:auto;overflow-y:hidden}
+.timelineInner{position:relative;height:100%;min-width:900px}
+.ruler{height:38px;position:relative;border-bottom:1px solid #bbb;background:#fafafa}
+.tick{position:absolute;top:0;height:100%;border-left:1px solid #aaa;padding:4px 0 0 4px;font-size:10px;color:#555}
+.trackArea{position:relative;height:167px}
+.clip{position:absolute;height:30px;top:18px;background:#2563eb;color:#fff;border-radius:4px;padding:7px 8px;font-size:11px;white-space:nowrap;overflow:hidden}
+.playhead{position:absolute;top:0;bottom:0;width:2px;background:#e11d48;z-index:100;pointer-events:none}
+.playhead:before{content:"";position:absolute;left:-5px;top:-1px;width:12px;height:12px;background:#e11d48;border-radius:50%}
+
+.connectionHelp{margin-top:8px;color:#666;font-size:12px}
+.message{position:fixed;right:18px;bottom:18px;background:#202938;color:#fff;padding:10px 14px;border-radius:5px;z-index:1000}
+
+.modalBg{position:fixed;inset:0;background:rgba(0,0,0,.42);display:flex;align-items:center;justify-content:center;z-index:500}
+.modal{width:min(560px,calc(100% - 30px));background:#fff;border-radius:7px;padding:18px;box-shadow:0 12px 40px #0004}
+.modal h3{margin:0 0 15px}
+.modalGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.modalCard{border:1px solid #ccc;border-radius:6px;padding:14px}
+.modalCard strong{display:block;margin-bottom:6px}
+.modalCard small{color:#666}
+.modalActions{display:flex;justify-content:flex-end;gap:7px;margin-top:16px}
+
+@media(max-width:700px){
+ .videoArea{height:45vh;min-height:280px}
+ .controlBar{flex-wrap:wrap}
+ .timelineTop{flex-wrap:wrap;height:auto}
+ .modalGrid{grid-template-columns:1fr}
 }
 </style>
 </head>
 <body>
-<div class="app">
-<header class="header">
-  <div class="logo">動画編集</div>
-  <nav class="menu">
-    <button class="active" id="menuEdit">動画編集</button>
-    <button id="menuSelect">動画を選択</button>
-  </nav>
-  <div class="header-right">
-    <span id="selectedVideoText">動画未選択</span>
-    <button class="primary" id="openVideo">動画を選択</button>
+
+<div id="main">
+  <div class="header">
+    <h1>動画編集</h1>
+    <div class="spacer"></div>
   </div>
-</header>
 
-<div class="workspace">
-  <aside class="panel">
-    <div class="panel-title">動画選択</div>
-    <div class="panel-body">
-      <div class="notice">編集する動画を選択してください。</div>
-      <div class="video-list">
-        <button class="video-choice" data-video="original">
-          <strong>オリジナル動画</strong>
-          <small>録画した元の動画</small>
-        </button>
-        <button class="video-choice" data-video="work">
-          <strong>作業動画</strong>
-          <small>編集中の作業用動画</small>
-        </button>
-      </div>
-      <div class="help">
-        動画を選択すると中央の動画再生領域に表示されます。<br>
-        選択前は動画を再生しません。
-      </div>
-    </div>
-  </aside>
+  <div class="mainAction">
+    <button id="openVideoSelect" class="primary">動画を選択</button>
+  </div>
 
-  <main class="center">
-    <div class="preview empty" id="preview">
-      <span>動画を選択してください</span>
-      <video id="video" controls playsinline style="display:none"></video>
-      <div class="preview-label" id="videoLabel" style="display:none"></div>
-    </div>
-
-    <section class="editor">
-      <div class="editor-toolbar">
-        <button id="addObject">＋ オブジェクト</button>
-        <button id="connectMode">接続</button>
-        <button id="hideObject">表示／非表示</button>
-        <button id="deleteObject">削除</button>
-        <span class="status" id="modeStatus">通常操作</span>
-      </div>
-
-      <div class="canvas-wrap" id="canvasWrap">
-        <div class="object-area" id="objectArea">
-          <svg class="connections" id="connections"></svg>
-        </div>
-      </div>
-
-      <div class="timeline">
-        <div class="timeline-head">
-          <span class="time-label" id="currentTime">00:00.0 / 00:30.0</span>
-          <div class="scale">
-            <button id="zoomOut">−</button>
-            <span id="scaleText">1.0x</span>
-            <button id="zoomIn">＋</button>
-          </div>
-        </div>
-        <div class="ruler" id="ruler">
-          <div class="scrub" id="scrub"></div>
-          <div class="playhead" id="playhead"></div>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <aside class="panel right-panel">
-    <div class="panel-title">オブジェクト操作</div>
-    <div class="panel-body">
-      <div id="inspectorEmpty" class="empty-state">
-        オブジェクトを選択してください。
-      </div>
-      <div id="inspector" style="display:none">
-        <div class="inspector-row">
-          <label>名前</label>
-          <input id="objectName" type="text">
-        </div>
-        <div class="inspector-row">
-          <label>表示状態</label>
-          <select id="objectVisible">
-            <option value="1">表示</option>
-            <option value="0">非表示</option>
-          </select>
-        </div>
-        <div class="obj-buttons">
-          <button id="connectFrom">このオブジェクトを接続元にする</button>
-          <button id="connectTo">このオブジェクトを接続先にする</button>
-        </div>
-        <div class="help">
-          接続モードでは、接続元を選択したあと接続先を選択します。
-          オブジェクトを移動すると接続線も現在位置へ追従します。
-        </div>
-      </div>
-    </div>
-  </aside>
-</div>
+  <div id="selection" class="selection hidden">
+    <h2>編集する動画を選択</h2>
+    <div id="videoChoices" class="videoChoices"></div>
+  </div>
 </div>
 
-<div class="modal" id="videoModal">
-  <div class="modal-box">
-    <h2>動画を選択</h2>
-    <div class="video-list">
-      <button class="video-choice" data-video="original">
+<div id="editor" class="editor hidden">
+  <div class="editorHeader">
+    <button id="backButton">動画選択へ戻る</button>
+    <h2 id="editorTitle"></h2>
+    <span class="spacer"></span>
+    <span id="connectionMode" class="status"></span>
+  </div>
+
+  <div id="videoArea" class="videoArea">
+    <video id="videoPlayer" controls></video>
+    <div id="objectsLayer"></div>
+    <svg id="connections"></svg>
+  </div>
+
+  <div class="controlBar">
+    <button id="play" class="primary">▶ 再生</button>
+    <button id="pause">⏸ 一時停止</button>
+    <button id="stop">■ 停止</button>
+    <span id="time" class="time">00:00 / 00:00</span>
+    <span class="spacer"></span>
+    <button id="addComment">コメント</button>
+    <button id="addHighlight">強調枠</button>
+    <button id="addZoom">拡大枠</button>
+    <button id="addSkip">スキップ</button>
+    <button id="connectButton">接続</button>
+  </div>
+
+  <div class="timeline">
+    <div class="timelineTop">
+      <span class="scaleLabel">タイムスケール</span>
+      <input id="scale" class="scale" type="range" min="0" max="4" step="1" value="2">
+      <span id="scaleText">5秒</span>
+      <span class="spacer"></span>
+      <span class="connectionHelp">接続：接続ボタン → 接続元 → 接続先</span>
+    </div>
+    <div id="timelineViewport" class="timelineViewport">
+      <div id="timelineInner" class="timelineInner">
+        <div id="ruler" class="ruler"></div>
+        <div id="trackArea" class="trackArea"></div>
+        <div id="playhead" class="playhead"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modalBg" class="modalBg hidden">
+  <div class="modal">
+    <h3>動画を選択</h3>
+    <div class="modalGrid">
+      <div class="modalCard">
         <strong>オリジナル動画</strong>
-        <small>録画した元の動画</small>
-      </button>
-      <button class="video-choice" data-video="work">
+        <small>元の録画動画を編集します。</small>
+        <div class="modalActions">
+          <button id="originalButton" class="primary">選択</button>
+        </div>
+      </div>
+      <div class="modalCard">
         <strong>作業動画</strong>
-        <small>編集中の作業用動画</small>
-      </button>
+        <small>保存済みの編集作業を再開します。</small>
+        <div class="modalActions">
+          <button id="workButton">選択</button>
+        </div>
+      </div>
     </div>
-    <div class="modal-actions">
+    <div class="modalActions">
       <button id="closeModal">キャンセル</button>
     </div>
   </div>
 </div>
 
+<input id="fileInput" type="file" accept="video/*" class="hidden">
+<div id="message" class="message hidden"></div>
+
 <script>
+"use strict";
+
+const $=id=>document.getElementById(id);
+
+const SAMPLE_VIDEO="https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
+
 const state={
-  video:null,
+  videoType:null,
+  videoId:null,
+  videoName:"",
+  duration:30,
+  position:0,
+  scale:2,
   objects:[],
   connections:[],
   selected:null,
-  connectMode:false,
-  connectSource:null,
-  nextId:1,
-  scale:1,
-  duration:30,
-  time:0
+  connecting:false,
+  source:null,
+  dragging:null,
+  nextObject:1
 };
 
-const area=document.getElementById('objectArea');
-const svg=document.getElementById('connections');
-const video=document.getElementById('video');
-const preview=document.getElementById('preview');
-const playhead=document.getElementById('playhead');
-const ruler=document.getElementById('ruler');
-const currentTime=document.getElementById('currentTime');
-const scaleText=document.getElementById('scaleText');
-const status=document.getElementById('modeStatus');
+const scales=[
+  {step:1,width:70,label:"1秒"},
+  {step:2,width:70,label:"2秒"},
+  {step:5,width:70,label:"5秒"},
+  {step:10,width:70,label:"10秒"},
+  {step:30,width:70,label:"30秒"}
+];
 
-const videoSources={
-  original:'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
-  work:'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm'
-};
-
-function fmt(sec){
-  sec=Math.max(0,sec);
-  return String(Math.floor(sec/60)).padStart(2,'0')+':'+
-         (sec%60).toFixed(1).padStart(4,'0');
+function showMessage(text){
+  const m=$("message");
+  m.textContent=text;
+  m.classList.remove("hidden");
+  clearTimeout(showMessage.timer);
+  showMessage.timer=setTimeout(()=>m.classList.add("hidden"),1800);
 }
 
-function selectVideo(type){
-  state.video=type;
-  video.src=videoSources[type];
-  video.style.display='block';
-  preview.classList.remove('empty');
-  preview.querySelector('span').style.display='none';
-  document.getElementById('videoLabel').style.display='block';
-  document.getElementById('videoLabel').textContent=
-    type==='original'?'オリジナル動画':'作業動画';
-  document.getElementById('selectedVideoText').textContent=
-    type==='original'?'オリジナル動画':'作業動画';
-  document.querySelectorAll('.video-choice').forEach(b=>{
-    b.classList.toggle('selected',b.dataset.video===type);
+function formatTime(sec){
+  sec=Math.max(0,Number(sec)||0);
+  const h=Math.floor(sec/3600);
+  const m=Math.floor(sec%3600/60);
+  const s=Math.floor(sec%60);
+  return h
+    ? `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`
+    : `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+}
+
+function openSelection(){
+  renderVideoChoices();
+  $("selection").classList.remove("hidden");
+}
+
+function closeSelection(){
+  $("selection").classList.add("hidden");
+}
+
+function renderVideoChoices(){
+  const videos=getOriginalVideos();
+  const works=getWorks();
+  const area=$("videoChoices");
+
+  area.innerHTML="";
+
+  if(!videos.length && !works.length){
+    const empty=document.createElement("div");
+    empty.className="videoChoice";
+    empty.innerHTML="<strong>動画がありません</strong><small>オリジナル動画を追加してください。</small>";
+    const b=document.createElement("button");
+    b.textContent="オリジナル動画を追加";
+    b.className="primary";
+    b.onclick=()=>$("fileInput").click();
+    empty.appendChild(document.createElement("br"));
+    empty.appendChild(b);
+    area.appendChild(empty);
+    return;
+  }
+
+  videos.forEach(v=>{
+    const card=document.createElement("div");
+    card.className="videoChoice";
+    card.innerHTML=`<strong>${escapeHtml(v.name)}</strong><small>オリジナル動画</small>`;
+    const actions=document.createElement("div");
+    actions.className="actions";
+    const select=document.createElement("button");
+    select.textContent="この動画を編集";
+    select.className="primary";
+    select.onclick=()=>openEditor("original",v);
+    const del=document.createElement("button");
+    del.textContent="削除";
+    del.className="danger";
+    del.onclick=()=>deleteOriginal(v.id);
+    actions.append(select,del);
+    card.appendChild(actions);
+    area.appendChild(card);
   });
-  document.getElementById('videoModal').classList.remove('show');
+
+  works.forEach(w=>{
+    const card=document.createElement("div");
+    card.className="videoChoice";
+    card.innerHTML=`<strong>${escapeHtml(w.name)}</strong><small>作業動画</small>`;
+    const actions=document.createElement("div");
+    actions.className="actions";
+    const select=document.createElement("button");
+    select.textContent="この作業を再開";
+    select.className="primary";
+    select.onclick=()=>openEditor("work",w);
+    const del=document.createElement("button");
+    del.textContent="削除";
+    del.className="danger";
+    del.onclick=()=>deleteWork(w.id);
+    actions.append(select,del);
+    card.appendChild(actions);
+    area.appendChild(card);
+  });
+
+  const add=document.createElement("div");
+  add.className="videoChoice";
+  add.innerHTML="<strong>新しいオリジナル動画</strong><small>録画済み動画を追加します。</small>";
+  const b=document.createElement("button");
+  b.textContent="動画ファイルを追加";
+  b.onclick=()=>$("fileInput").click();
+  add.appendChild(document.createElement("br"));
+  add.appendChild(b);
+  area.appendChild(add);
+}
+
+function getOriginalVideos(){
+  try{return JSON.parse(localStorage.getItem("mock_videos")||"[]")}catch(e){return[]}
+}
+
+function getWorks(){
+  try{return JSON.parse(localStorage.getItem("mock_works")||"[]")}catch(e){return[]}
+}
+
+function saveWorks(list){
+  localStorage.setItem("mock_works",JSON.stringify(list));
+}
+
+function saveVideos(list){
+  localStorage.setItem("mock_videos",JSON.stringify(list));
+}
+
+function deleteOriginal(id){
+  const list=getOriginalVideos().filter(v=>v.id!==id);
+  saveVideos(list);
+  renderVideoChoices();
+}
+
+function deleteWork(id){
+  const list=getWorks().filter(v=>v.id!==id);
+  saveWorks(list);
+  renderVideoChoices();
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g,c=>({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
+}
+
+$("openVideoSelect").onclick=()=>{
+  $("modalBg").classList.remove("hidden");
+};
+
+$("closeModal").onclick=()=>{
+  $("modalBg").classList.add("hidden");
+};
+
+$("originalButton").onclick=()=>{
+  $("modalBg").classList.add("hidden");
+  $("fileInput").click();
+};
+
+$("workButton").onclick=()=>{
+  $("modalBg").classList.add("hidden");
+  openSelection();
+};
+
+$("fileInput").onchange=e=>{
+  const file=e.target.files[0];
+  if(!file)return;
+
+  const url=URL.createObjectURL(file);
+  const video={
+    id:"v_"+Date.now(),
+    name:file.name,
+    url:url,
+    duration:0
+  };
+
+  const probe=document.createElement("video");
+  probe.preload="metadata";
+  probe.src=url;
+  probe.onloadedmetadata=()=>{
+    video.duration=probe.duration||30;
+    const list=getOriginalVideos();
+    list.push(video);
+    saveVideos(list);
+    openEditor("original",video);
+  };
+};
+
+function openEditor(type,data){
+  state.videoType=type;
+  state.videoId=data.id;
+  state.videoName=data.name;
+  state.duration=Number(data.duration||data.videoDuration||30);
+  state.position=0;
+  state.scale=2;
+  state.selected=null;
+  state.connecting=false;
+  state.source=null;
+  state.dragging=null;
+  state.objects=[];
+  state.connections=[];
+
+  if(type==="work"){
+    state.duration=Number(data.videoDuration||30);
+    state.objects=(data.objects||[]).map(o=>({...o}));
+    state.connections=(data.connections||[]).map(c=>({...c}));
+  }
+
+  $("main").classList.add("hidden");
+  $("editor").classList.remove("hidden");
+  $("editorTitle").textContent=data.name+(type==="work"?"（作業動画）":"（オリジナル動画）");
+
+  const video=$("videoPlayer");
+  video.src=data.url||SAMPLE_VIDEO;
   video.currentTime=0;
   video.load();
-  state.time=0;
-  updateTimeline();
+
+  video.onloadedmetadata=()=>{
+    if(Number.isFinite(video.duration)&&video.duration>0){
+      state.duration=video.duration;
+      renderAll();
+    }
+  };
+
+  video.ontimeupdate=()=>{
+    state.position=video.currentTime;
+    renderTime();
+    renderPlayhead();
+    renderObjects();
+    renderConnections();
+  };
+
+  video.onended=()=>{
+    state.position=state.duration;
+    renderTime();
+    renderPlayhead();
+    renderObjects();
+    renderConnections();
+  };
+
+  renderAll();
 }
 
-document.querySelectorAll('.video-choice').forEach(btn=>{
-  btn.addEventListener('click',()=>selectVideo(btn.dataset.video));
-});
-
-document.getElementById('openVideo').onclick=()=>{
-  document.getElementById('videoModal').classList.add('show');
-};
-document.getElementById('menuSelect').onclick=()=>{
-  document.getElementById('videoModal').classList.add('show');
-};
-document.getElementById('menuEdit').onclick=()=>{
-  document.getElementById('videoModal').classList.remove('show');
-};
-document.getElementById('closeModal').onclick=()=>{
-  document.getElementById('videoModal').classList.remove('show');
+$("backButton").onclick=()=>{
+  if(state.videoType==="work")saveCurrentWork();
+  stopVideo();
+  $("editor").classList.add("hidden");
+  $("main").classList.remove("hidden");
+  openSelection();
 };
 
-video.addEventListener('loadedmetadata',()=>{
-  state.duration=Number.isFinite(video.duration)&&video.duration>0?video.duration:30;
-  updateTimeline();
-});
-video.addEventListener('timeupdate',()=>{
-  state.time=video.currentTime;
-  updateTimeline();
-});
-
-function updateTimeline(){
-  currentTime.textContent=fmt(state.time)+' / '+fmt(state.duration);
-  const ratio=state.duration?state.time/state.duration:0;
-  playhead.style.left=(ratio*100)+'%';
-  renderRuler();
+function stopVideo(){
+  const v=$("videoPlayer");
+  v.pause();
+  v.currentTime=0;
 }
 
-function getInterval(){
-  if(state.scale>=2)return 1;
-  if(state.scale===1)return 5;
-  return 10;
-}
-
-function renderRuler(){
-  ruler.querySelectorAll('.tick').forEach(e=>e.remove());
-  const interval=getInterval();
-  const pxPerSecond=22*state.scale;
-  const totalWidth=Math.max(ruler.clientWidth,state.duration*pxPerSecond);
-  ruler.style.minWidth=totalWidth+'px';
-  const count=Math.ceil(state.duration/interval);
-  for(let i=0;i<=count;i++){
-    const t=i*interval;
-    if(t>state.duration)break;
-    const tick=document.createElement('div');
-    tick.className='tick';
-    tick.style.left=(t*pxPerSecond)+'px';
-    const label=document.createElement('span');
-    label.textContent=fmt(t);
-    tick.appendChild(label);
-    ruler.appendChild(tick);
-  }
-  const ratio=state.duration?state.time/state.duration:0;
-  playhead.style.left=(ratio*100)+'%';
-}
-
-document.getElementById('zoomIn').onclick=()=>{
-  state.scale=Math.min(4,state.scale*2);
-  scaleText.textContent=state.scale.toFixed(1)+'x';
-  updateTimeline();
-};
-document.getElementById('zoomOut').onclick=()=>{
-  state.scale=Math.max(.5,state.scale/2);
-  scaleText.textContent=state.scale.toFixed(1)+'x';
-  updateTimeline();
+$("play").onclick=()=>{
+  const v=$("videoPlayer");
+  v.play().catch(()=>showMessage("動画を再生できませんでした"));
 };
 
-document.getElementById('scrub').onclick=e=>{
-  if(!state.video)return;
-  const rect=ruler.getBoundingClientRect();
-  const x=e.clientX-rect.left;
-  const ratio=Math.max(0,Math.min(1,x/rect.width));
-  video.currentTime=ratio*state.duration;
+$("pause").onclick=()=>$("videoPlayer").pause();
+
+$("stop").onclick=()=>{
+  const v=$("videoPlayer");
+  v.pause();
+  v.currentTime=0;
+  state.position=0;
+  renderAll();
 };
 
-function addObject(){
-  const id=state.nextId++;
-  const obj={id,name:'オブジェクト '+id,x:40+(id%4)*155,y:35+Math.floor((id-1)/4)*95,visible:true};
-  state.objects.push(obj);
+$("addComment").onclick=()=>addObject("comment");
+$("addHighlight").onclick=()=>addObject("highlight");
+$("addZoom").onclick=()=>addObject("zoom");
+$("addSkip").onclick=()=>addObject("skip");
+
+$("connectButton").onclick=()=>{
+  state.connecting=!state.connecting;
+  state.source=null;
+  $("connectionMode").textContent=state.connecting
+    ?"接続モード：接続元を選択してください"
+    :"";
   renderObjects();
-  selectObject(id);
-}
+};
 
-document.getElementById('addObject').onclick=addObject;
+function addObject(type){
+  const o={
+    id:"o_"+state.nextObject++,
+    type:type,
+    x:.18,
+    y:.18,
+    w:type==="comment"?.25:.28,
+    h:type==="comment"?.10:.22,
+    start:0,
+    end:state.duration
+  };
 
-function objectById(id){
-  return state.objects.find(o=>o.id===id);
-}
-
-function selectObject(id){
-  state.selected=id;
-  renderObjects();
-  updateInspector();
-}
-
-function renderObjects(){
-  area.querySelectorAll('.object').forEach(e=>e.remove());
-  state.objects.forEach(obj=>{
-    const el=document.createElement('div');
-    el.className='object'+(state.selected===obj.id?' selected':'')+
-      (!obj.visible?' hidden':'');
-    el.dataset.id=obj.id;
-    el.style.left=obj.x+'px';
-    el.style.top=obj.y+'px';
-
-    const name=document.createElement('div');
-    name.className='object-name';
-    name.textContent=obj.name;
-    el.appendChild(name);
-
-    const tm=document.createElement('div');
-    tm.className='object-time';
-    tm.textContent='編集オブジェクト';
-    el.appendChild(tm);
-
-    const del=document.createElement('button');
-    del.className='object-delete';
-    del.textContent='×';
-    del.title='削除';
-    del.onclick=e=>{
-      e.stopPropagation();
-      deleteObject(obj.id);
-    };
-    el.appendChild(del);
-
-    el.addEventListener('mousedown',startDrag);
-    el.addEventListener('click',e=>{
-      if(e.target!==del){
-        selectObject(obj.id);
-        if(state.connectMode)handleConnectClick(obj.id);
-      }
-    });
-    area.appendChild(el);
-  });
-  drawConnections();
-}
-
-let drag=null;
-
-function startDrag(e){
-  if(e.button!==0)return;
-  const id=Number(e.currentTarget.dataset.id);
-  selectObject(id);
-  const obj=objectById(id);
-  drag={id,startX:e.clientX,startY:e.clientY,x:obj.x,y:obj.y};
-  document.addEventListener('mousemove',moveDrag);
-  document.addEventListener('mouseup',endDrag,{once:true});
-}
-
-function moveDrag(e){
-  if(!drag)return;
-  const obj=objectById(drag.id);
-  obj.x=Math.max(0,drag.x+e.clientX-drag.startX);
-  obj.y=Math.max(0,drag.y+e.clientY-drag.startY);
-  const el=area.querySelector('.object[data-id="'+drag.id+'"]');
-  if(el){
-    el.style.left=obj.x+'px';
-    el.style.top=obj.y+'px';
-  }
-  drawConnections();
-}
-
-function endDrag(){
-  drag=null;
-  document.removeEventListener('mousemove',moveDrag);
+  state.objects.push(o);
+  state.selected=o.id;
+  renderAll();
+  showMessage("オブジェクトを追加しました");
 }
 
 function deleteObject(id){
-  state.connections=state.connections.filter(c=>c.from!==id&&c.to!==id);
   state.objects=state.objects.filter(o=>o.id!==id);
+  state.connections=state.connections.filter(c=>c.from!==id);
   if(state.selected===id)state.selected=null;
-  if(state.connectSource===id)state.connectSource=null;
-  renderObjects();
-  updateInspector();
+  if(state.source===id)state.source=null;
+  renderAll();
 }
 
-function updateInspector(){
-  const obj=objectById(state.selected);
-  const empty=document.getElementById('inspectorEmpty');
-  const inspector=document.getElementById('inspector');
-  if(!obj){
-    empty.style.display='block';
-    inspector.style.display='none';
-    return;
-  }
-  empty.style.display='none';
-  inspector.style.display='block';
-  document.getElementById('objectName').value=obj.name;
-  document.getElementById('objectVisible').value=obj.visible?'1':'0';
+function objectVisible(o){
+  return state.position>=o.start&&state.position<=o.end;
 }
 
-document.getElementById('objectName').oninput=e=>{
-  const obj=objectById(state.selected);
-  if(obj){
-    obj.name=e.target.value;
-    const el=area.querySelector('.object[data-id="'+obj.id+'"] .object-name');
-    if(el)el.textContent=obj.name;
-  }
-};
+function renderObjects(){
+  const layer=$("objectsLayer");
+  layer.innerHTML="";
 
-document.getElementById('objectVisible').onchange=e=>{
-  const obj=objectById(state.selected);
-  if(obj){
-    obj.visible=e.target.value==='1';
-    renderObjects();
-    updateInspector();
-  }
-};
+  state.objects.forEach(o=>{
+    if(!objectVisible(o))return;
 
-document.getElementById('hideObject').onclick=()=>{
-  const obj=objectById(state.selected);
-  if(!obj)return;
-  obj.visible=!obj.visible;
-  renderObjects();
-  updateInspector();
-};
+    const el=document.createElement("div");
+    el.className=`object ${o.type}`;
+    if(state.selected===o.id)el.classList.add("selected");
+    if(state.source===o.id)el.classList.add("connectSource");
 
-document.getElementById('deleteObject').onclick=()=>{
-  if(state.selected!==null)deleteObject(state.selected);
-};
+    el.dataset.id=o.id;
+    el.style.left=(o.x*100)+"%";
+    el.style.top=(o.y*100)+"%";
+    el.style.width=(o.w*100)+"%";
+    el.style.height=(o.h*100)+"%";
 
-document.getElementById('connectMode').onclick=()=>{
-  state.connectMode=!state.connectMode;
-  state.connectSource=null;
-  document.getElementById('connectMode').classList.toggle('active',state.connectMode);
-  status.textContent=state.connectMode?'接続元を選択してください':'通常操作';
-};
+    if(o.type==="comment"){
+      el.textContent="コメント";
+    }else if(o.type==="highlight"){
+      el.innerHTML='<span class="objectLabel">強調</span>';
+    }else if(o.type==="zoom"){
+      el.innerHTML='<span class="objectLabel">拡大</span>';
+    }else{
+      el.innerHTML='<span class="objectLabel">スキップ</span>';
+    }
 
-document.getElementById('connectFrom').onclick=()=>{
-  if(state.selected===null)return;
-  state.connectMode=true;
-  state.connectSource=state.selected;
-  status.textContent='接続先を選択してください';
-  document.getElementById('connectMode').classList.add('active');
-};
+    const del=document.createElement("span");
+    del.className="deleteHandle";
+    del.textContent="×";
+    del.onclick=e=>{
+      e.stopPropagation();
+      deleteObject(o.id);
+    };
+    el.appendChild(del);
 
-document.getElementById('connectTo').onclick=()=>{
-  if(state.connectSource===null||state.selected===null)return;
-  createConnection(state.connectSource,state.selected);
-};
+    el.onpointerdown=e=>{
+      if(e.target===del)return;
+      handleObjectPointerDown(e,o);
+    };
 
-function handleConnectClick(id){
-  if(state.connectSource===null){
-    state.connectSource=id;
-    status.textContent='接続先を選択してください';
-    return;
-  }
-  if(state.connectSource===id)return;
-  createConnection(state.connectSource,id);
-  state.connectSource=null;
-  status.textContent='接続元を選択してください';
-}
+    el.onclick=e=>{
+      if(state.connecting){
+        handleConnectionClick(o.id);
+      }else{
+        state.selected=o.id;
+        renderObjects();
+        renderConnections();
+      }
+      e.stopPropagation();
+    };
 
-function createConnection(from,to){
-  if(!objectById(from)||!objectById(to))return;
-  const exists=state.connections.some(c=>c.from===from&&c.to===to);
-  if(!exists)state.connections.push({from,to});
-  drawConnections();
-}
-
-function drawConnections(){
-  while(svg.firstChild)svg.removeChild(svg.firstChild);
-  const areaRect=area.getBoundingClientRect();
-
-  state.connections=state.connections.filter(c=>{
-    const from=objectById(c.from);
-    const to=objectById(c.to);
-    return !!from&&!!to;
+    layer.appendChild(el);
   });
+}
+
+function handleObjectPointerDown(e,o){
+  if(state.connecting)return;
+
+  state.selected=o.id;
+
+  const area=$("videoArea").getBoundingClientRect();
+  state.dragging={
+    id:o.id,
+    startX:e.clientX,
+    startY:e.clientY,
+    x:o.x,
+    y:o.y,
+    areaW:area.width,
+    areaH:area.height
+  };
+
+  e.currentTarget.setPointerCapture(e.pointerId);
+  e.currentTarget.onpointermove=moveObject;
+  e.currentTarget.onpointerup=endObjectMove;
+}
+
+function moveObject(e){
+  if(!state.dragging)return;
+
+  const d=state.dragging;
+  const o=state.objects.find(x=>x.id===d.id);
+  if(!o)return;
+
+  o.x=Math.max(0,Math.min(1-o.w,d.x+(e.clientX-d.startX)/d.areaW));
+  o.y=Math.max(0,Math.min(1-o.h,d.y+(e.clientY-d.startY)/d.areaH));
+
+  renderObjects();
+  renderConnections();
+}
+
+function endObjectMove(){
+  state.dragging=null;
+}
+
+function handleConnectionClick(id){
+  if(!state.source){
+    state.source=id;
+    $("connectionMode").textContent="接続モード：接続先を選択してください";
+    renderObjects();
+    return;
+  }
+
+  if(state.source===id){
+    state.source=null;
+    $("connectionMode").textContent="接続モード：接続元を選択してください";
+    renderObjects();
+    return;
+  }
+
+  state.connections=state.connections.filter(c=>!(c.from===state.source&&c.to===id));
+  state.connections.push({
+    id:"c_"+Date.now(),
+    from:state.source,
+    to:id
+  });
+
+  state.source=null;
+  $("connectionMode").textContent="接続を作成しました。接続元を選択してください";
+  renderConnections();
+  renderObjects();
+}
+
+function anchor(o,side){
+  if(side==="right")return{x:o.x+o.w,y:o.y+o.h/2};
+  if(side==="left")return{x:o.x,y:o.y+o.h/2};
+  if(side==="bottom")return{x:o.x+o.w/2,y:o.y+o.h};
+  return{x:o.x+o.w/2,y:o.y};
+}
+
+function makePath(a,b){
+  const start=anchor(a,"right");
+  const end=anchor(b,"left");
+  const mid=(start.x+end.x)/2;
+  return `M ${start.x*100} ${start.y*100} L ${mid*100} ${start.y*100} L ${mid*100} ${end.y*100} L ${end.x*100} ${end.y*100}`;
+}
+
+function renderConnections(){
+  const svg=$("connections");
+  svg.innerHTML="";
 
   state.connections.forEach(c=>{
-    const from=objectById(c.from);
-    const to=objectById(c.to);
-    if(!from||!to||!from.visible)return;
+    const from=state.objects.find(o=>o.id===c.from);
+    const to=state.objects.find(o=>o.id===c.to);
 
-    const a=area.querySelector('.object[data-id="'+from.id+'"]');
-    const b=area.querySelector('.object[data-id="'+to.id+'"]');
-    if(!a||!b)return;
+    if(!from||!to)return;
+    if(!objectVisible(from))return;
 
-    const ar=a.getBoundingClientRect();
-    const br=b.getBoundingClientRect();
+    const path=makePath(from,to);
 
-    const x1=ar.left-areaRect.left+ar.width;
-    const y1=ar.top-areaRect.top+ar.height/2;
-    const x2=br.left-areaRect.left;
-    const y2=br.top-areaRect.top+br.height/2;
-    const bend=Math.max(35,Math.abs(x2-x1)*.45);
+    const hit=document.createElementNS("http://www.w3.org/2000/svg","path");
+    hit.setAttribute("d",path);
+    hit.classList.add("connectionHit");
+    hit.onclick=()=>{
+      state.connections=state.connections.filter(x=>x.id!==c.id);
+      renderConnections();
+    };
 
-    const path=document.createElementNS('http://www.w3.org/2000/svg','path');
-    path.setAttribute('d',
-      `M ${x1} ${y1} C ${x1+bend} ${y1}, ${x2-bend} ${y2}, ${x2} ${y2}`
-    );
-    path.setAttribute('fill','none');
-    path.setAttribute('stroke','#2864d7');
-    path.setAttribute('stroke-width','2');
-    path.setAttribute('stroke-linecap','round');
+    const line=document.createElementNS("http://www.w3.org/2000/svg","path");
+    line.setAttribute("d",path);
+    line.classList.add("connection");
 
-    const arrow=document.createElementNS('http://www.w3.org/2000/svg','polygon');
-    const size=6;
-    arrow.setAttribute('points',
-      `${x2},${y2} ${x2-size},${y2-size/2} ${x2-size},${y2+size/2}`
-    );
-    arrow.setAttribute('fill','#2864d7');
-
-    svg.appendChild(path);
-    svg.appendChild(arrow);
+    svg.appendChild(hit);
+    svg.appendChild(line);
   });
+
+  if(state.source){
+    const from=state.objects.find(o=>o.id===state.source);
+    if(from&&objectVisible(from)){
+      const temp=document.createElementNS("http://www.w3.org/2000/svg","path");
+      const p=anchor(from,"right");
+      const x=(p.x+.08)*100;
+      temp.setAttribute("d",`M ${p.x*100} ${p.y*100} L ${x} ${p.y*100}`);
+      temp.classList.add("connection");
+      temp.setAttribute("stroke-dasharray","5 4");
+      svg.appendChild(temp);
+    }
+  }
 }
 
-window.addEventListener('resize',()=>{
+function renderTimeline(){
+  const s=scales[state.scale];
+  $("scaleText").textContent=s.label;
+
+  const width=Math.max(900,state.duration/s.step*s.width);
+  $("timelineInner").style.width=width+"px";
+
+  const ruler=$("ruler");
+  ruler.innerHTML="";
+
+  for(let t=0;t<=state.duration+0.001;t+=s.step){
+    const tick=document.createElement("div");
+    tick.className="tick";
+    tick.style.left=(t/state.duration*width)+"px";
+    tick.textContent=formatTime(t);
+    ruler.appendChild(tick);
+  }
+
+  const track=$("trackArea");
+  track.innerHTML="";
+
+  const clip=document.createElement("div");
+  clip.className="clip";
+  clip.style.left="0";
+  clip.style.width=width+"px";
+  clip.textContent=state.videoName;
+  track.appendChild(clip);
+
+  renderPlayhead();
+}
+
+function renderPlayhead(){
+  const s=scales[state.scale];
+  const width=Math.max(900,state.duration/s.step*s.width);
+  $("playhead").style.left=(state.position/state.duration*width)+"px";
+}
+
+$("scale").oninput=e=>{
+  state.scale=Number(e.target.value);
+  renderTimeline();
+  renderConnections();
+};
+
+$("timelineViewport").onclick=e=>{
+  if(e.target.closest(".clip"))return;
+
+  const inner=$("timelineInner").getBoundingClientRect();
+  const x=e.clientX-inner.left;
+  const width=inner.width;
+  const t=Math.max(0,Math.min(state.duration,x/width*state.duration));
+  $("videoPlayer").currentTime=t;
+  state.position=t;
+  renderAll();
+};
+
+function renderTime(){
+  $("time").textContent=`${formatTime(state.position)} / ${formatTime(state.duration)}`;
+}
+
+function renderAll(){
+  renderTime();
   renderObjects();
-  updateTimeline();
+  renderConnections();
+  renderTimeline();
+}
+
+function saveCurrentWork(){
+  if(state.videoType!=="work")return;
+
+  const works=getWorks();
+  const i=works.findIndex(w=>w.id===state.videoId);
+
+  if(i>=0){
+    works[i].objects=state.objects;
+    works[i].connections=state.connections;
+    works[i].videoDuration=state.duration;
+    saveWorks(works);
+  }
+}
+
+window.addEventListener("resize",()=>{
+  renderConnections();
+  renderPlayhead();
 });
 
-setInterval(()=>{
-  if(state.objects.length)drawConnections();
-},100);
+window.addEventListener("keydown",e=>{
+  if(e.key==="Delete"&&state.selected){
+    deleteObject(state.selected);
+  }
 
-addObject();
-addObject();
-state.objects[0].x=70;
-state.objects[0].y=70;
-state.objects[1].x=300;
-state.objects[1].y=180;
-state.selected=null;
-renderObjects();
-updateInspector();
+  if(e.key==="Escape"&&state.connecting){
+    state.connecting=false;
+    state.source=null;
+    $("connectionMode").textContent="";
+    renderObjects();
+    renderConnections();
+  }
+});
+
+renderVideoChoices();
 </script>
 </body>
 </html>
