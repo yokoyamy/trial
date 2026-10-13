@@ -1591,4 +1591,725 @@ function collectData(recorder) {
     const parts = [];
     recorder.ondataavailable = e => { if (e.data.size) parts.push(e.data); };
     recorder.onstop = () => resolve(new Blob(parts, { type: recorder.mimeType }));
-    recorder.onerror = e => reject(e.error || new Error('
+    recorder.onerror = e => reject(e.error || new Error('recorder.onerror = e => reject(e.error || new Error('録画データの収集に失敗しました'));
+  });
+}
+
+async function audioReady() {
+  if (!audio) {
+    audio = new AudioContext();
+    audioSource = audio.createMediaElementSource(video);
+    audioSink = audio.createMediaStreamDestination();
+    audioSource.connect(audio.destination);
+    audioSource.connect(audioSink);
+  }
+  if (audio.state === 'suspended') {
+    await audio.resume();
+  }
+}
+
+async function renderEditedVideo() {
+  if (!canvas.captureStream) throw new Error('このブラウザは編集動画の生成に対応していません');
+  if (getNextPlaybackTime(0) >= duration()) throw new Error('全区間がスキップされているため保存できません');
+
+  const originTime = video.currentTime;
+  const originMuted = video.muted;
+  const originRate = video.playbackRate;
+
+  const outputCanvas = document.createElement('canvas');
+  outputCanvas.width = canvas.width;
+  outputCanvas.height = canvas.height;
+  const outCtx = outputCanvas.getContext('2d');
+
+  let stream, rec, frameId, detached = false;
+  video.pause();
+
+  try {
+    await audioReady();
+    audioSource.disconnect(audio.destination);
+    detached = true;
+
+    await seek(getNextPlaybackTime(0));
+    const drawFrame = () => {
+      outCtx.drawImage(video, 0, 0, outputCanvas.width, outputCanvas.height);
+      paint(outCtx, video.currentTime, true);
+    };
+
+    drawFrame();
+    stream = outputCanvas.captureStream(30);
+    audioSink.stream.getAudioTracks().forEach(t => stream.addTrack(t.clone()));
+
+    rec = createRecorder(stream);
+    const resultPromise = collectData(rec);
+    resultPromise.catch(() => {});
+
+    const finishedPromise = new Promise((resolve, reject) => {
+      const loop = async () => {
+        try {
+          if (video.ended || video.currentTime >= duration()) {
+            resolve();
+            return;
+          }
+          const next = getNextPlaybackTime(video.currentTime);
+          if (next > video.currentTime) {
+            video.pause();
+            await seek(next);
+            if (next >= duration()) {
+              resolve();
+              return;
+            }
+            await video.play();
+          }
+          if (video.readyState >= 2 && !video.seeking) {
+            drawFrame();
+          }
+          frameId = requestAnimationFrame(loop);
+        } catch (err) {
+          reject(err);
+        }
+      };
+      frameId = requestAnimationFrame(loop);
+    });
+    finishedPromise.catch(() => {});
+
+    rec.start(250);
+    video.muted = false;
+    video.playbackRate = 1;
+    await video.play();
+
+    await Promise.race([
+      finishedPromise,
+      resultPromise.then(() => { throw new Error('書き出しが途中で中断されました'); })
+    ]);
+
+    video.pause();
+    rec.stop();
+    return await resultPromise;
+  } finally {
+    cancelAnimationFrame(frameId);
+    video.pause();
+    if (rec && rec.state === 'recording') rec.stop();
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (detached && audioSource && audio) {
+      audioSource.connect(audio.destination);
+    }
+    video.muted = originMuted;
+    video.playbackRate = originRate;
+    await seek(Math.min(originTime, duration()));
+  }
+}
+
+// 編集結果の保存
+async function saveEdit() {
+  commitText();
+  if (!current || locked()) return;
+  busy = true;
+  updateUI();
+  try {
+    message('編集動画を生成・保存しています。そのままお待ちください...');
+    const blob = await renderEditedVideo();
+    if (!blob || !blob.size) throw new Error('編集動画の生成に失敗しました');
+
+    const editId = revision ? revision.id : uid();
+    const editPayload = {
+      id: editId,
+      videoId: current.id,
+      name: revision ? revision.name : `編集 ${(current.edits ? current.edits.length : 0) + 1}`,
+      expectedVersion: revision ? revision.version : 0,
+      editData: {
+        schemaVersion: 1,
+        coordinateSystem: 'source-pixels',
+        sourceWidth: canvas.width,
+        sourceHeight: canvas.height,
+        elements: clone(elements)
+      }
+    };
+
+    const res = await api('edit.save', editPayload, blob);
+    revision = res.edit;
+    dirty = false;
+    await refreshList();
+    message('編集結果と編集動画を正常に保存しました');
+  } finally {
+    busy = false;
+    updateUI();
+  }
+}
+
+// 録画機能
+async function toggleRecord() {
+  if (writer && writer.state === 'recording') {
+    writer.stop();
+    return;
+  }
+  if (!await leavePrompt()) return;
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    throw new Error('画面録画にはHTTPSまたはlocalhost環境が必要です');
+  }
+
+  busy = true;
+  updateUI();
+  try {
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    clearState();
+    video.srcObject = screenStream;
+    video.muted = true;
+    await video.play();
+
+    writer = createRecorder(screenStream);
+    const resultPromise = collectData(writer);
+    resultPromise.catch(() => {});
+
+    screenStream.getVideoTracks()[0].onended = () => {
+      if (writer && writer.state === 'recording') writer.stop();
+    };
+
+    writer.start(500);
+    busy = false;
+    updateUI();
+    message('録画中... 音声を含める場合は共有ダイアログの「システム音声を含める」を選択してください。');
+
+    const recordedBlob = await resultPromise;
+    busy = true;
+    updateUI();
+
+    screenStream.getTracks().forEach(t => t.stop());
+    screenStream = null;
+    video.srcObject = null;
+    video.muted = false;
+
+    message('録画動画をアップロード・登録しています...');
+    const nowStr = new Date().toLocaleString('ja-JP');
+    const defaultFolderId = serverData.folders[0]?.id;
+    const uploadRes = await api('video.upload', {
+      id: uid(),
+      folderId: defaultFolderId,
+      name: `録画 ${nowStr}`
+    }, recordedBlob);
+
+    await refreshList();
+    busy = false;
+    await loadEntity(uploadRes.video, null, false);
+    message('録画を保存しました。「編集開始」ボタンから編集可能です。');
+  } finally {
+    if (screenStream) screenStream.getTracks().forEach(t => t.stop());
+    screenStream = null;
+    writer = null;
+    video.srcObject = null;
+    video.muted = false;
+    busy = false;
+    updateUI();
+  }
+}
+
+// ダウンロード
+async function downloadFile() {
+  if (editing && (dirty || !revision?.renderedFileId)) {
+    await saveEdit();
+  }
+  const fileId = revision?.renderedFileId ? revision.renderedFileId : current.originalFileId;
+  window.location.href = `index.php?api=v1&action=file.download&id=${encodeURIComponent(fileId)}`;
+}
+
+// PDF出力
+async function openPDFDialog() {
+  if (!elements.some(e => e.type === 'F')) {
+    message('タイムライン上を右クリックして「PDF位置」を追加してください');
+    return;
+  }
+  if (renderedPlayback) {
+    busy = true;
+    updateUI();
+    try {
+      const streamUrl = `index.php?api=v1&action=file.stream&id=${encodeURIComponent(current.originalFileId)}`;
+      await setSourceURL(streamUrl);
+      renderedPlayback = false;
+    } finally {
+      busy = false;
+      updateUI();
+    }
+  }
+  $('pdfDialog').showModal();
+}
+
+async function executePDFPrint() {
+  $('pdfDialog').close();
+  commitText();
+  video.pause();
+
+  const originTime = video.currentTime;
+  const layoutCount = +document.querySelector('[name=layout]:checked').value;
+  const times = elements.filter(e => e.type === 'F').map(e => e.time ?? e.start).sort((a, b) => a - b);
+
+  busy = true;
+  updateUI();
+  $('printArea').replaceChildren();
+
+  try {
+    let currentSheet = null;
+    for (let i = 0; i < times.length; i++) {
+      await seek(Math.min(times[i], Math.max(0, duration() - 0.001)));
+      const shotCanvas = document.createElement('canvas');
+      shotCanvas.width = canvas.width;
+      shotCanvas.height = canvas.height;
+      const sCtx = shotCanvas.getContext('2d');
+      sCtx.drawImage(video, 0, 0, shotCanvas.width, shotCanvas.height);
+      paint(sCtx, video.currentTime, true);
+
+      if (i % layoutCount === 0) {
+        currentSheet = document.createElement('div');
+        currentSheet.className = 'sheet';
+        $('printArea').append(currentSheet);
+      }
+
+      const shotDiv = document.createElement('div');
+      shotDiv.className = 'shot';
+      const img = new Image();
+      img.src = shotCanvas.toDataURL('image/png');
+      img.style.maxHeight = layoutCount === 2 ? '118mm' : '245mm';
+      await img.decode();
+
+      const cap = document.createElement('p');
+      cap.textContent = `${current.name} ／ ${times[i].toFixed(1)} 秒`;
+      shotDiv.append(img, cap);
+      currentSheet.append(shotDiv);
+    }
+    window.print();
+  } finally {
+    await seek(originTime);
+    busy = false;
+    updateUI();
+  }
+}
+
+// 削除処理
+async function removeItem(type, id, displayName) {
+  if (!await leavePrompt()) return;
+  const warn = type === 'edit' ? 'この編集を削除しますか？' : '配下の動画や編集データも完全に削除されます。削除しますか？';
+  if (!confirm(`「${displayName}」を削除しますか？\n${warn}`)) return;
+
+  busy = true;
+  updateUI();
+  try {
+    if (type === 'folder') await api('folder.delete', { id });
+    else if (type === 'video') await api('video.delete', { id });
+    else if (type === 'edit') await api('edit.delete', { id });
+
+    if ((type === 'video' && current?.id === id) || (type === 'edit' && revision?.id === id)) {
+      clearState();
+    }
+    await refreshList();
+    message('削除が完了しました');
+  } finally {
+    busy = false;
+    updateUI();
+  }
+}
+
+// ツリービュー構築
+function tree() {
+  const root = $('tree');
+  root.replaceChildren();
+
+  function makeRow(nameText, depth, isBranch, dateStr, entityType, entityId) {
+    const node = document.createElement('div');
+    node.className = 'row';
+    node.setAttribute('data-entity-type', entityType);
+    node.setAttribute('data-entity-id', entityId);
+    node.style.marginLeft = (depth * 16) + 'px';
+
+    const expBtn = document.createElement('button');
+    expBtn.className = 'expander';
+    expBtn.textContent = isBranch ? (collapsed.has(entityId) ? '▸' : '▾') : '·';
+
+    const span = document.createElement('span');
+    span.className = 'name';
+    span.textContent = nameText;
+
+    const time = document.createElement('time');
+    time.textContent = dateStr ? new Date(dateStr).toLocaleString('ja-JP') : '';
+
+    node.append(expBtn, span, time);
+    return { node, expBtn, span };
+  }
+
+  function renderFolder(folder, depth) {
+    const { node, expBtn, span } = makeRow(folder.name, depth, true, folder.createdAt, 'folder', folder.id);
+    root.append(node);
+
+    expBtn.onclick = () => {
+      if (collapsed.has(folder.id)) collapsed.delete(folder.id);
+      else collapsed.add(folder.id);
+      tree();
+    };
+
+    span.ondblclick = () => {
+      if (locked()) return;
+      span.contentEditable = 'true';
+      span.focus();
+    };
+
+    span.onblur = safe(async () => {
+      if (!span.isContentEditable) return;
+      span.contentEditable = 'false';
+      const val = span.textContent.trim() || folder.name;
+      if (val !== folder.name) {
+        await api('folder.rename', { id: folder.id, name: val });
+        await refreshList();
+      }
+    });
+
+    span.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); span.blur(); } };
+
+    node.oncontextmenu = ev => {
+      openMenu(ev, [
+        ['子フォルダ追加', safe(async () => {
+          await api('folder.create', { parentFolderId: folder.id, name: '新しいフォルダ' });
+          collapsed.delete(folder.id);
+          await refreshList();
+        })],
+        ['フォルダ削除', () => removeItem('folder', folder.id, folder.name)]
+      ]);
+    };
+
+    node.ondragover = ev => {
+      if (!locked()) {
+        ev.preventDefault();
+        node.classList.add('drop');
+      }
+    };
+    node.ondragleave = () => node.classList.remove('drop');
+    node.ondrop = safe(async ev => {
+      ev.preventDefault();
+      node.classList.remove('drop');
+      const vId = ev.dataTransfer.getData('text/plain');
+      if (!vId) return;
+      await api('video.move', { id: vId, folderId: folder.id });
+      collapsed.delete(folder.id);
+      await refreshList();
+    });
+
+    if (collapsed.has(folder.id)) return;
+
+    // 子フォルダ
+    serverData.folders.filter(f => f.parentFolderId === folder.id).forEach(cf => renderFolder(cf, depth + 1));
+
+    // 所属動画
+    serverData.videos.filter(v => v.folderId === folder.id).forEach(vid => {
+      const edits = serverData.edits.filter(e => e.videoId === vid.id);
+      const vRow = makeRow(vid.name, depth + 1, edits.length > 0, vid.createdAt, 'video', vid.id);
+      vRow.node.draggable = true;
+
+      vRow.node.ondragstart = ev => {
+        if (locked() || vRow.span.isContentEditable) ev.preventDefault();
+        else ev.dataTransfer.setData('text/plain', vid.id);
+      };
+
+      vRow.expBtn.onclick = () => {
+        if (collapsed.has(vid.id)) collapsed.delete(vid.id);
+        else collapsed.add(vid.id);
+        tree();
+      };
+
+      vRow.span.onclick = safe(async () => {
+        if (!locked() && !vRow.span.isContentEditable) await loadEntity(vid, null, false);
+      });
+
+      vRow.span.ondblclick = () => {
+        if (locked()) return;
+        vRow.span.contentEditable = 'true';
+        vRow.span.focus();
+      };
+
+      vRow.span.onblur = safe(async () => {
+        if (!vRow.span.isContentEditable) return;
+        vRow.span.contentEditable = 'false';
+        const val = vRow.span.textContent.trim() || vid.name;
+        if (val !== vid.name) {
+          await api('video.rename', { id: vid.id, name: val });
+          await refreshList();
+        }
+      });
+
+      vRow.span.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); vRow.span.blur(); } };
+
+      vRow.node.oncontextmenu = ev => {
+        openMenu(ev, [
+          ['再生する', () => loadEntity(vid, null, false)],
+          ['新規編集を開始', () => loadEntity(vid, null, true)],
+          ['ダウンロード', () => {
+            window.location.href = `index.php?api=v1&action=file.download&id=${encodeURIComponent(vid.originalFileId)}`;
+          }],
+          ['動画削除', () => removeItem('video', vid.id, vid.name)]
+        ]);
+      };
+      root.append(vRow.node);
+
+      if (collapsed.has(vid.id)) return;
+
+      // 元動画ノード
+      const origRow = makeRow('元動画', depth + 2, false, vid.createdAt, 'original', vid.id);
+      origRow.span.onclick = safe(async () => { if (!locked()) await loadEntity(vid, null, false); });
+      origRow.node.oncontextmenu = ev => {
+        openMenu(ev, [
+          ['再生する', () => loadEntity(vid, null, false)],
+          ['ダウンロード', () => {
+            window.location.href = `index.php?api=v1&action=file.download&id=${encodeURIComponent(vid.originalFileId)}`;
+          }]
+        ]);
+      };
+      root.append(origRow.node);
+
+      // 編集一覧ノード
+      edits.forEach(ed => {
+        const edRow = makeRow(ed.name, depth + 2, false, ed.updatedAt, 'edit', ed.id);
+        edRow.span.onclick = safe(async () => {
+          if (!locked() && !edRow.span.isContentEditable) await loadEntity(vid, ed, true);
+        });
+        edRow.span.ondblclick = () => {
+          if (locked()) return;
+          edRow.span.contentEditable = 'true';
+          edRow.span.focus();
+        };
+        edRow.span.onblur = safe(async () => {
+          if (!edRow.span.isContentEditable) return;
+          edRow.span.contentEditable = 'false';
+          const val = edRow.span.textContent.trim() || ed.name;
+          if (val !== ed.name) {
+            await api('edit.rename', { id: ed.id, name: val });
+            await refreshList();
+          }
+        });
+        edRow.span.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); edRow.span.blur(); } };
+
+        edRow.node.oncontextmenu = ev => {
+          openMenu(ev, [
+            ['編集する', () => loadEntity(vid, ed, true)],
+            ['保存済み動画を再生', async () => {
+              if (await loadEntity(vid, ed, false)) {
+                if (audio) await audio.resume();
+                await video.play();
+              }
+            }],
+            ['ダウンロード', () => {
+              const fid = ed.renderedFileId || vid.originalFileId;
+              window.location.href = `index.php?api=v1&action=file.download&id=${encodeURIComponent(fid)}`;
+            }],
+            ['PDF出力', async () => {
+              if (await loadEntity(vid, ed, true)) await openPDFDialog();
+            }],
+            ['編集削除', () => removeItem('edit', ed.id, ed.name)]
+          ]);
+        };
+        root.append(edRow.node);
+      });
+    });
+  }
+
+  serverData.folders.filter(f => !f.parentFolderId).forEach(rootFolder => renderFolder(rootFolder, 0));
+}
+
+// 境界スプリッターのドラッグによる割合調整
+$('split').onpointerdown = event => {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  const startY = event.clientY;
+  const stageEl = $('stage');
+  const tlEl = $('timeline');
+  const startStageH = stageEl.offsetHeight;
+  const startTlH = tlEl.offsetHeight;
+
+  drag(event, ev => {
+    const dy = ev.clientY - startY;
+    if (editing) {
+      const newTlH = clamp(startTlH - dy, 120, 480);
+      tlEl.style.height = newTlH + 'px';
+    }
+    fit();
+  });
+};
+
+// UIイベントのバインド
+$('list').onclick = () => library(true);
+$('closeList').onclick = $('veil').onclick = () => library(false);
+
+$('upload').onclick = $('upload2').onclick = () => $('file').click();
+$('file').onchange = safe(async event => {
+  const f = event.target.files[0];
+  event.target.value = '';
+  if (!f || !await leavePrompt()) return;
+
+  busy = true;
+  updateUI();
+  try {
+    message('動画をアップロードしています...');
+    const defaultFolderId = serverData.folders[0]?.id;
+    const res = await api('video.upload', {
+      id: uid(),
+      folderId: defaultFolderId,
+      name: f.name.replace(/\.[^.]+$/, '')
+    }, f);
+
+    await refreshList();
+    await loadEntity(res.video, null, false);
+    message('動画のアップロードが完了しました');
+  } finally {
+    busy = false;
+    updateUI();
+  }
+});
+
+$('new').onclick = safe(async () => {
+  if (await leavePrompt()) {
+    clearState();
+    library(false);
+    updateUI();
+    message('「録画開始」ボタンを押して画面共有を開始してください');
+  }
+});
+
+$('folder').onclick = safe(async () => {
+  await api('folder.create', { parentFolderId: null, name: '新しいフォルダ' });
+  await refreshList();
+});
+
+$('primary').onclick = safe(async () => {
+  if (screenStream || !editing) {
+    await toggleRecord();
+    return;
+  }
+  commitText();
+  if (video.paused) {
+    if (audio) await audio.resume();
+    if (video.ended) await seek(0);
+    await video.play();
+  } else {
+    video.pause();
+  }
+  updateUI();
+});
+
+$('begin').onclick = safe(async () => {
+  if (renderedPlayback) {
+    const streamUrl = `index.php?api=v1&action=file.stream&id=${encodeURIComponent(current.originalFileId)}`;
+    await setSourceURL(streamUrl);
+    renderedPlayback = false;
+  }
+  editing = true;
+  video.pause();
+  await seek(0);
+  updateUI();
+  message('右クリックで各要素を追加できます。コメントは枠内ダブルクリックで直接編集可能です。');
+});
+
+$('save').onclick = safe(saveEdit);
+
+$('finish').onclick = safe(async () => {
+  if (!await leavePrompt()) return;
+  if (revision?.renderedFileId) {
+    const streamUrl = `index.php?api=v1&action=file.stream&id=${encodeURIComponent(revision.renderedFileId)}`;
+    await setSourceURL(streamUrl);
+    renderedPlayback = true;
+  } else {
+    await seek(0);
+  }
+  editing = false;
+  updateUI();
+});
+
+$('download').onclick = safe(downloadFile);
+$('pdf').onclick = safe(openPDFDialog);
+$('print').onclick = safe(executePDFPrint);
+$('cancelPDF').onclick = () => $('pdfDialog').close();
+
+canvas.oncontextmenu = event => elementMenu(event, hit(point(event)), false);
+$('tracks').oncontextmenu = event => elementMenu(event, null, true);
+
+$('tracks').onpointerdown = event => {
+  if (event.button === 0 && !locked() && !event.target.closest('.clip')) {
+    video.pause();
+    video.currentTime = timeAtEvent(event);
+  }
+};
+
+$('handle').onpointerdown = event => {
+  if (locked()) return;
+  event.stopPropagation();
+  video.pause();
+  const r = timelineRange();
+  drag(event, ev => video.currentTime = timeAtEvent(ev, r));
+};
+
+$('scale').oninput = () => { tracks(); paint(); };
+$('viewZoom').onchange = () => {
+  displayZoom = +$('viewZoom').value;
+  fit();
+  paint();
+};
+
+video.onseeked = () => { tracks(); paint(); };
+video.onplay = video.onpause = video.onended = updateUI;
+video.onerror = () => message('動画の再生に失敗しました。対応コーデックをご確認ください。');
+
+document.addEventListener('pointerdown', event => {
+  if (!event.target.closest('#menu')) $('menu').hidden = true;
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    connecting = null;
+    $('menu').hidden = true;
+  }
+});
+
+window.addEventListener('resize', () => { commitText(); updateUI(); });
+window.addEventListener('beforeunload', event => {
+  if (dirty || screenStream || busy) {
+    event.preventDefault();
+    event.returnValue = '';
+  }
+});
+
+// 再生ループとスキップ制御
+let lastStart = -1, isSkipping = false;
+async function playbackLoop() {
+  if (!busy && editing && !video.paused && !isSkipping) {
+    const next = getNextPlaybackTime(video.currentTime);
+    if (next > video.currentTime) {
+      isSkipping = true;
+      try {
+        await seek(next);
+        if (next < duration()) await video.play();
+      } catch (err) {
+        message(err.message);
+      } finally {
+        isSkipping = false;
+      }
+    }
+  }
+  paint();
+  if (editing) {
+    const curStart = timelineRange().start;
+    if (Math.abs(curStart - lastStart) > 0.05) {
+      lastStart = curStart;
+      tracks();
+    } else {
+      updateClock();
+    }
+  }
+  requestAnimationFrame(playbackLoop);
+}
+
+// 初期化実行
+try {
+  await refreshList();
+  updateUI();
+  requestAnimationFrame(playbackLoop);
+} catch (err) {
+  message('初期化に失敗しました: ' + err.message);
+  document.querySelectorAll('button').forEach(b => b.disabled = true);
+}
+})();
+</script>
+</body>
+</html>
