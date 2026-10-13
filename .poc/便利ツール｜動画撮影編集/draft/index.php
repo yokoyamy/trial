@@ -1,15 +1,9 @@
 <?php
-/**
- * 便利ツール｜動画撮影編集 POC
- * Apache + PHP 1ファイル統合実装 (index.php)
- */
-
+// ============================================================================
+// サーバサイド処理（Apache + PHP: index.php 単一ファイル構成）
+// ============================================================================
 declare(strict_types=1);
 
-// -----------------------------------------------------------------------------
-// 1. サーバサイド処理（API・動画配信・ストレージ管理）
-// -----------------------------------------------------------------------------
-const SCHEMA_VERSION = 1;
 $storageDir = __DIR__ . '/storage';
 $filesDir = $storageDir . '/files';
 $tmpDir = $storageDir . '/tmp';
@@ -18,19 +12,16 @@ $reqFile = $storageDir . '/requests.json';
 $retryFile = $storageDir . '/deletion-retry.json';
 $htaccessFile = $storageDir . '/.htaccess';
 
-function initStorage(): void {
-    global $storageDir, $filesDir, $tmpDir, $metaFile, $reqFile, $retryFile, $htaccessFile;
+// ストレージ初期化
+function initStorage(string $storageDir, string $filesDir, string $tmpDir, string $metaFile, string $reqFile, string $retryFile, string $htaccessFile): void {
     if (!is_dir($storageDir) && !mkdir($storageDir, 0755, true)) {
-        http_response_code(500);
-        exit('storage ディレクトリの作成に失敗しました。');
+        http_response_code(500); exit('Storage directory creation failed.');
     }
     if (!is_dir($filesDir) && !mkdir($filesDir, 0755, true)) {
-        http_response_code(500);
-        exit('files ディレクトリの作成に失敗しました。');
+        http_response_code(500); exit('Files directory creation failed.');
     }
     if (!is_dir($tmpDir) && !mkdir($tmpDir, 0755, true)) {
-        http_response_code(500);
-        exit('tmp ディレクトリの作成に失敗しました。');
+        http_response_code(500); exit('Tmp directory creation failed.');
     }
     if (!file_exists($htaccessFile)) {
         file_put_contents($htaccessFile, "Require all denied\n");
@@ -43,575 +34,379 @@ function initStorage(): void {
     }
     if (!file_exists($metaFile)) {
         $defaultFolder = [
-            'id' => uuidv4(),
+            'id' => sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x', mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0x0fff) | 0x4000, mt_rand(0, 0x3fff) | 0x8000, mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)),
             'parentFolderId' => null,
             'name' => 'デフォルトフォルダ',
-            'createdAt' => gmdate('c'),
-            'updatedAt' => gmdate('c')
+            'createdAt' => gmdate('Y-m-d\TH:i:s\Z'),
+            'updatedAt' => gmdate('Y-m-d\TH:i:s\Z')
         ];
-        $initialData = [
-            'schemaVersion' => SCHEMA_VERSION,
+        $initialMeta = [
+            'schemaVersion' => 1,
             'folders' => [$defaultFolder],
             'videos' => [],
             'edits' => [],
             'files' => []
         ];
-        file_put_contents($metaFile, json_encode($initialData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        file_put_contents($metaFile, json_encode($initialMeta, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
     }
 }
+initStorage($storageDir, $filesDir, $tmpDir, $metaFile, $reqFile, $retryFile, $htaccessFile);
 
-function uuidv4(): string {
-    $data = random_bytes(16);
-    $data[6] = chr(ord($data[6]) & 0x0f | 0x40);
-    $data[8] = chr(ord($data[8]) & 0x3f | 0x80);
-    return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
-}
+// APIルーティング判定
+if (isset($_GET['api']) && $_GET['api'] === 'v1') {
+    $action = $_GET['action'] ?? '';
 
-function jsonResponse(bool $ok, ?string $requestId, mixed $dataOrError, int $statusCode = 200): void {
-    http_response_code($statusCode);
-    header('Content-Type: application/json; charset=utf-8');
-    if ($ok) {
-        echo json_encode(['ok' => true, 'requestId' => $requestId, 'data' => $dataOrError], JSON_UNESCAPED_UNICODE);
-    } else {
-        echo json_encode(['ok' => false, 'requestId' => $requestId, 'error' => $dataOrError], JSON_UNESCAPED_UNICODE);
-    }
-    exit;
-}
-
-function withLock(callable $fn) {
-    global $storageDir;
-    $lockFile = $storageDir . '/.lock';
-    $fp = fopen($lockFile, 'c+');
-    if (!$fp || !flock($fp, LOCK_EX)) {
-        throw new RuntimeException('排他制御の取得に失敗しました。');
-    }
-    try {
-        return $fn();
-    } finally {
-        flock($fp, LOCK_UN);
-        fclose($fp);
-    }
-}
-
-function getMetadata(): array {
-    global $metaFile;
-    $content = file_get_contents($metaFile);
-    $data = json_decode($content, true);
-    if (!is_array($data) || ($data['schemaVersion'] ?? 0) !== SCHEMA_VERSION) {
-        throw new RuntimeException('未対応のデータスキーマです。');
-    }
-    return $data;
-}
-
-function saveMetadata(array $data): void {
-    global $metaFile, $tmpDir;
-    $tmpPath = $tmpDir . '/meta_' . uuidv4() . '.json';
-    file_put_contents($tmpPath, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-    if (!rename($tmpPath, $metaFile)) {
-        @unlink($tmpPath);
-        throw new RuntimeException('メタデータの更新に失敗しました。');
-    }
-}
-
-function checkDuplicateRequest(string $requestId, array $payload): ?array {
-    global $reqFile;
-    $reqs = json_decode(file_get_contents($reqFile), true) ?: [];
-    if (isset($reqs[$requestId])) {
-        $saved = $reqs[$requestId];
-        if ($saved['payloadHash'] !== md5(json_encode($payload))) {
-            jsonResponse(false, $requestId, ['code' => 'REQUEST_PAYLOAD_MISMATCH', 'message' => '同一requestIdで異なる内容が送信されました。'], 400);
+    // ファイル配信 (Range対応)
+    if ($action === 'file.stream' || $action === 'file.download') {
+        $fileId = $_GET['id'] ?? '';
+        $meta = json_decode((string)file_get_contents($metaFile), true);
+        $fileMeta = null;
+        foreach ($meta['files'] as $f) {
+            if ($f['id'] === $fileId) { $fileMeta = $f; break; }
         }
-        return $saved['result'];
-    }
-    return null;
-}
+        if (!$fileMeta) { http_response_code(404); exit('File not found.'); }
+        $filePath = $storageDir . '/' . $fileMeta['storagePath'];
+        if (!file_exists($filePath)) { http_response_code(404); exit('File missing on disk.'); }
 
-function recordRequestSuccess(string $requestId, array $payload, mixed $result): void {
-    global $reqFile, $tmpDir;
-    $reqs = json_decode(file_get_contents($reqFile), true) ?: [];
-    $reqs[$requestId] = [
-        'payloadHash' => md5(json_encode($payload)),
-        'result' => $result,
-        'time' => gmdate('c')
-    ];
-    if (count($reqs) > 1000) {
-        $reqs = array_slice($reqs, -500, null, true);
-    }
-    $tmpPath = $tmpDir . '/req_' . uuidv4() . '.json';
-    file_put_contents($tmpPath, json_encode($reqs, JSON_UNESCAPED_UNICODE));
-    rename($tmpPath, $reqFile);
-}
+        $size = filesize($filePath);
+        $mime = $fileMeta['mimeType'] ?: 'video/mp4';
 
-function streamFile(string $fileId, bool $isDownload = false): void {
-    global $storageDir;
-    $meta = getMetadata();
-    $fileInfo = null;
-    foreach ($meta['files'] as $f) {
-        if ($f['id'] === $fileId) {
-            $fileInfo = $f;
-            break;
+        if ($action === 'file.download') {
+            header('Content-Type: ' . $mime);
+            header('Content-Disposition: attachment; filename="' . basename($fileMeta['storagePath']) . '"');
+            header('Content-Length: ' . $size);
+            readfile($filePath);
+            exit;
         }
-    }
-    if (!$fileInfo) {
-        http_response_code(404);
-        exit('File Not Found');
-    }
 
-    $path = $storageDir . '/' . $fileInfo['storagePath'];
-    if (!file_exists($path)) {
-        http_response_code(404);
-        exit('File Not Found On Storage');
-    }
-
-    $size = filesize($path);
-    $mime = $fileInfo['mimeType'] ?: 'video/mp4';
-
-    if ($isDownload) {
-        $filename = 'download_' . $fileId . ($mime === 'video/webm' ? '.webm' : '.mp4');
+        // Range再生対応
+        $start = 0; $end = $size - 1;
+        if (isset($_SERVER['HTTP_RANGE'])) {
+            if (preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $matches)) {
+                $start = (int)$matches[1];
+                if (!empty($matches[2])) $end = (int)$matches[2];
+                header('HTTP/1.1 206 Partial Content');
+                header("Content-Range: bytes {$start}-{$end}/{$size}");
+            }
+        }
+        header('Accept-Ranges: bytes');
         header('Content-Type: ' . $mime);
-        header('Content-Disposition: attachment; filename="' . $filename . '"');
-        header('Content-Length: ' . $size);
-        readfile($path);
+        header('Content-Length: ' . ($end - $start + 1));
+        $fp = fopen($filePath, 'rb');
+        fseek($fp, $start);
+        $remain = $end - $start + 1;
+        while ($remain > 0 && !feof($fp)) {
+            $chunk = fread($fp, min(1048576, $remain));
+            echo $chunk;
+            $remain -= strlen($chunk);
+        }
+        fclose($fp);
         exit;
     }
 
-    // HTTP Range Stream
-    $start = 0;
-    $end = $size - 1;
-    header('Content-Type: ' . $mime);
-    header('Accept-Ranges: bytes');
+    // JSON API応答ハンドラ
+    header('Content-Type: application/json; charset=UTF-8');
+    function apiSuccess($data, ?string $requestId): void {
+        echo json_encode(['ok' => true, 'requestId' => $requestId, 'data' => $data], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    function apiError(string $code, string $message, int $httpStatus = 400, ?string $requestId = null): void {
+        http_response_code($httpStatus);
+        echo json_encode(['ok' => false, 'requestId' => $requestId, 'error' => ['code' => $code, 'message' => $message]], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
 
-    if (isset($_SERVER['HTTP_RANGE'])) {
-        $range = $_SERVER['HTTP_RANGE'];
-        if (preg_match('/bytes=(\d+)-(\d*)/', $range, $matches)) {
-            $start = (int)$matches[1];
-            if (!empty($matches[2])) {
-                $end = (int)$matches[2];
+    // メタデータロック付きトランザクション
+    $lockFp = fopen($metaFile, 'c+');
+    flock($lockFp, LOCK_EX);
+    $meta = json_decode((string)file_get_contents($metaFile), true);
+    $requests = json_decode((string)file_get_contents($reqFile), true);
+
+    function saveMetaAndRequests($lockFp, $metaFile, $reqFile, $meta, $requests): void {
+        $tmpMeta = $metaFile . '.tmp.' . uniqid('', true);
+        file_put_contents($tmpMeta, json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        rename($tmpMeta, $metaFile);
+        $tmpReq = $reqFile . '.tmp.' . uniqid('', true);
+        file_put_contents($tmpReq, json_encode($requests, JSON_UNESCAPED_UNICODE));
+        rename($tmpReq, $reqFile);
+        flock($lockFp, LOCK_UN);
+        fclose($lockFp);
+    }
+
+    $method = $_SERVER['REQUEST_METHOD'];
+    if ($method === 'GET' && $action === 'list') {
+        // storagePathを除外して一覧返却
+        $resFolders = $meta['folders'];
+        $resVideos = $meta['videos'];
+        $resEdits = array_map(function($e) { unset($e['editData']); return $e; }, $meta['edits']);
+        $resFiles = array_map(function($f) { unset($f['storagePath']); return $f; }, $meta['files']);
+        flock($lockFp, LOCK_UN); fclose($lockFp);
+        apiSuccess(['schemaVersion' => 1, 'folders' => $resFolders, 'videos' => $resVideos, 'edits' => $resEdits, 'files' => $resFiles], null);
+    }
+
+    if ($method === 'GET' && $action === 'edit.get') {
+        $editId = $_GET['id'] ?? '';
+        foreach ($meta['edits'] as $e) {
+            if ($e['id'] === $editId) {
+                flock($lockFp, LOCK_UN); fclose($lockFp);
+                apiSuccess(['edit' => $e], null);
             }
         }
-        if ($start > $end || $start >= $size) {
-            http_response_code(416);
-            header("Content-Range: bytes */$size");
-            exit;
-        }
-        http_response_code(206);
-        header("Content-Range: bytes $start-$end/$size");
-        header('Content-Length: ' . ($end - $start + 1));
+        flock($lockFp, LOCK_UN); fclose($lockFp);
+        apiError('NOT_FOUND', '指定された編集が見つかりません。', 404);
+    }
+
+    // POST要求の共通パース
+    $requestId = null;
+    $payload = [];
+    if (isset($_SERVER['CONTENT_TYPE']) && strpos($_SERVER['CONTENT_TYPE'], 'multipart/form-data') !== false) {
+        $metaInput = json_decode($_POST['metadata'] ?? '{}', true);
+        $requestId = $metaInput['requestId'] ?? null;
+        $payload = $metaInput['payload'] ?? [];
     } else {
-        header('Content-Length: ' . $size);
+        $body = json_decode(file_get_contents('php://input'), true);
+        $requestId = $body['requestId'] ?? null;
+        $payload = $body['payload'] ?? [];
     }
 
-    $fp = fopen($path, 'rb');
-    fseek($fp, $start);
-    $chunkSize = 1024 * 64;
-    $bytesToRead = $end - $start + 1;
-    while (!feof($fp) && $bytesToRead > 0) {
-        $read = ($bytesToRead > $chunkSize) ? $chunkSize : $bytesToRead;
-        $data = fread($fp, $read);
-        echo $data;
-        flush();
-        $bytesToRead -= strlen($data);
+    if (!$requestId) {
+        flock($lockFp, LOCK_UN); fclose($lockFp);
+        apiError('INVALID_REQUEST', 'requestIdが必要です。', 400);
     }
-    fclose($fp);
-    exit;
-}
 
-// APIルーティング
-if (isset($_GET['api']) && $_GET['api'] === 'v1') {
-    initStorage();
-    $action = $_GET['action'] ?? '';
+    // 重複実行チェック (冪等性)
+    if (isset($requests[$requestId])) {
+        $cached = $requests[$requestId];
+        flock($lockFp, LOCK_UN); fclose($lockFp);
+        apiSuccess($cached['data'], $requestId);
+    }
 
-    if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-        if ($action === 'list') {
-            try {
-                $meta = getMetadata();
-                // storagePathを非公開にして応答
-                $cleanFiles = array_map(function($f) {
-                    return ['id' => $f['id'], 'mimeType' => $f['mimeType'], 'size' => $f['size'], 'createdAt' => $f['createdAt']];
-                }, $meta['files']);
-                jsonResponse(true, null, [
-                    'schemaVersion' => $meta['schemaVersion'],
-                    'folders' => $meta['folders'],
-                    'videos' => $meta['videos'],
-                    'edits' => array_map(function($e) {
-                        return [
-                            'id' => $e['id'],
-                            'videoId' => $e['videoId'],
-                            'name' => $e['name'],
-                            'version' => $e['version'],
-                            'renderedFileId' => $e['renderedFileId'],
-                            'createdAt' => $e['createdAt'],
-                            'updatedAt' => $e['updatedAt']
-                        ];
-                    }, $meta['edits']),
-                    'files' => $cleanFiles
-                ]);
-            } catch (Throwable $e) {
-                jsonResponse(false, null, ['code' => 'ERROR', 'message' => $e->getMessage()], 500);
+    $now = gmdate('Y-m-d\TH:i:s\Z');
+    $resultData = [];
+
+    switch ($action) {
+        case 'folder.create':
+            $folder = [
+                'id' => $payload['id'] ?? sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x', mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0x0fff) | 0x4000, mt_rand(0, 0x3fff) | 0x8000, mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)),
+                'parentFolderId' => $payload['parentFolderId'] ?? null,
+                'name' => $payload['name'] ?? '新規フォルダ',
+                'createdAt' => $now,
+                'updatedAt' => $now
+            ];
+            $meta['folders'][] = $folder;
+            $resultData = ['folder' => $folder];
+            break;
+
+        case 'folder.rename':
+            $found = false;
+            foreach ($meta['folders'] as &$f) {
+                if ($f['id'] === $payload['id']) {
+                    $f['name'] = $payload['name'];
+                    $f['updatedAt'] = $now;
+                    $found = true; break;
+                }
             }
-        } elseif ($action === 'edit.get') {
-            $id = $_GET['id'] ?? '';
-            try {
-                $meta = getMetadata();
-                foreach ($meta['edits'] as $e) {
-                    if ($e['id'] === $id) {
-                        jsonResponse(true, null, [
-                            'id' => $e['id'],
-                            'videoId' => $e['videoId'],
-                            'name' => $e['name'],
-                            'version' => $e['version'],
-                            'editData' => $e['editData'],
-                            'renderedFileId' => $e['renderedFileId']
-                        ]);
-                    }
+            if (!$found) { flock($lockFp, LOCK_UN); fclose($lockFp); apiError('NOT_FOUND', 'フォルダが存在しません。', 404, $requestId); }
+            $resultData = ['id' => $payload['id'], 'name' => $payload['name']];
+            break;
+
+        case 'folder.delete':
+            $targetId = $payload['id'];
+            $collectFolderIds = function($fid) use (&$collectFolderIds, $meta) {
+                $ids = [$fid];
+                foreach ($meta['folders'] as $f) {
+                    if ($f['parentFolderId'] === $fid) $ids = array_merge($ids, $collectFolderIds($f['id']));
                 }
-                jsonResponse(false, null, ['code' => 'NOT_FOUND', 'message' => '編集データが見つかりません。'], 404);
-            } catch (Throwable $e) {
-                jsonResponse(false, null, ['code' => 'ERROR', 'message' => $e->getMessage()], 500);
+                return $ids;
+            };
+            $delFolderIds = $collectFolderIds($targetId);
+            $delVideoIds = [];
+            foreach ($meta['videos'] as $v) {
+                if (in_array($v['folderId'], $delFolderIds, true)) $delVideoIds[] = $v['id'];
             }
-        } elseif ($action === 'file.stream') {
-            streamFile($_GET['id'] ?? '', false);
-        } elseif ($action === 'file.download') {
-            streamFile($_GET['id'] ?? '', true);
-        }
-        jsonResponse(false, null, ['code' => 'UNKNOWN_ACTION', 'message' => '無効な操作です。'], 400);
+            // 削除対象ファイルを抽出
+            $delFileIds = [];
+            foreach ($meta['videos'] as $v) {
+                if (in_array($v['id'], $delVideoIds, true)) $delFileIds[] = $v['originalFileId'];
+            }
+            foreach ($meta['edits'] as $e) {
+                if (in_array($e['videoId'], $delVideoIds, true) && $e['renderedFileId']) $delFileIds[] = $e['renderedFileId'];
+            }
+            foreach ($meta['files'] as $f) {
+                if (in_array($f['id'], $delFileIds, true)) {
+                    @unlink($storageDir . '/' . $f['storagePath']);
+                }
+            }
+            $meta['folders'] = array_values(array_filter($meta['folders'], fn($f) => !in_array($f['id'], $delFolderIds, true)));
+            $meta['videos'] = array_values(array_filter($meta['videos'], fn($v) => !in_array($v['id'], $delVideoIds, true)));
+            $meta['edits'] = array_values(array_filter($meta['edits'], fn($e) => !in_array($e['videoId'], $delVideoIds, true)));
+            $meta['files'] = array_values(array_filter($meta['files'], fn($f) => !in_array($f['id'], $delFileIds, true)));
+            $resultData = ['deletedFolderIds' => $delFolderIds];
+            break;
+
+        case 'video.upload':
+            if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+                flock($lockFp, LOCK_UN); fclose($lockFp); apiError('UPLOAD_FAILED', '動画アップロードに失敗しました。', 400, $requestId);
+            }
+            $origFile = $_FILES['file'];
+            $fileId = sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x', mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0x0fff) | 0x4000, mt_rand(0, 0x3fff) | 0x8000, mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff));
+            $ext = pathinfo($origFile['name'], PATHINFO_EXTENSION) ?: 'mp4';
+            $storageRel = 'files/' . $fileId . '.' . $ext;
+            $dest = $storageDir . '/' . $storageRel;
+            if (!move_uploaded_file($origFile['tmp_name'], $dest)) {
+                flock($lockFp, LOCK_UN); fclose($lockFp); apiError('MOVE_FAILED', 'ファイルの保存に失敗しました。', 500, $requestId);
+            }
+            $meta['files'][] = [
+                'id' => $fileId,
+                'storagePath' => $storageRel,
+                'mimeType' => $origFile['type'] ?: 'video/mp4',
+                'size' => filesize($dest),
+                'createdAt' => $now
+            ];
+            $videoId = $payload['id'] ?? sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x', mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0x0fff) | 0x4000, mt_rand(0, 0x3fff) | 0x8000, mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff));
+            $video = [
+                'id' => $videoId,
+                'folderId' => $payload['folderId'],
+                'name' => $payload['name'] ?? '録画動画',
+                'originalFileId' => $fileId,
+                'createdAt' => $now,
+                'updatedAt' => $now
+            ];
+            $meta['videos'][] = $video;
+            $resultData = ['video' => $video];
+            break;
+
+        case 'video.rename':
+            foreach ($meta['videos'] as &$v) {
+                if ($v['id'] === $payload['id']) {
+                    $v['name'] = $payload['name'];
+                    $v['updatedAt'] = $now;
+                    break;
+                }
+            }
+            $resultData = ['id' => $payload['id'], 'name' => $payload['name']];
+            break;
+
+        case 'video.move':
+            foreach ($meta['videos'] as &$v) {
+                if ($v['id'] === $payload['id']) {
+                    $v['folderId'] = $payload['folderId'];
+                    $v['updatedAt'] = $now;
+                    break;
+                }
+            }
+            $resultData = ['id' => $payload['id'], 'folderId' => $payload['folderId']];
+            break;
+
+        case 'video.delete':
+            $vid = $payload['id'];
+            $delFileIds = [];
+            foreach ($meta['videos'] as $v) {
+                if ($v['id'] === $vid) $delFileIds[] = $v['originalFileId'];
+            }
+            foreach ($meta['edits'] as $e) {
+                if ($e['videoId'] === $vid && $e['renderedFileId']) $delFileIds[] = $e['renderedFileId'];
+            }
+            foreach ($meta['files'] as $f) {
+                if (in_array($f['id'], $delFileIds, true)) @unlink($storageDir . '/' . $f['storagePath']);
+            }
+            $meta['videos'] = array_values(array_filter($meta['videos'], fn($v) => $v['id'] !== $vid));
+            $meta['edits'] = array_values(array_filter($meta['edits'], fn($e) => $e['videoId'] !== $vid));
+            $meta['files'] = array_values(array_filter($meta['files'], fn($f) => !in_array($f['id'], $delFileIds, true)));
+            $resultData = ['deletedVideoId' => $vid];
+            break;
+
+        case 'edit.save':
+            $editId = $payload['id'];
+            $expectedVer = (int)($payload['expectedVersion'] ?? 0);
+            $editIndex = -1;
+            for ($i = 0; $i < count($meta['edits']); $i++) {
+                if ($meta['edits'][$i]['id'] === $editId) { $editIndex = $i; break; }
+            }
+
+            if ($editIndex >= 0 && $meta['edits'][$editIndex]['version'] !== $expectedVer) {
+                flock($lockFp, LOCK_UN); fclose($lockFp); apiError('VERSION_CONFLICT', '他の更新と競合しました。', 409, $requestId);
+            }
+
+            // 生成動画の保存
+            $renderedFileId = null;
+            if (isset($_FILES['file']) && $_FILES['file']['error'] === UPLOAD_ERR_OK) {
+                $renderedFileId = sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x', mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0x0fff) | 0x4000, mt_rand(0, 0x3fff) | 0x8000, mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff));
+                $storageRel = 'files/' . $renderedFileId . '.mp4';
+                $dest = $storageDir . '/' . $storageRel;
+                move_uploaded_file($_FILES['file']['tmp_name'], $dest);
+                $meta['files'][] = [
+                    'id' => $renderedFileId,
+                    'storagePath' => $storageRel,
+                    'mimeType' => 'video/mp4',
+                    'size' => filesize($dest),
+                    'createdAt' => $now
+                ];
+            }
+
+            $newVersion = $expectedVer + 1;
+            $editEntry = [
+                'id' => $editId,
+                'videoId' => $payload['videoId'],
+                'name' => $payload['name'],
+                'version' => $newVersion,
+                'editData' => $payload['editData'],
+                'renderedFileId' => $renderedFileId,
+                'createdAt' => $editIndex >= 0 ? $meta['edits'][$editIndex]['createdAt'] : $now,
+                'updatedAt' => $now
+            ];
+
+            if ($editIndex >= 0) {
+                // 古いレンダーファイルを削除
+                $oldRendered = $meta['edits'][$editIndex]['renderedFileId'];
+                if ($oldRendered && $oldRendered !== $renderedFileId) {
+                    foreach ($meta['files'] as $f) {
+                        if ($f['id'] === $oldRendered) @unlink($storageDir . '/' . $f['storagePath']);
+                    }
+                    $meta['files'] = array_values(array_filter($meta['files'], fn($f) => $f['id'] !== $oldRendered));
+                }
+                $meta['edits'][$editIndex] = $editEntry;
+            } else {
+                $meta['edits'][] = $editEntry;
+            }
+            $resultData = ['edit' => $editEntry];
+            break;
+
+        case 'edit.rename':
+            foreach ($meta['edits'] as &$e) {
+                if ($e['id'] === $payload['id']) {
+                    $e['name'] = $payload['name'];
+                    $e['updatedAt'] = $now;
+                    break;
+                }
+            }
+            $resultData = ['id' => $payload['id'], 'name' => $payload['name']];
+            break;
+
+        case 'edit.delete':
+            $eid = $payload['id'];
+            $delFileId = null;
+            foreach ($meta['edits'] as $e) {
+                if ($e['id'] === $eid) { $delFileId = $e['renderedFileId']; break; }
+            }
+            if ($delFileId) {
+                foreach ($meta['files'] as $f) {
+                    if ($f['id'] === $delFileId) @unlink($storageDir . '/' . $f['storagePath']);
+                }
+                $meta['files'] = array_values(array_filter($meta['files'], fn($f) => $f['id'] !== $delFileId));
+            }
+            $meta['edits'] = array_values(array_filter($meta['edits'], fn($e) => $e['id'] !== $eid));
+            $resultData = ['deletedEditId' => $eid];
+            break;
+
+        default:
+            flock($lockFp, LOCK_UN); fclose($lockFp);
+            apiError('INVALID_ACTION', '未知のアクションです: ' . $action, 400, $requestId);
     }
 
-    // POST更新
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $rawPost = file_get_contents('php://input');
-        $jsonData = json_decode($rawPost, true);
-        $isMultipart = str_starts_with($_SERVER['CONTENT_TYPE'] ?? '', 'multipart/form-data');
-
-        if ($isMultipart) {
-            $metadataStr = $_POST['metadata'] ?? '{}';
-            $parsedMeta = json_decode($metadataStr, true) ?: [];
-            $requestId = $parsedMeta['requestId'] ?? null;
-            $payload = $parsedMeta['payload'] ?? [];
-        } else {
-            $requestId = $jsonData['requestId'] ?? null;
-            $payload = $jsonData['payload'] ?? [];
-        }
-
-        if (!$requestId) {
-            jsonResponse(false, null, ['code' => 'MISSING_REQUEST_ID', 'message' => 'requestIdは必須です。'], 400);
-        }
-
-        try {
-            $result = withLock(function() use ($action, $requestId, $payload, $isMultipart, $filesDir, $tmpDir) {
-                if ($cached = checkDuplicateRequest($requestId, $payload)) {
-                    return $cached;
-                }
-
-                $meta = getMetadata();
-                $now = gmdate('c');
-
-                if ($action === 'folder.create') {
-                    $id = $payload['id'] ?? uuidv4();
-                    $folder = [
-                        'id' => $id,
-                        'parentFolderId' => $payload['parentFolderId'] ?? null,
-                        'name' => trim($payload['name'] ?? '新規フォルダ'),
-                        'createdAt' => $now,
-                        'updatedAt' => $now
-                    ];
-                    $meta['folders'][] = $folder;
-                    saveMetadata($meta);
-                    $res = ['folder' => $folder];
-                    recordRequestSuccess($requestId, $payload, $res);
-                    return $res;
-                }
-
-                if ($action === 'folder.rename') {
-                    $id = $payload['id'] ?? '';
-                    foreach ($meta['folders'] as &$f) {
-                        if ($f['id'] === $id) {
-                            $f['name'] = trim($payload['name'] ?? $f['name']);
-                            $f['updatedAt'] = $now;
-                            saveMetadata($meta);
-                            $res = ['folder' => $f];
-                            recordRequestSuccess($requestId, $payload, $res);
-                            return $res;
-                        }
-                    }
-                    throw new RuntimeException('対象フォルダが見つかりません。');
-                }
-
-                if ($action === 'folder.delete') {
-                    $id = $payload['id'] ?? '';
-                    $toDeleteFolderIds = [$id];
-                    // 再帰検索
-                    $findChildren = function($pId) use (&$findChildren, &$toDeleteFolderIds, $meta) {
-                        foreach ($meta['folders'] as $f) {
-                            if ($f['parentFolderId'] === $pId) {
-                                $toDeleteFolderIds[] = $f['id'];
-                                $findChildren($f['id']);
-                            }
-                        }
-                    };
-                    $findChildren($id);
-
-                    // 該当フォルダ内の動画・編集・ファイルを検出
-                    $delVideos = array_filter($meta['videos'], fn($v) => in_array($v['folderId'], $toDeleteFolderIds));
-                    $delVideoIds = array_column($delVideos, 'id');
-                    $delEdits = array_filter($meta['edits'], fn($e) => in_array($e['videoId'], $delVideoIds));
-                    $delFileIds = array_merge(array_column($delVideos, 'originalFileId'), array_column($delEdits, 'renderedFileId'));
-                    $delFileIds = array_filter(array_unique($delFileIds));
-
-                    // 削除実行
-                    $meta['folders'] = array_values(array_filter($meta['folders'], fn($f) => !in_array($f['id'], $toDeleteFolderIds)));
-                    $meta['videos'] = array_values(array_filter($meta['videos'], fn($v) => !in_array($v['id'], $delVideoIds)));
-                    $meta['edits'] = array_values(array_filter($meta['edits'], fn($e) => !in_array($e['videoId'], $delVideoIds)));
-
-                    // ファイル削除
-                    foreach ($delFileIds as $fId) {
-                        foreach ($meta['files'] as $k => $f) {
-                            if ($f['id'] === $fId) {
-                                @unlink(__DIR__ . '/storage/' . $f['storagePath']);
-                                unset($meta['files'][$k]);
-                            }
-                        }
-                    }
-                    $meta['files'] = array_values($meta['files']);
-                    if (empty($meta['folders'])) {
-                        $meta['folders'][] = ['id' => uuidv4(), 'parentFolderId' => null, 'name' => 'デフォルトフォルダ', 'createdAt' => $now, 'updatedAt' => $now];
-                    }
-                    saveMetadata($meta);
-                    $res = ['deletedFolderIds' => $toDeleteFolderIds];
-                    recordRequestSuccess($requestId, $payload, $res);
-                    return $res;
-                }
-
-                if ($action === 'video.upload') {
-                    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
-                        throw new RuntimeException('動画ファイルのアップロードに失敗しました。');
-                    }
-                    $fileId = uuidv4();
-                    $ext = pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION) ?: 'mp4';
-                    $targetRel = 'files/' . $fileId . '.' . $ext;
-                    $targetAbs = __DIR__ . '/storage/' . $targetRel;
-
-                    if (!move_uploaded_file($_FILES['file']['tmp_name'], $targetAbs)) {
-                        throw new RuntimeException('ファイルの永続化に失敗しました。');
-                    }
-
-                    $mime = mime_content_type($targetAbs) ?: 'video/mp4';
-                    $fileRecord = [
-                        'id' => $fileId,
-                        'storagePath' => $targetRel,
-                        'mimeType' => $mime,
-                        'size' => filesize($targetAbs),
-                        'createdAt' => $now
-                    ];
-                    $meta['files'][] = $fileRecord;
-
-                    $videoId = $payload['id'] ?? uuidv4();
-                    $videoRecord = [
-                        'id' => $videoId,
-                        'folderId' => $payload['folderId'] ?? $meta['folders'][0]['id'],
-                        'name' => trim($payload['name'] ?? '新規動画'),
-                        'originalFileId' => $fileId,
-                        'createdAt' => $now,
-                        'updatedAt' => $now
-                    ];
-                    $meta['videos'][] = $videoRecord;
-                    saveMetadata($meta);
-                    $res = ['video' => $videoRecord];
-                    recordRequestSuccess($requestId, $payload, $res);
-                    return $res;
-                }
-
-                if ($action === 'video.rename') {
-                    $id = $payload['id'] ?? '';
-                    foreach ($meta['videos'] as &$v) {
-                        if ($v['id'] === $id) {
-                            $v['name'] = trim($payload['name'] ?? $v['name']);
-                            $v['updatedAt'] = $now;
-                            saveMetadata($meta);
-                            $res = ['video' => $v];
-                            recordRequestSuccess($requestId, $payload, $res);
-                            return $res;
-                        }
-                    }
-                    throw new RuntimeException('対象動画が見つかりません。');
-                }
-
-                if ($action === 'video.move') {
-                    $id = $payload['id'] ?? '';
-                    $folderId = $payload['folderId'] ?? '';
-                    foreach ($meta['videos'] as &$v) {
-                        if ($v['id'] === $id) {
-                            $v['folderId'] = $folderId;
-                            $v['updatedAt'] = $now;
-                            saveMetadata($meta);
-                            $res = ['video' => $v];
-                            recordRequestSuccess($requestId, $payload, $res);
-                            return $res;
-                        }
-                    }
-                    throw new RuntimeException('対象動画が見つかりません。');
-                }
-
-                if ($action === 'video.delete') {
-                    $id = $payload['id'] ?? '';
-                    $delVideo = null;
-                    foreach ($meta['videos'] as $k => $v) {
-                        if ($v['id'] === $id) {
-                            $delVideo = $v;
-                            unset($meta['videos'][$k]);
-                            break;
-                        }
-                    }
-                    if (!$delVideo) throw new RuntimeException('対象動画が見つかりません。');
-                    $meta['videos'] = array_values($meta['videos']);
-
-                    $delEdits = array_filter($meta['edits'], fn($e) => $e['videoId'] === $id);
-                    $meta['edits'] = array_values(array_filter($meta['edits'], fn($e) => $e['videoId'] !== $id));
-
-                    $delFileIds = array_merge([$delVideo['originalFileId']], array_column($delEdits, 'renderedFileId'));
-                    $delFileIds = array_filter(array_unique($delFileIds));
-
-                    foreach ($delFileIds as $fId) {
-                        foreach ($meta['files'] as $k => $f) {
-                            if ($f['id'] === $fId) {
-                                @unlink(__DIR__ . '/storage/' . $f['storagePath']);
-                                unset($meta['files'][$k]);
-                            }
-                        }
-                    }
-                    $meta['files'] = array_values($meta['files']);
-                    saveMetadata($meta);
-                    $res = ['deletedVideoId' => $id];
-                    recordRequestSuccess($requestId, $payload, $res);
-                    return $res;
-                }
-
-                if ($action === 'edit.save') {
-                    $editId = $payload['id'] ?? uuidv4();
-                    $videoId = $payload['videoId'] ?? '';
-                    $expectedVersion = (int)($payload['expectedVersion'] ?? 0);
-                    $editData = $payload['editData'] ?? [];
-
-                    $renderedFileId = null;
-                    if (isset($_FILES['file']) && $_FILES['file']['error'] === UPLOAD_ERR_OK) {
-                        $renderedFileId = uuidv4();
-                        $ext = pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION) ?: 'webm';
-                        $targetRel = 'files/' . $renderedFileId . '.' . $ext;
-                        $targetAbs = __DIR__ . '/storage/' . $targetRel;
-                        if (!move_uploaded_file($_FILES['file']['tmp_name'], $targetAbs)) {
-                            throw new RuntimeException('編集動画の保存に失敗しました。');
-                        }
-                        $meta['files'][] = [
-                            'id' => $renderedFileId,
-                            'storagePath' => $targetRel,
-                            'mimeType' => mime_content_type($targetAbs) ?: 'video/webm',
-                            'size' => filesize($targetAbs),
-                            'createdAt' => $now
-                        ];
-                    }
-
-                    $foundIndex = -1;
-                    foreach ($meta['edits'] as $idx => $e) {
-                        if ($e['id'] === $editId) {
-                            $foundIndex = $idx;
-                            break;
-                        }
-                    }
-
-                    if ($foundIndex >= 0) {
-                        $targetEdit = &$meta['edits'][$foundIndex];
-                        if ($targetEdit['version'] !== $expectedVersion) {
-                            throw new RuntimeException('バージョン競合が発生しました。最新のデータを取得してください。');
-                        }
-                        $oldRenderedFileId = $targetEdit['renderedFileId'];
-                        $targetEdit['version'] += 1;
-                        $targetEdit['editData'] = $editData;
-                        if ($renderedFileId) {
-                            $targetEdit['renderedFileId'] = $renderedFileId;
-                        }
-                        $targetEdit['updatedAt'] = $now;
-
-                        // 旧編集動画の削除
-                        if ($renderedFileId && $oldRenderedFileId) {
-                            foreach ($meta['files'] as $k => $f) {
-                                if ($f['id'] === $oldRenderedFileId) {
-                                    @unlink(__DIR__ . '/storage/' . $f['storagePath']);
-                                    unset($meta['files'][$k]);
-                                }
-                            }
-                            $meta['files'] = array_values($meta['files']);
-                        }
-                        $savedEdit = $targetEdit;
-                    } else {
-                        $savedEdit = [
-                            'id' => $editId,
-                            'videoId' => $videoId,
-                            'name' => trim($payload['name'] ?? '編集 1'),
-                            'version' => 1,
-                            'editData' => $editData,
-                            'renderedFileId' => $renderedFileId,
-                            'createdAt' => $now,
-                            'updatedAt' => $now
-                        ];
-                        $meta['edits'][] = $savedEdit;
-                    }
-                    saveMetadata($meta);
-                    $res = ['edit' => $savedEdit];
-                    recordRequestSuccess($requestId, $payload, $res);
-                    return $res;
-                }
-
-                if ($action === 'edit.rename') {
-                    $id = $payload['id'] ?? '';
-                    foreach ($meta['edits'] as &$e) {
-                        if ($e['id'] === $id) {
-                            $e['name'] = trim($payload['name'] ?? $e['name']);
-                            $e['updatedAt'] = $now;
-                            saveMetadata($meta);
-                            $res = ['edit' => $e];
-                            recordRequestSuccess($requestId, $payload, $res);
-                            return $res;
-                        }
-                    }
-                    throw new RuntimeException('対象編集が見つかりません。');
-                }
-
-                if ($action === 'edit.delete') {
-                    $id = $payload['id'] ?? '';
-                    $delEdit = null;
-                    foreach ($meta['edits'] as $k => $e) {
-                        if ($e['id'] === $id) {
-                            $delEdit = $e;
-                            unset($meta['edits'][$k]);
-                            break;
-                        }
-                    }
-                    if (!$delEdit) throw new RuntimeException('対象編集が見つかりません。');
-                    $meta['edits'] = array_values($meta['edits']);
-
-                    if ($delEdit['renderedFileId']) {
-                        foreach ($meta['files'] as $k => $f) {
-                            if ($f['id'] === $delEdit['renderedFileId']) {
-                                @unlink(__DIR__ . '/storage/' . $f['storagePath']);
-                                unset($meta['files'][$k]);
-                            }
-                        }
-                        $meta['files'] = array_values($meta['files']);
-                    }
-                    saveMetadata($meta);
-                    $res = ['deletedEditId' => $id];
-                    recordRequestSuccess($requestId, $payload, $res);
-                    return $res;
-                }
-
-                throw new RuntimeException('未定義の操作です: ' . $action);
-            });
-
-            jsonResponse(true, $requestId, $result);
-        } catch (Throwable $e) {
-            jsonResponse(false, $requestId, ['code' => 'OPERATION_FAILED', 'message' => $e->getMessage()], 400);
-        }
-    }
+    $requests[$requestId] = ['data' => $resultData, 'time' => $now];
+    saveMetaAndRequests($lockFp, $metaFile, $reqFile, $meta, $requests);
+    apiSuccess($resultData, $requestId);
 }
 ?>
 <!doctype html>
@@ -622,95 +417,89 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
 <title>動画撮影・編集</title>
 <style>
 *{box-sizing:border-box}
-body{margin:0;font:12px Meiryo,sans-serif;color:#243247;background:#eef2f7;overflow:hidden;height:100vh;display:flex;flex-direction:column}
+body{margin:0;font:12px Meiryo,sans-serif;color:#243247;background:#eef2f7}
 button,input,select{font:inherit}
-button{height:26px;padding:0 9px;border:1px solid #ccd6e3;border-radius:4px;background:white;cursor:pointer;white-space:nowrap;user-select:none}
+button{height:26px;padding:0 10px;border:1px solid #ccd6e3;border-radius:4px;background:#fff;cursor:pointer;white-space:nowrap}
 button:hover{background:#edf4ff}
 button:disabled{opacity:.45;cursor:default}
-header,.toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
-header{padding:8px 12px;background:white;border-bottom:1px solid #ccd6e3;height:42px;flex-shrink:0}
+header,.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+header{padding:6px 12px;background:#fff;border-bottom:1px solid #ccd6e3}
 header strong{margin-right:auto;font-size:14px}
-main{flex:1;display:flex;flex-direction:column;gap:6px;padding:6px;overflow:hidden;position:relative}
-#stage{flex:1;min-height:120px;background:#172235;display:grid;place-items:center;overflow:hidden;position:relative}
-#empty{color:#ccd8e8;line-height:2;text-align:center;user-select:none}
+main{height:calc(100dvh - 39px);min-height:430px;padding:8px;display:flex;flex-direction:column;gap:6px}
+#stage{flex:1;min-height:140px;background:#172235;display:grid;place-items:center;overflow:hidden;position:relative}
+#empty{color:#ccd8e8;line-height:2;text-align:center}
 #surface{position:relative}
 video{display:block;width:100%;height:100%}
 #overlay{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
-#actions{justify-content:center;height:34px;flex-shrink:0}
-#primary{background:#2563eb;color:white}
+#actions{justify-content:center}
+#primary{background:#2563eb;color:#fff;font-weight:bold}
 #primary:hover{background:#1d4ed8}
-#status{min-height:18px;color:#607089;font-size:11px;text-align:center;flex-shrink:0;user-select:none}
-#split{height:6px;background:#d8e2ee;cursor:row-resize;flex-shrink:0;border-radius:3px;margin:1px 0}
-#split:hover{background:#93c5fd}
-#timeline{background:white;border:1px solid #ccd6e3;display:flex;flex-direction:column;height:210px;flex-shrink:0}
-#timeline .toolbar{padding:4px 8px;border-bottom:1px solid #ccd6e3;height:36px;flex-shrink:0}
+#split{height:6px;background:#cbd5e1;cursor:ns-resize;border-radius:3px}
+#split:hover{background:#94a3b8}
+#status{min-height:18px;color:#607089;font-size:11px}
+#timeline{background:#fff;border:1px solid #ccd6e3;display:flex;flex-direction:column;height:180px}
+#timeline .toolbar{padding:4px 8px;border-bottom:1px solid #ccd6e3}
 #timeline small{margin-left:auto}
-#scroll{flex:1;overflow-y:auto;overflow-x:hidden;position:relative}
-#tracks{position:relative;min-height:120px;touch-action:none;user-select:none}
-.tick{position:absolute;top:0;height:20px;border-left:1px solid #dde4ed;font-size:10px;color:#64748b;padding-left:2px;pointer-events:none}
-.clip{position:absolute;height:24px;padding:3px 6px;border:1px solid #91b5e6;background:#e0ecff;border-radius:3px;overflow:hidden;white-space:nowrap;cursor:move;user-select:none;font-size:11px;box-shadow:0 1px 2px #0001}
-.clip.B{background:#fff1bd;border-color:#eab308}
-.clip.C{background:#d9f3e6;border-color:#10b981}
-.clip.D{background:#ffe2e6;border-color:#f43f5e}
-.clip.F{background:#eee2ff;border-color:#8b5cf6}
-.clip.selected{outline:2px solid #2563eb;outline-offset:-1px;z-index:1}
-.edge{position:absolute;top:0;bottom:0;width:7px;background:#0002;cursor:ew-resize}
+#scroll{flex:1;overflow-y:auto;overflow-x:hidden}
+#tracks{position:relative;min-height:140px;touch-action:none}
+.tick{position:absolute;top:0;height:20px;border-left:1px solid #dde4ed;font-size:10px;color:#64748b}
+.clip{position:absolute;height:24px;padding:3px 6px;border:1px solid #91b5e6;background:#e0ecff;border-radius:3px;overflow:hidden;white-space:nowrap;cursor:move;user-select:none;font-size:11px}
+.clip.B{background:#fff1bd}.clip.C{background:#d9f3e6}.clip.D{background:#ffe2e6}.clip.F{background:#eee2ff}
+.clip.selected{outline:2px solid #2563eb;outline-offset:-2px}
+.edge{position:absolute;top:0;bottom:0;width:6px;background:#0002;cursor:ew-resize}
 .edge.start{left:0}.edge.end{right:0}
-#playhead{position:absolute;top:0;bottom:0;width:2px;background:#e44972;pointer-events:none;z-index:5}
-#handle{position:absolute;left:-6px;top:0;width:14px;height:20px;background:#e44972;clip-path:polygon(0 0,100% 0,100% 65%,50% 100%,0 65%);pointer-events:auto;cursor:ew-resize}
-#veil{position:fixed;inset:0;background:#0005;z-index:20}
-#library{position:fixed;inset:0 auto 0 0;width:min(500px,100vw);background:white;z-index:21;display:flex;flex-direction:column;box-shadow:4px 0 20px #0003}
-#library .toolbar{padding:8px;border-bottom:1px solid #ccd6e3;flex-shrink:0}
+#playhead{position:absolute;top:0;bottom:0;width:2px;background:#e44972;pointer-events:none;z-index:2}
+#handle{position:absolute;left:-6px;top:0;width:14px;height:18px;background:#e44972;clip-path:polygon(0 0,100% 0,100% 65%,50% 100%,0 65%);pointer-events:auto;cursor:ew-resize}
+#veil{position:fixed;inset:0;background:#0005;z-index:10}
+#library{position:fixed;inset:0 auto 0 0;width:min(480px,100vw);background:#fff;z-index:11;display:flex;flex-direction:column;box-shadow:4px 0 20px #0003}
+#library .toolbar{padding:8px;border-bottom:1px solid #ccd6e3}
 #tree{flex:1;overflow:auto;padding:8px}
-.row{display:flex;align-items:center;gap:6px;min-height:28px;padding:2px 4px;border-radius:3px;cursor:pointer}
+.row{display:flex;align-items:center;gap:6px;min-height:28px;padding:2px 4px}
 .row:hover{background:#edf4ff}
-.row.drop{outline:2px dashed #2563eb;background:#eff6ff}
-.row button.expander{width:18px;height:18px;padding:0;border:0;background:transparent;cursor:pointer}
+.row.drop{outline:2px dashed #2563eb}
+.row button{width:20px;padding:0;border:0;background:transparent}
 .name{flex:1;cursor:pointer;overflow-wrap:anywhere}
-.name[contenteditable=true]{outline:1px solid #2563eb;background:white;padding:1px 3px;border-radius:2px}
+.name[contenteditable=true]{outline:1px solid #2563eb;background:#fff}
 .row time{font-size:10px;color:#64748b}
-#menu{position:fixed;z-index:40;background:white;border:1px solid #ccd6e3;border-radius:4px;padding:5px;max-height:85vh;max-width:95vw;overflow:auto;box-shadow:0 6px 24px #0003}
-#menu>button{display:block;width:100%;text-align:left;border:0;border-radius:2px;padding:4px 8px;margin-bottom:2px}
-#menu label{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:4px 6px}
-.palette{display:grid;grid-template-columns:repeat(6,24px);gap:5px;padding:6px}
-.palette button{width:24px;height:24px;padding:0;border:1px solid #ccc;border-radius:3px}
-.editor{position:absolute;white-space:pre-wrap;overflow:auto;padding:6px;outline:2px solid #60a5fa;background:rgba(255,255,255,0.95);z-index:10;border-radius:3px}
-dialog{max-width:92vw;border:1px solid #ccd6e3;border-radius:6px;padding:16px;box-shadow:0 10px 30px #0004}
+#menu{position:fixed;z-index:30;background:#fff;border:1px solid #ccd6e3;border-radius:4px;padding:6px;max-height:85vh;max-width:95vw;overflow:auto;box-shadow:0 4px 16px #0003}
+#menu>button{display:block;width:100%;text-align:left;border:0;background:transparent;height:24px;border-radius:2px}
+#menu>button:hover{background:#edf4ff}
+#menu label{display:flex;justify-content:space-between;gap:12px;padding:4px}
+.palette{display:grid;grid-template-columns:repeat(6,22px);gap:4px;padding:4px}
+.palette button{width:22px;height:22px;padding:0;border:1px solid #ccd6e3}
+.editor{position:absolute;white-space:pre-wrap;overflow:auto;padding:4px;outline:2px solid #60a5fa;z-index:3;background:#fff}
+dialog{max-width:92vw;border:1px solid #ccd6e3;border-radius:5px}
 dialog::backdrop{background:#0005}
-dialog h3{margin:0 0 12px 0}
-dialog label{display:block;margin:10px 0;cursor:pointer}
+dialog label{display:block;margin:12px 0}
 [hidden]{display:none!important}
 #printArea{display:none}
-@media(max-width:600px){.row time,#timeline small{display:none}main{padding:4px}}
+@media(max-width:600px){.row time,#timeline small{display:none}}
 @media print{
 @page{size:A4 portrait;margin:10mm}
 body>*:not(#printArea){display:none!important}
 #printArea{display:block}
-.sheet{height:270mm;display:flex;flex-direction:column;gap:8mm;break-after:page;page-break-after:always}
-.sheet:last-child{break-after:auto;page-break-after:auto}
+.sheet{height:270mm;display:flex;flex-direction:column;gap:6mm;break-after:page}
+.sheet:last-child{break-after:auto}
 .shot{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;align-items:center}
-.shot img{max-width:100%;max-height:92%;object-fit:contain;border:1px solid #ddd}
-.shot p{font-size:10pt;margin:4px 0 0 0;font-weight:bold}
+.shot img{max-width:100%;object-fit:contain}
+.shot p{font-size:10pt;margin:4px 0 0}
 }
 </style>
 </head>
 <body>
 <header>
-  <strong>便利ツール｜動画撮影編集</strong>
+  <strong>動画撮影・編集</strong>
   <button id="list">動画一覧</button>
   <button id="upload">動画をアップする</button>
+  <span id="zoomLabel" style="margin-left:auto;">表示倍率</span>
+  <select id="viewZoom"><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select>
 </header>
 <main>
   <section id="stage">
-    <div id="empty">録画開始で共有する画面を選択してください。<br>保存済み動画は「動画一覧」から開けます。</div>
-    <div id="surface" hidden>
-      <video id="video" playsinline></video>
-      <canvas id="overlay"></canvas>
-    </div>
+    <div id="empty">録画開始で画面共有を撮影できます。<br>保存済み動画は動画一覧から選択してください。</div>
+    <div id="surface" hidden><video id="video" playsinline></video><canvas id="overlay"></canvas></div>
   </section>
-
-  <div id="split" title="ドラッグして高さを調整"></div>
-
+  <div id="split"></div>
   <div id="actions" class="toolbar">
     <button id="primary">録画開始</button>
     <button id="begin" hidden>編集開始</button>
@@ -719,24 +508,16 @@ body>*:not(#printArea){display:none!important}
     <button id="pdf" hidden>PDF出力</button>
     <button id="finish" hidden>編集作業終了</button>
   </div>
-
-  <div id="status" role="status">動画と編集結果はサーバに安全に保存されます。</div>
-
+  <div id="status" role="status"></div>
   <section id="timeline" hidden>
     <div class="toolbar">
       <strong id="clock">0.0 / 0.0 秒</strong>
-      <label id="zoomLabel">表示倍率 <select id="viewZoom"><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select></label>
       <label>タイムスケール <input id="scale" type="range" min="1" max="10" step="0.1" value="10"></label>
-      <small>右クリック：要素追加・書式・削除 ｜ 移動・両端ドラッグで時間変更</small>
+      <small>右クリック：要素追加／書式／削除</small>
     </div>
-    <div id="scroll">
-      <div id="tracks">
-        <div id="playhead"><div id="handle"></div></div>
-      </div>
-    </div>
+    <div id="scroll"><div id="tracks"><div id="playhead"><div id="handle"></div></div></div></div>
   </section>
 </main>
-
 <div id="veil" hidden></div>
 <aside id="library" hidden>
   <div class="toolbar">
@@ -745,1499 +526,851 @@ body>*:not(#printArea){display:none!important}
     <button id="folder">＋フォルダ</button>
   </div>
   <div id="tree"></div>
-  <div class="toolbar">
-    <button id="closeList">動画一覧を閉じる</button>
-    <small>ダブルクリックで名前変更・右クリックで操作</small>
-  </div>
+  <div class="toolbar"><button id="closeList">動画一覧を閉じる</button></div>
 </aside>
-
 <input id="file" type="file" accept="video/*" hidden>
 <div id="menu" hidden></div>
-
 <dialog id="pdfDialog">
   <h3>PDF出力レイアウト選択</h3>
   <label><input type="radio" name="layout" value="1" checked> 1ページに1画面</label>
   <label><input type="radio" name="layout" value="2"> 1ページに2画面</label>
-  <div style="text-align:right;gap:8px;display:flex;justify-content:flex-end;margin-top:16px">
-    <button id="cancelPDF">キャンセル</button>
-    <button id="print" style="background:#2563eb;color:white">印刷へ進む</button>
-  </div>
+  <button id="print">印刷プレビューへ</button>
+  <button id="cancelPDF">キャンセル</button>
 </dialog>
-
 <div id="printArea"></div>
 
 <script>
 'use strict';
-(async () => {
-const $ = id => document.getElementById(id);
-const video = $('video'), canvas = $('overlay'), context = canvas.getContext('2d');
-const uid = () => crypto.randomUUID();
-const clone = x => structuredClone(x);
-const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+(()=>{
+const $=id=>document.getElementById(id);
+const video=$('video'),canvas=$('overlay'),ctx=canvas.getContext('2d');
+const uid=()=>crypto.randomUUID();
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const titles={A:'コメント',B:'強調枠',C:'拡大枠',D:'スキップ',E:'接続線',F:'PDF位置'};
+const colors=['#ffffff','#111827','#ef4444','#f97316','#eab308','#22c55e','#14b8a6','#2563eb','#8b5cf6','#ec4899','#64748b','transparent'];
+const dashes={solid:[],dash:[10,6],dot:[2,5],chain:[12,5,2,5]};
 
-const titles = { A: 'コメント', B: '強調枠', C: '拡大枠', D: 'スキップ', E: '接続線', F: 'PDF位置' };
-const colors = ['#ffffff', '#111827', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#2563eb', '#8b5cf6', '#ec4899', '#64748b', 'transparent'];
-const dashes = { solid: [], dash: [10, 6], dot: [2, 5], chain: [12, 5, 2, 5] };
+let serverData={folders:[],videos:[],edits:[],files:[]};
+let currentVideo=null,currentEdit=null,elements=[];
+let isEditing=false,isDirty=false,isBusy=false,recorder=null,screenStream=null;
+let selectedIds=new Set(),connectingOwner=null,editorNode=null,renderedPlayback=false;
+let displayZoom=1.0;
 
-let serverData = { schemaVersion: 1, folders: [], videos: [], edits: [], files: [] };
-let current = null, revision = null, elements = [];
-let editing = false, dirty = false, busy = false, screenStream = null, writer = null;
-let renderedPlayback = false, editor = null, connecting = null;
-let selected = new Set(), collapsed = new Set();
-let audio = null, audioSource = null, audioSink = null;
-let displayZoom = 1.0;
+const message=msg=>{$('status').textContent=msg;};
+const duration=()=>Number.isFinite(video.duration)?video.duration:0;
+const isLocked=()=>isBusy||!!screenStream;
+const findElement=id=>elements.find(e=>e.id===id);
 
-const message = text => $('status').textContent = text;
-const safe = fn => async (...args) => {
-  try {
-    await fn(...args);
-  } catch (error) {
-    console.error(error);
-    message(error.message || '操作に失敗しました');
+async function api(action,payload={},fileBlob=null){
+  const reqId=uid();
+  let res;
+  if(fileBlob){
+    const form=new FormData();
+    form.append('metadata',JSON.stringify({requestId:reqId,payload}));
+    form.append('file',fileBlob);
+    res=await fetch(`index.php?api=v1&action=${action}`,{method:'POST',body:form});
+  }else{
+    res=await fetch(`index.php?api=v1&action=${action}`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({requestId:reqId,payload})
+    });
   }
-};
+  const json=await res.json();
+  if(!json.ok)throw new Error(json.error?.message||'API要求に失敗しました');
+  return json.data;
+}
 
-const duration = () => Number.isFinite(video.duration) ? video.duration : 0;
-const locked = () => busy || !!screenStream;
-const find = id => elements.find(e => e.id === id);
+async function reloadList(){
+  const res=await fetch('index.php?api=v1&action=list');
+  const json=await res.json();
+  if(json.ok){serverData=json.data;tree();}
+}
 
-// API 通信クライアント
-async function api(action, payload = null, file = null, method = 'POST') {
-  const reqId = uid();
-  let url = `index.php?api=v1&action=${encodeURIComponent(action)}`;
-  let options = { method };
+function commitText(){
+  if(!editorNode)return;
+  const item=editorNode.item;
+  item.text=editorNode.innerText;
+  editorNode.remove();
+  editorNode=null;
+  isDirty=true;
+}
 
-  if (method === 'GET') {
-    if (payload) {
-      const q = new URLSearchParams(payload).toString();
-      url += `&${q}`;
-    }
-  } else {
-    if (file) {
-      const fd = new FormData();
-      fd.append('metadata', JSON.stringify({ requestId: reqId, payload }));
-      fd.append('file', file);
-      options.body = fd;
-    } else {
-      options.headers = { 'Content-Type': 'application/json' };
-      options.body = JSON.stringify({ requestId: reqId, payload });
-    }
+function fit(){
+  const r=$('stage').getBoundingClientRect();
+  const vw=video.videoWidth||1280,vh=video.videoHeight||720;
+  const fitScale=Math.min(r.width/vw,r.height/vh)*displayZoom;
+  const w=Math.round(vw*fitScale),h=Math.round(vh*fitScale);
+  $('surface').style.width=w+'px';
+  $('surface').style.height=h+'px';
+  if(canvas.width!==vw||canvas.height!==vh){canvas.width=vw;canvas.height=vh;}
+}
+
+function updateUI(){
+  const hasVideo=!!video.src||!!video.srcObject;
+  $('surface').hidden=!hasVideo;
+  $('empty').hidden=hasVideo;
+  $('timeline').hidden=!isEditing;
+  $('begin').hidden=!currentVideo||isEditing||!!screenStream;
+  $('save').hidden=$('finish').hidden=!isEditing;
+  $('download').hidden=$('pdf').hidden=!currentVideo||!!screenStream;
+  
+  if(screenStream){
+    $('primary').textContent='録画停止';
+  }else if(isEditing){
+    $('primary').textContent=video.paused?'編集再生':'編集再生停止';
+  }else{
+    $('primary').textContent='録画開始';
   }
-
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error?.message || `通信エラーが発生しました (${res.status})`);
-  }
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.error?.message || 'API処理に失敗しました');
-  return data.data;
+  $('primary').disabled=isBusy;
+  document.querySelectorAll('header button, #actions button, #library button').forEach(b=>{
+    if(b!==$('primary'))b.disabled=isLocked();
+  });
+  fit();tracks();paint();
 }
 
-async function refreshList() {
-  const data = await api('list', null, null, 'GET');
-  serverData = data;
-  tree();
+function clearState(){
+  commitText();video.pause();video.srcObject=null;video.removeAttribute('src');video.load();
+  currentVideo=null;currentEdit=null;elements=[];selectedIds.clear();
+  isEditing=false;isDirty=false;renderedPlayback=false;connectingOwner=null;
 }
 
-function library(open) {
-  $('library').hidden = $('veil').hidden = !open;
-}
-
-function commitText() {
-  if (!editor) return;
-  const active = editor;
-  editor = null;
-  active.item.text = active.node.innerText;
-  active.node.remove();
-  dirty = true;
-}
-
-function fit() {
-  const r = $('stage').getBoundingClientRect();
-  const w = video.videoWidth || 1280, h = video.videoHeight || 720;
-  const scale = Math.min((r.width - 20) / w, (r.height - 20) / h) * displayZoom;
-  $('surface').style.width = (w * scale) + 'px';
-  $('surface').style.height = (h * scale) + 'px';
-  if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w;
-    canvas.height = h;
-  }
-}
-
-function updateUI() {
-  $('surface').hidden = !video.src && !video.srcObject;
-  $('empty').hidden = !$('surface').hidden;
-  $('timeline').hidden = !editing;
-  $('begin').hidden = !current || editing || !!screenStream;
-  $('save').hidden = $('finish').hidden = !editing;
-  $('download').hidden = $('pdf').hidden = !current || !!screenStream;
-  $('primary').textContent = screenStream ? '録画停止' : editing ? (video.paused ? '編集再生' : '編集再生停止') : '録画開始';
-  document.querySelectorAll('header button, #actions button, #library button').forEach(b => b.disabled = locked());
-  $('primary').disabled = busy;
-  fit();
-  tracks();
-  paint();
-}
-
-function clearState() {
-  commitText();
-  video.pause();
-  video.srcObject = null;
-  video.removeAttribute('src');
-  video.load();
-  current = revision = null;
-  elements = [];
-  selected.clear();
-  editing = dirty = renderedPlayback = false;
-  connecting = null;
-  $('scale').value = 10;
-}
-
-function waitFor(event, action) {
-  return new Promise((resolve, reject) => {
-    const clean = () => {
-      clearTimeout(timer);
-      video.removeEventListener(event, done);
-      video.removeEventListener('error', fail);
-    };
-    const done = () => { clean(); resolve(); };
-    const fail = () => { clean(); reject(new Error('動画の読み込みに失敗しました')); };
-    const timer = setTimeout(fail, 30000);
-    video.addEventListener(event, done);
-    video.addEventListener('error', fail);
-    try { action(); } catch (err) { clean(); reject(err); }
+function seek(t){
+  return new Promise(res=>{
+    const onSeek=()=>{video.removeEventListener('seeked',onSeek);res();};
+    video.addEventListener('seeked',onSeek);
+    video.currentTime=clamp(t,0,duration());
   });
 }
 
-async function seek(time) {
-  if (Math.abs(video.currentTime - time) > 0.00001) {
-    await waitFor('seeked', () => video.currentTime = time);
-  } else if (video.readyState < 2) {
-    await waitFor('loadeddata', () => {});
-  }
-  await new Promise(requestAnimationFrame);
-}
-
-async function setSourceURL(url) {
-  video.pause();
-  await waitFor('loadedmetadata', () => {
-    video.src = url;
-    video.load();
-  });
-  await seek(0);
-  fit();
-}
-
-async function leavePrompt() {
-  if (locked()) return false;
+async function leavePrompt(){
+  if(isLocked())return false;
   commitText();
-  if (!dirty) return true;
-  if (confirm('編集結果を保存して続行しますか？')) {
-    await saveEdit();
-    return true;
-  }
-  if (confirm('未保存の編集内容を破棄しますか？')) {
-    dirty = false;
-    return true;
-  }
+  if(!isDirty)return true;
+  if(confirm('未保存の編集結果を保存しますか？')){await saveEdit();return true;}
+  if(confirm('変更を破棄して続行しますか？')){isDirty=false;return true;}
   return false;
 }
 
-async function loadEntity(videoItem, editItem = null, startEditing = false) {
-  if (!await leavePrompt()) return false;
-  busy = true;
-  updateUI();
-  try {
-    const useRendered = !!editItem && !startEditing && !!editItem.renderedFileId;
-    const fileId = useRendered ? editItem.renderedFileId : videoItem.originalFileId;
-    const streamUrl = `index.php?api=v1&action=file.stream&id=${encodeURIComponent(fileId)}`;
-
+async function loadEntity(videoObj,editObj=null,asEdit=false){
+  if(!await leavePrompt())return;
+  isBusy=true;updateUI();
+  try{
     clearState();
-    current = videoItem;
-    revision = editItem;
-
-    if (editItem) {
-      const fullEdit = await api('edit.get', { id: editItem.id }, null, 'GET');
-      elements = clone(fullEdit.editData?.elements || []);
-      revision.version = fullEdit.version;
-    } else {
-      elements = [];
+    currentVideo=videoObj;
+    currentEdit=editObj;
+    isEditing=asEdit;
+    if(editObj){
+      const res=await fetch(`index.php?api=v1&action=edit.get&id=${editObj.id}`).then(r=>r.json());
+      if(res.ok&&res.data.edit?.editData?.elements){
+        elements=res.data.edit.editData.elements;
+      }
     }
-
-    editing = startEditing;
-    renderedPlayback = useRendered;
-
-    await setSourceURL(streamUrl);
-    library(false);
-    message(`${videoItem.name} ／ ${editItem ? editItem.name : '元動画'}`);
-    return true;
-  } catch (err) {
-    clearState();
-    throw err;
-  } finally {
-    busy = false;
-    updateUI();
-    tree();
+    const fileId=(!asEdit&&editObj?.renderedFileId)?editObj.renderedFileId:videoObj.originalFileId;
+    renderedPlayback=(fileId===editObj?.renderedFileId);
+    video.src=`index.php?api=v1&action=file.stream&id=${fileId}`;
+    await new Promise(r=>{video.onloadedmetadata=r;});
+    $('library').hidden=$('veil').hidden=true;
+    message(`${videoObj.name} ${editObj?'/ '+editObj.name:'(元動画)'} を読み込みました`);
+  }finally{
+    isBusy=false;updateUI();
   }
 }
 
-// 座標・描画関連
-function point(event) {
-  const r = canvas.getBoundingClientRect();
-  return {
-    x: (event.clientX - r.left) * canvas.width / r.width,
-    y: (event.clientY - r.top) * canvas.height / r.height
-  };
+// 描画関連
+function port(e,p){
+  if(e.shape==='ellipse')return{x:e.x+e.w/2+Math.cos(p.angle||0)*e.w/2,y:e.y+e.h/2+Math.sin(p.angle||0)*e.h/2};
+  const r=p.ratio??0.5;
+  if(p.side==='left')return{x:e.x,y:e.y+e.h*r};
+  if(p.side==='right')return{x:e.x+e.w,y:e.y+e.h*r};
+  if(p.side==='top')return{x:e.x+e.w*r,y:e.y};
+  return{x:e.x+e.w*r,y:e.y+e.h};
 }
-
-function drag(event, move) {
-  event.preventDefault();
-  const stop = () => {
-    window.removeEventListener('pointermove', move);
-    window.removeEventListener('pointerup', stop);
-    window.removeEventListener('pointercancel', stop);
-  };
-  window.addEventListener('pointermove', move);
-  window.addEventListener('pointerup', stop);
-  window.addEventListener('pointercancel', stop);
-}
-
-function selectElement(item, event) {
-  if (!event.ctrlKey && !event.shiftKey) selected.clear();
-  if (item) {
-    if ((event.ctrlKey || event.shiftKey) && selected.has(item.id)) selected.delete(item.id);
-    else selected.add(item.id);
-  }
-}
-
-function shape(ctx, e) {
-  ctx.beginPath();
-  if (e.shape === 'ellipse') {
-    ctx.ellipse(e.x + e.w / 2, e.y + e.h / 2, Math.max(0.1, e.w / 2), Math.max(0.1, e.h / 2), 0, 0, Math.PI * 2);
-  } else if (e.shape === 'round') {
-    ctx.roundRect(e.x, e.y, e.w, e.h, Math.min(16, e.w / 4, e.h / 4));
-  } else {
-    ctx.rect(e.x, e.y, e.w, e.h);
-  }
-}
-
-function port(e, p) {
-  if (e.shape === 'ellipse') {
-    return { x: e.x + e.w / 2 + Math.cos(p.angle || 0) * e.w / 2, y: e.y + e.h / 2 + Math.sin(p.angle || 0) * e.h / 2 };
-  }
-  const r = p.ratio ?? 0.5;
-  return p.side === 'left' ? { x: e.x, y: e.y + e.h * r } :
-         p.side === 'right' ? { x: e.x + e.w, y: e.y + e.h * r } :
-         p.side === 'top' ? { x: e.x + e.w * r, y: e.y } :
-         { x: e.x + e.w * r, y: e.y + e.h };
-}
-
-function nearest(e, q) {
-  if (e.shape === 'ellipse') {
-    return { angle: Math.atan2((q.y - e.y - e.h / 2) / (e.h / 2 || 1), (q.x - e.x - e.w / 2) / (e.w / 2 || 1)) };
-  }
-  return [
-    { side: 'left', ratio: clamp((q.y - e.y) / (e.h || 1), 0.05, 0.95) },
-    { side: 'right', ratio: clamp((q.y - e.y) / (e.h || 1), 0.05, 0.95) },
-    { side: 'top', ratio: clamp((q.x - e.x) / (e.w || 1), 0.05, 0.95) },
-    { side: 'bottom', ratio: clamp((q.x - e.x) / (e.w || 1), 0.05, 0.95) }
-  ].sort((a, b) => {
-    const p1 = port(e, a), p2 = port(e, b);
-    return Math.hypot(p1.x - q.x, p1.y - q.y) - Math.hypot(p2.x - q.x, p2.y - q.y);
+function nearestPort(e,q){
+  if(e.shape==='ellipse')return{angle:Math.atan2((q.y-e.y-e.h/2)/(e.h/2),(q.x-e.x-e.w/2)/(e.w/2))};
+  return[{side:'left',ratio:clamp((q.y-e.y)/e.h,.1,.9)},{side:'right',ratio:clamp((q.y-e.y)/e.h,.1,.9)},
+         {side:'top',ratio:clamp((q.x-e.x)/e.w,.1,.9)},{side:'bottom',ratio:clamp((q.x-e.x)/e.w,.1,.9)}]
+  .sort((a,b)=>{
+    const pa=port(e,a),pb=port(e,b);
+    return Math.hypot(pa.x-q.x,pa.y-q.y)-Math.hypot(pb.x-q.x,pb.y-q.y);
   })[0];
 }
-
-function normal(e, p) {
-  if (e.shape === 'ellipse') {
-    const x = Math.cos(p.angle || 0) / (e.w || 1), y = Math.sin(p.angle || 0) / (e.h || 1), l = Math.hypot(x, y) || 1;
-    return { x: x / l, y: y / l };
+function normalVec(e,p){
+  if(e.shape==='ellipse'){
+    const x=Math.cos(p.angle||0),y=Math.sin(p.angle||0),l=Math.hypot(x,y)||1;
+    return{x:x/l,y:y/l};
   }
-  return { left: { x: -1, y: 0 }, right: { x: 1, y: 0 }, top: { x: 0, y: -1 }, bottom: { x: 0, y: 1 } }[p.side || 'bottom'];
+  return{left:{x:-1,y:0},right:{x:1,y:0},top:{x:0,y:-1},bottom:{x:0,y:1}}[p.side||'bottom'];
+}
+function getLineEnds(e){
+  const o=findElement(e.ownerId),c=findElement(e.commentId);
+  if(!o||!c)return null;
+  const p=port(o,e.from),q=port(c,e.to),no=normalVec(o,e.from),nc=normalVec(c,e.to);
+  return[p,{x:p.x+20*no.x,y:p.y+20*no.y},{x:q.x+20*nc.x,y:q.y+20*nc.y},q];
+}
+function isVisible(e,t){
+  const target=e.type==='E'?findElement(e.ownerId):e;
+  return target&&!['D','F'].includes(e.type)&&t>=target.start&&t<target.end;
 }
 
-function endpoints(e) {
-  const a = find(e.ownerId), b = find(e.commentId);
-  if (!a || !b) return null;
-  const p = port(a, e.from), q = port(b, e.to);
-  const n = normal(a, e.from), m = normal(b, e.to);
-  return [p, { x: p.x + 20 * n.x, y: p.y + 20 * n.y }, { x: q.x + 20 * m.x, y: q.y + 20 * m.y }, q];
-}
+const order={C:0,B:1,A:2,E:3};
+function paint(targetCtx=ctx,t=video.currentTime,isOutput=false){
+  if(!isOutput)targetCtx.clearRect(0,0,canvas.width,canvas.height);
+  if(!isOutput&&(!isEditing||renderedPlayback))return;
 
-function isElementVisible(e, t) {
-  const owner = e.type === 'E' ? find(e.ownerId) : e;
-  return owner && !['D', 'F'].includes(e.type) && t >= owner.start && t < owner.end;
-}
-
-const drawOrder = { C: 0, B: 1, A: 2, E: 3 };
-
-function paint(ctx = context, time = video.currentTime, output = false) {
-  if (!output) ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!output && (!editing || renderedPlayback)) return;
-
-  const list = elements.filter(e => isElementVisible(e, time)).sort((a, b) => drawOrder[a.type] - drawOrder[b.type]);
-  for (const e of list) {
-    ctx.save();
-    ctx.strokeStyle = e.stroke;
-    ctx.lineWidth = e.width;
-    ctx.setLineDash(dashes[e.dash] || []);
-
-    if (e.type === 'E') {
-      const ends = endpoints(e);
-      if (!ends) { ctx.restore(); continue; }
-      const [p, u, v, q] = ends;
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(u.x, u.y);
-      if (e.line === 'orthogonal') {
-        ctx.lineTo((u.x + v.x) / 2, u.y);
-        ctx.lineTo((u.x + v.x) / 2, v.y);
-      } else if (e.line === 'wave') {
-        const dx = v.x - u.x, dy = v.y - u.y, l = Math.hypot(dx, dy) || 1;
-        for (let i = 1; i <= 80; i++) {
-          const t = i / 80, s = 16 * Math.sin(2 * Math.PI * t);
-          ctx.lineTo(u.x + dx * t - dy / l * s, u.y + dy * t + dx / l * s);
-        }
-      }
-      ctx.lineTo(v.x, v.y);
-      ctx.lineTo(q.x, q.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      if (e.terminal === 'arrow') {
-        const a = Math.atan2(q.y - v.y, q.x - v.x);
-        ctx.beginPath();
-        ctx.moveTo(q.x - 12 * Math.cos(a - 0.5), q.y - 12 * Math.sin(a - 0.5));
-        ctx.lineTo(q.x, q.y);
-        ctx.lineTo(q.x - 12 * Math.cos(a + 0.5), q.y - 12 * Math.sin(a + 0.5));
-        ctx.stroke();
-      } else if (e.terminal === 'circle') {
-        ctx.beginPath();
-        ctx.arc(q.x, q.y, 5, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      if (!output) {
-        [p, q].forEach((pt, idx) => {
-          ctx.fillStyle = idx ? '#22c55e' : '#38bdf8';
-          ctx.beginPath();
-          ctx.arc(pt.x, pt.y, selected.has(e.id) ? 6 : 4, 0, Math.PI * 2);
-          ctx.fill();
-        });
-      }
-    } else {
-      shape(ctx, e);
-      if (e.type === 'C' && video.readyState >= 2) {
-        ctx.save();
-        ctx.clip();
-        ctx.drawImage(video, e.x + (e.w - e.w / e.zoom) / 2, e.y + (e.h - e.h / e.zoom) / 2, e.w / e.zoom, e.h / e.zoom, e.x, e.y, e.w, e.h);
-        ctx.restore();
-      }
-      if (e.background !== 'transparent') {
-        ctx.fillStyle = e.background;
-        ctx.fill();
-      }
-      ctx.stroke();
-
-      if (e.type === 'A') {
-        ctx.save();
-        shape(ctx, e);
-        ctx.clip();
-        ctx.fillStyle = e.color;
-        const fontName = e.font === 'mincho' ? 'serif' : 'sans-serif';
-        ctx.font = `${e.size}px ${fontName}`;
-        let y = e.y + e.size + 6;
-        for (const line of (e.text || '').split('\n')) {
-          let row = '';
-          for (const ch of line) {
-            if (row && ctx.measureText(row + ch).width > e.w - 12) {
-              ctx.fillText(row, e.x + 6, y);
-              y += e.size * 1.35;
-              row = '';
-            }
-            row += ch;
+  const list=elements.filter(e=>isVisible(e,t)).sort((a,b)=>order[a.type]-order[b.type]);
+  list.forEach(e=>{
+    targetCtx.save();
+    targetCtx.strokeStyle=e.stroke||'#ef4444';
+    targetCtx.lineWidth=e.width||3;
+    targetCtx.setLineDash(dashes[e.dash]||[]);
+    if(e.type==='E'){
+      const ends=getLineEnds(e);
+      if(ends){
+        const[p,u,v,q]=ends;
+        targetCtx.beginPath();targetCtx.moveTo(p.x,p.y);targetCtx.lineTo(u.x,u.y);
+        if(e.line==='orthogonal'){targetCtx.lineTo((u.x+v.x)/2,u.y);targetCtx.lineTo((u.x+v.x)/2,v.y);}
+        else if(e.line==='wave'){
+          const dx=v.x-u.x,dy=v.y-u.y,len=Math.hypot(dx,dy)||1;
+          for(let i=1;i<=60;i++){
+            const ratio=i/60,wave=14*Math.sin(2*Math.PI*ratio);
+            targetCtx.lineTo(u.x+dx*ratio-dy/len*wave,u.y+dy*ratio+dx/len*wave);
           }
-          ctx.fillText(row, e.x + 6, y);
-          y += e.size * 1.35;
         }
-        ctx.restore();
+        targetCtx.lineTo(v.x,v.y);targetCtx.lineTo(q.x,q.y);targetCtx.stroke();
+        targetCtx.setLineDash([]);
+        if(e.terminal==='arrow'){
+          const a=Math.atan2(q.y-v.y,q.x-v.x);
+          targetCtx.beginPath();
+          targetCtx.moveTo(q.x-10*Math.cos(a-.5),q.y-10*Math.sin(a-.5));
+          targetCtx.lineTo(q.x,q.y);
+          targetCtx.lineTo(q.x-10*Math.cos(a+.5),q.y-10*Math.sin(a+.5));
+          targetCtx.stroke();
+        }else if(e.terminal==='circle'){
+          targetCtx.beginPath();targetCtx.arc(q.x,q.y,5,0,Math.PI*2);targetCtx.stroke();
+        }
+        if(!isOutput){
+          [p,q].forEach((pt,idx)=>{
+            targetCtx.fillStyle=idx?'#22c55e':'#38bdf8';
+            targetCtx.beginPath();targetCtx.arc(pt.x,pt.y,selectedIds.has(e.id)?6:4,0,Math.PI*2);targetCtx.fill();
+          });
+        }
       }
+    }else{
+      targetCtx.beginPath();
+      if(e.shape==='ellipse')targetCtx.ellipse(e.x+e.w/2,e.y+e.h/2,e.w/2,e.h/2,0,0,Math.PI*2);
+      else if(e.shape==='round')targetCtx.roundRect(e.x,e.y,e.w,e.h,12);
+      else targetCtx.rect(e.x,e.y,e.w,e.h);
 
-      if (!output && selected.has(e.id)) {
-        ctx.strokeStyle = '#60a5fa';
-        ctx.setLineDash([4, 3]);
-        ctx.strokeRect(e.x, e.y, e.w, e.h);
-        ctx.fillStyle = '#60a5fa';
-        ctx.fillRect(e.x + e.w - 7, e.y + e.h - 7, 14, 14);
+      if(e.type==='C'&&video.readyState>=2){
+        targetCtx.save();targetCtx.clip();
+        const z=e.zoom||2;
+        targetCtx.drawImage(video,e.x+(e.w-e.w/z)/2,e.y+(e.h-e.h/z)/2,e.w/z,e.h/z,e.x,e.y,e.w,e.h);
+        targetCtx.restore();
+      }
+      if(e.background&&e.background!=='transparent'){
+        targetCtx.fillStyle=e.background;targetCtx.fill();
+      }
+      targetCtx.stroke();
+
+      if(e.type==='A'){
+        targetCtx.save();
+        targetCtx.beginPath();targetCtx.rect(e.x,e.y,e.w,e.h);targetCtx.clip();
+        targetCtx.fillStyle=e.color||'#ffffff';
+        targetCtx.font=`${e.size||20}px ${e.font==='mincho'?'serif':'sans-serif'}`;
+        let lineY=e.y+(e.size||20)+4;
+        for(const line of (e.text||'').split('\n')){
+          let row='';
+          for(const ch of line){
+            if(row&&targetCtx.measureText(row+ch).width>e.w-10){
+              targetCtx.fillText(row,e.x+5,lineY);lineY+=(e.size||20)*1.3;row='';
+            }
+            row+=ch;
+          }
+          targetCtx.fillText(row,e.x+5,lineY);lineY+=(e.size||20)*1.3;
+        }
+        targetCtx.restore();
+      }
+      if(!isOutput&&selectedIds.has(e.id)){
+        targetCtx.strokeStyle='#60a5fa';targetCtx.setLineDash([4,3]);targetCtx.strokeRect(e.x,e.y,e.w,e.h);
+        targetCtx.fillStyle='#60a5fa';targetCtx.fillRect(e.x+e.w-8,e.y+e.h-8,16,16);
       }
     }
-    ctx.restore();
-  }
-}
-
-function hit(q) {
-  return elements.filter(e => isElementVisible(e, video.currentTime)).sort((a, b) => drawOrder[b.type] - drawOrder[a.type]).find(e => {
-    if (e.type === 'E') {
-      const p = endpoints(e);
-      return p && [p[0], p[3]].some(r => Math.hypot(r.x - q.x, r.y - q.y) < 15);
-    }
-    return q.x >= e.x && q.x <= e.x + e.w && q.y >= e.y && q.y <= e.y + e.h;
+    targetCtx.restore();
   });
 }
 
-// キャンバス操作
-canvas.onpointerdown = event => {
-  if (event.button !== 0 || !editing || locked()) return;
-  commitText();
-  video.pause();
-  const q = point(event), item = hit(q);
-
-  if (connecting) {
-    if (!item || !['A', 'B', 'C'].includes(item.type)) return;
-    if (connecting === 'start') {
-      connecting = item.id;
-      message('接続先の要素をクリックしてください。Escで中止。');
-      return;
+function hitElement(q){
+  return elements.filter(e=>isVisible(e,video.currentTime)).sort((a,b)=>order[b.type]-order[a.type]).find(e=>{
+    if(e.type==='E'){
+      const ends=getLineEnds(e);
+      return ends&&[ends[0],ends[3]].some(p=>Math.hypot(p.x-q.x,p.y-q.y)<16);
     }
-    const first = find(connecting);
-    if (!first || (first.type === 'A') === (item.type === 'A')) {
-      message('コメントと強調枠、またはコメントと拡大枠を選択してください');
-      return;
-    }
-    const owner = first.type === 'A' ? item : first;
-    const comment = first.type === 'A' ? first : item;
-    const from = nearest(owner, { x: comment.x + comment.w / 2, y: comment.y + comment.h / 2 });
-    const line = {
-      id: uid(),
-      type: 'E',
-      ownerId: owner.id,
-      commentId: comment.id,
-      from,
-      to: nearest(comment, port(owner, from)),
-      stroke: owner.stroke,
-      width: owner.width,
-      dash: owner.dash,
-      line: 'orthogonal',
-      terminal: 'arrow'
-    };
-    elements.push(line);
-    selected = new Set([line.id]);
-    dirty = true;
-    connecting = null;
-    paint();
-    return;
-  }
-
-  selectElement(item, event);
-  tracks();
-  paint();
-  if (!item) return;
-
-  const old = clone(item);
-  const resize = item.type !== 'E' && q.x > item.x + item.w - 18 && q.y > item.y + item.h - 18;
-  const ends = item.type === 'E' ? endpoints(item) : null;
-  const endSide = ends && Math.hypot(ends[0].x - q.x, ends[0].y - q.y) < 15 ? 'from' : 'to';
-
-  drag(event, ev => {
-    const p = point(ev);
-    if (item.type === 'E') {
-      const ref = find(endSide === 'from' ? item.ownerId : item.commentId);
-      item[endSide] = nearest(ref, p);
-    } else if (resize) {
-      item.w = clamp(old.w + p.x - q.x, 20, canvas.width - item.x);
-      item.h = clamp(old.h + p.y - q.y, 20, canvas.height - item.y);
-    } else {
-      item.x = clamp(old.x + p.x - q.x, 0, canvas.width - item.w);
-      item.y = clamp(old.y + p.y - q.y, 0, canvas.height - item.h);
-    }
-    dirty = true;
-    paint();
+    return q.x>=e.x&&q.x<=e.x+e.w&&q.y>=e.y&&q.y<=e.y+e.h;
   });
-};
-
-canvas.ondblclick = event => {
-  if (!editing || locked()) return;
-  const item = hit(point(event));
-  if (item?.type !== 'A') return;
-  commitText();
-  video.pause();
-
-  const node = document.createElement('div');
-  const k = canvas.clientWidth / canvas.width;
-  node.className = 'editor';
-  node.contentEditable = 'true';
-  node.innerText = item.text;
-  Object.assign(node.style, {
-    left: (item.x * k) + 'px',
-    top: (item.y * k) + 'px',
-    width: (item.w * k) + 'px',
-    height: (item.h * k) + 'px',
-    fontSize: (item.size * k) + 'px',
-    fontFamily: item.font === 'mincho' ? 'serif' : 'sans-serif',
-    color: item.color,
-    background: item.background !== 'transparent' ? item.background : 'rgba(255,255,255,0.95)'
-  });
-  $('surface').append(node);
-  editor = { node, item };
-  node.oninput = () => { item.text = node.innerText; dirty = true; };
-  node.onblur = commitText;
-  node.focus();
-};
-
-// メニュー管理
-function showMenu(event) {
-  const menu = $('menu');
-  menu.hidden = false;
-  menu.style.left = clamp(event.clientX, 4, Math.max(4, window.innerWidth - menu.offsetWidth - 8)) + 'px';
-  menu.style.top = clamp(event.clientY, 4, Math.max(4, window.innerHeight - menu.offsetHeight - 8)) + 'px';
 }
 
-function openMenu(event, items) {
-  event.preventDefault();
-  if (locked()) return;
-  $('menu').replaceChildren();
-  items.forEach(([label, run]) => {
-    const btn = document.createElement('button');
-    btn.textContent = label;
-    btn.onclick = safe(async () => {
-      $('menu').hidden = true;
-      if (!locked()) await run();
-    });
-    $('menu').append(btn);
-  });
-  showMenu(event);
+function getPoint(ev){
+  const r=canvas.getBoundingClientRect();
+  return{x:(ev.clientX-r.left)*canvas.width/r.width,y:(ev.clientY-r.top)*canvas.height/r.height};
 }
 
-// タイムライン
-function timelineRange() {
-  const span = Math.max(0.001, duration() * (0.1 + 0.9 * (+$('scale').value - 1) / 9));
-  return {
-    span,
-    start: clamp(video.currentTime - span / 2, 0, Math.max(0, duration() - span)),
-    width: Math.max(1, $('tracks').clientWidth - 20)
-  };
+function bindDrag(ev,onMove){
+  ev.preventDefault();
+  const onEnd=()=>{window.removeEventListener('pointermove',onMove);window.removeEventListener('pointerup',onEnd);};
+  window.addEventListener('pointermove',onMove);
+  window.addEventListener('pointerup',onEnd);
 }
 
-function timeAtEvent(event, r = timelineRange()) {
-  return clamp(r.start + (event.clientX - $('tracks').getBoundingClientRect().left - 10) / r.width * r.span, 0, duration());
+// タイムライン関連
+function getRange(){
+  const s=+$('scale').value;
+  const span=Math.max(0.1,duration()*(0.1+0.9*(s-1)/9));
+  const start=clamp(video.currentTime-span/2,0,Math.max(0,duration()-span));
+  const w=Math.max(1,$('tracks').clientWidth-20);
+  return{span,start,width:w};
 }
+function getTimeAtEvent(ev){
+  const r=getRange(),rect=$('tracks').getBoundingClientRect();
+  return clamp(r.start+(ev.clientX-rect.left-10)/r.width*r.span,0,duration());
+}
+function tracks(){
+  if(!isEditing)return;
+  const root=$('tracks'),r=getRange();
+  root.querySelectorAll('.clip,.tick').forEach(n=>n.remove());
 
-function tracks() {
-  if (!editing) return;
-  const root = $('tracks'), r = timelineRange();
-  root.querySelectorAll('.clip, .tick').forEach(n => n.remove());
-
-  for (let i = 0; i <= 8; i++) {
-    const tick = document.createElement('span');
-    tick.className = 'tick';
-    tick.style.left = (10 + r.width * i / 8) + 'px';
-    tick.textContent = (r.start + r.span * i / 8).toFixed(1) + 's';
-    if (i === 8) tick.style.transform = 'translateX(-100%)';
+  for(let i=0;i<=8;i++){
+    const tick=document.createElement('span');tick.className='tick';
+    tick.style.left=(10+r.width*i/8)+'px';
+    tick.textContent=(r.start+r.span*i/8).toFixed(1)+'s';
+    if(i===8)tick.style.transform='translateX(-100%)';
     root.append(tick);
   }
 
-  const rows = [];
-  elements.filter(e => e.type !== 'E').sort((a, b) => a.start - b.start).forEach(e => {
-    let row = rows.findIndex(end => end <= e.start);
-    if (row < 0) row = rows.length;
-    rows[row] = Math.max(e.end, e.start + 0.001);
+  const rows=[];
+  elements.filter(e=>e.type!=='E').sort((a,b)=>(a.start??a.time)-(b.start??b.time)).forEach(e=>{
+    const st=e.start??e.time,en=e.end??e.time;
+    let rowIdx=rows.findIndex(end=>end<=st);
+    if(rowIdx<0)rowIdx=rows.length;
+    rows[rowIdx]=Math.max(en,st+0.001);
 
-    if (e.end < r.start || e.start > r.start + r.span) return;
-    const node = document.createElement('div');
-    node.className = `clip ${e.type}${selected.has(e.id) ? ' selected' : ''}`;
-    node.setAttribute('data-element-id', e.id);
-    node.textContent = e.type === 'A' ? (e.text || 'コメント') : titles[e.type];
+    if(en<r.start||st>r.start+r.span)return;
+    const clip=document.createElement('div');
+    clip.className=`clip ${e.type} ${selectedIds.has(e.id)?'selected':''}`;
+    clip.setAttribute('data-element-id',e.id);
+    clip.textContent=e.type==='A'?(e.text||titles.A):titles[e.type];
 
-    const left = 10 + (Math.max(e.start, r.start) - r.start) / r.span * r.width;
-    const w = Math.max(4, Math.min(root.clientWidth - 10 - left, e.type === 'F' ? 8 : (Math.min(e.end, r.start + r.span) - Math.max(e.start, r.start)) / r.span * r.width));
+    const left=10+(Math.max(st,r.start)-r.start)/r.span*r.width;
+    const width=e.type==='F'?8:Math.max(4,(Math.min(en,r.start+r.span)-Math.max(st,r.start))/r.span*r.width);
+    Object.assign(clip.style,{left:left+'px',top:(24+rowIdx*28)+'px',width:width+'px'});
 
-    Object.assign(node.style, {
-      left: left + 'px',
-      top: (24 + row * 28) + 'px',
-      width: w + 'px'
-    });
-
-    if (e.type !== 'F') {
-      ['start', 'end'].forEach(side => {
-        if (side === 'start' && e.start < r.start) return;
-        if (side === 'end' && e.end > r.start + r.span) return;
-        const edge = document.createElement('span');
-        edge.className = `edge ${side}`;
-        node.append(edge);
-      });
+    if(e.type!=='F'){
+      const es=document.createElement('span');es.className='edge start';
+      const ee=document.createElement('span');ee.className='edge end';
+      clip.append(es,ee);
     }
 
-    node.oncontextmenu = ev => {
-      ev.stopPropagation();
-      elementMenu(ev, e, true);
-    };
-
-    node.onpointerdown = ev => {
-      if (ev.button !== 0 || locked()) return;
-      ev.stopPropagation();
-      video.pause();
-      selectElement(e, ev);
-      const old = clone(e), startX = ev.clientX;
-      const isStartEdge = ev.target.classList.contains('start');
-      const isEndEdge = ev.target.classList.contains('end');
-      const mode = isStartEdge ? 'start' : isEndEdge ? 'end' : 'move';
-
-      drag(ev, evMove => {
-        const delta = (evMove.clientX - startX) / r.width * r.span;
-        if (mode === 'start') {
-          e.start = clamp(old.start + delta, 0, e.end - 0.001);
-        } else if (mode === 'end') {
-          e.end = clamp(old.end + delta, e.start + 0.001, duration());
-        } else {
-          const len = old.end - old.start;
-          e.start = clamp(old.start + delta, 0, duration() - len);
-          e.end = e.start + len;
-        }
-        dirty = true;
-        tracks();
-        paint();
+    clip.oncontextmenu=ev=>{ev.stopPropagation();openElementMenu(ev,e,true);};
+    clip.onpointerdown=ev=>{
+      if(ev.button!==0||isLocked())return;
+      ev.stopPropagation();video.pause();
+      if(!ev.ctrlKey&&!ev.shiftKey)selectedIds.clear();
+      selectedIds.add(e.id);
+      const isStart=ev.target.classList.contains('start');
+      const isEnd=ev.target.classList.contains('end');
+      const originX=ev.clientX,oldStart=e.start,oldEnd=e.end;
+      bindDrag(ev,mev=>{
+        const dt=(mev.clientX-originX)/r.width*r.span;
+        if(isStart)e.start=clamp(oldStart+dt,0,e.end-0.1);
+        else if(isEnd)e.end=clamp(oldEnd+dt,e.start+0.1,duration());
+        else{const len=oldEnd-oldStart;e.start=clamp(oldStart+dt,0,duration()-len);e.end=e.start+len;}
+        isDirty=true;tracks();paint();
       });
-      tracks();
-      paint();
+      tracks();paint();
     };
-    root.append(node);
+    root.append(clip);
   });
-
-  root.style.height = Math.max(120, rows.length * 28 + 35) + 'px';
+  root.style.height=Math.max(140,rows.length*28+30)+'px';
   updateClock();
 }
-
-function updateClock() {
-  $('clock').textContent = `${video.currentTime.toFixed(1)} / ${duration().toFixed(1)} 秒`;
-  const r = timelineRange();
-  $('playhead').style.left = (10 + (video.currentTime - r.start) / r.span * r.width) + 'px';
+function updateClock(){
+  $('clock').textContent=`${video.currentTime.toFixed(1)} / ${duration().toFixed(1)} 秒`;
+  const r=getRange();
+  $('playhead').style.left=(10+(video.currentTime-r.start)/r.span*r.width)+'px';
 }
 
-function addElement(type, time, q) {
-  if (!duration() || time >= duration()) {
-    message('動画の再生時間内に追加してください');
-    return;
-  }
-  const e = {
-    id: uid(),
-    type,
-    start: time,
-    end: type === 'F' ? time : Math.min(duration(), time + 3)
-  };
-  if (['A', 'B', 'C'].includes(type)) {
-    const w = Math.min(260, canvas.width || 640);
-    const h = Math.min(110, canvas.height || 360);
-    Object.assign(e, {
-      x: clamp(q.x, 0, (canvas.width || 640) - w),
-      y: clamp(q.y, 0, (canvas.height || 360) - h),
-      w,
-      h,
-      text: 'コメント',
-      size: 24,
-      font: 'gothic',
-      color: '#ffffff',
-      stroke: '#ef4444',
-      width: 3,
-      dash: 'solid',
-      shape: 'rect',
-      background: 'transparent',
-      zoom: 2
-    });
-  }
-  if (type === 'F') {
-    e.time = time;
-  }
-  elements.push(e);
-  selected = new Set([e.id]);
-  dirty = true;
-  tracks();
-  paint();
+function openMenu(ev,items){
+  ev.preventDefault();
+  const m=$('menu');m.replaceChildren();
+  items.forEach(([label,act])=>{
+    const btn=document.createElement('button');btn.textContent=label;
+    btn.onclick=()=>{m.hidden=true;act();};
+    m.append(btn);
+  });
+  m.hidden=false;
+  m.style.left=clamp(ev.clientX,5,window.innerWidth-m.offsetWidth-10)+'px';
+  m.style.top=clamp(ev.clientY,5,window.innerHeight-m.offsetHeight-10)+'px';
 }
 
-function elementMenu(event, item, isTimeline) {
-  if (!editing) return;
-  commitText();
-  video.pause();
-  if (item && !selected.has(item.id)) selected = new Set([item.id]);
+function openElementMenu(ev,item,isTl){
+  if(!isEditing)return;
+  commitText();video.pause();
+  if(item&&!selectedIds.has(item.id)){selectedIds.clear();selectedIds.add(item.id);}
 
-  const time = isTimeline ? timeAtEvent(event) : video.currentTime;
-  const q = isTimeline ? { x: canvas.width * 0.1, y: canvas.height * 0.1 } : point(event);
+  const t=isTl?getTimeAtEvent(ev):video.currentTime;
+  const q=isTl?{x:canvas.width*0.1,y:canvas.height*0.1}:getPoint(ev);
+  const items=[];
 
-  const items = (isTimeline ? ['A', 'B', 'C', 'D', 'F'] : ['A', 'B', 'C']).map(type => [
-    `${titles[type]}追加`, () => addElement(type, time, q)
-  ]);
-
-  if (!isTimeline) {
-    items.push(['接続線追加', () => {
-      connecting = 'start';
-      message('接続元の要素（強調枠または拡大枠）をクリックしてください。Escで中止。');
-    }]);
-  }
-
-  if (isTimeline && selected.size > 1) {
-    items.push(['開始位置を合わせる', () => {
-      const list = elements.filter(e => selected.has(e.id) && e.type !== 'E');
-      const start = item ? item.start : Math.min(...list.map(e => e.start));
-      if (list.some(e => start + e.end - e.start > duration())) {
-        message('動画終了時刻を超えるため変更できません');
-        return;
-      }
-      list.forEach(e => {
-        e.end = start + e.end - e.start;
-        e.start = start;
-      });
-      dirty = true;
-      tracks();
-      paint();
-    }]);
-  }
-
-  if (item) {
-    if (!['D', 'F'].includes(item.type)) {
-      items.push(['書式変更', () => formatDialog(item, event)]);
+  const addElem=(type)=>{
+    const ne={id:uid(),type,start:t,end:type==='F'?t:Math.min(duration(),t+3)};
+    if(type==='F')ne.time=t;
+    if(['A','B','C'].includes(type)){
+      Object.assign(ne,{x:clamp(q.x,0,canvas.width-200),y:clamp(q.y,0,canvas.height-100),w:200,h:80,stroke:'#ef4444',width:3,dash:'solid',shape:'rect',background:'transparent'});
+      if(type==='A')Object.assign(ne,{text:'コメント',size:20,font:'gothic',color:'#ffffff'});
+      if(type==='C')ne.zoom=2;
     }
-    items.push(['選択要素を削除', () => {
-      elements = elements.filter(e => !selected.has(e.id) && !selected.has(e.ownerId) && !selected.has(e.commentId));
-      selected.clear();
-      dirty = true;
-      tracks();
-      paint();
+    elements.push(ne);selectedIds=new Set([ne.id]);isDirty=true;tracks();paint();
+  };
+
+  if(isTl){
+    ['A','B','C','D','F'].forEach(k=>items.push([titles[k]+'追加',()=>addElem(k)]));
+    if(selectedIds.size>1){
+      items.push(['開始位置を合わせる',()=>{
+        const list=elements.filter(e=>selectedIds.has(e.id)&&e.type!=='E');
+        const minSt=Math.min(...list.map(e=>e.start??e.time));
+        list.forEach(e=>{if(e.end)e.end=minSt+(e.end-e.start);e.start=minSt;if(e.time)e.time=minSt;});
+        isDirty=true;tracks();paint();
+      }]);
+    }
+  }else{
+    ['A','B','C'].forEach(k=>items.push([titles[k]+'追加',()=>addElem(k)]));
+    items.push(['接続線追加',()=>{connectingOwner='start';message('接続開始側の要素をクリックしてください');}]);
+  }
+
+  if(item){
+    if(!['D','F'].includes(item.type))items.push(['書式変更',()=>openFormatMenu(ev,item)]);
+    items.push(['削除',()=>{
+      elements=elements.filter(e=>!selectedIds.has(e.id)&&!selectedIds.has(e.ownerId)&&!selectedIds.has(e.commentId));
+      selectedIds.clear();isDirty=true;tracks();paint();
     }]);
   }
-  openMenu(event, items);
+  openMenu(ev,items);
 }
 
-function formatDialog(e, event) {
-  const root = $('menu');
-  root.replaceChildren();
-
-  const fields = [
-    ...(e.type === 'A' ? [
-      ['文字サイズ', 'size', Array.from({ length: 31 }, (_, i) => [i + 10, i + 10])],
-      ['フォント', 'font', [['gothic', 'ゴシック'], ['mincho', '明朝']]]
-    ] : []),
-    ['線の太さ', 'width', [[1, '━ 1px'], [2, '━━ 2px'], [3, '━━━━ 3px'], [5, '████ 5px'], [8, '██████ 8px']]],
-    ['線種', 'dash', [['solid', '実線'], ['dash', '破線'], ['dot', '点線'], ['chain', '一点鎖線']]],
-    ...(e.type === 'E' ? [
-      ['線形', 'line', [['straight', '直線'], ['orthogonal', '折れ線'], ['wave', '1周期波線']]],
-      ['終端', 'terminal', [['none', 'なし'], ['arrow', '矢印'], ['circle', '丸']]]
-    ] : [
-      ['図形', 'shape', [['rect', '四角'], ['ellipse', '楕円'], ['round', '角丸四角']]]
-    ]),
-    ...(e.type === 'C' ? [
-      ['倍率', 'zoom', [[1, '1倍'], [2, '2倍'], [3, '3倍'], [4, '4倍'], [6, '6倍']]]
-    ] : [])
+function openFormatMenu(ev,item){
+  const m=$('menu');m.replaceChildren();
+  const fields=[
+    ...(item.type==='A'?[['文字サイズ','size',[12,16,20,24,32,40].map(v=>[v,v+'px'])],['フォント','font',[['gothic','ゴシック'],['mincho','明朝']]]]:[]),
+    ['線の太さ','width',[[1,'細'],[3,'中'],[5,'太'],[8,'極太']]],
+    ['線種','dash',[['solid','実線'],['dash','破線'],['dot','点線'],['chain','一点鎖線']]],
+    ...(item.type==='E'?[['線形','line',[['straight','直線'],['orthogonal','折れ線'],['wave','波線']]],['終端','terminal',[['none','なし'],['arrow','矢印'],['circle','丸']]]]:[['図形','shape',[['rect','四角'],['round','角丸四角'],['ellipse','楕円']]]]),
+    ...(item.type==='C'?[['倍率','zoom',[[1.5,'1.5倍'],[2,'2倍'],[3,'3倍'],[4,'4倍']]]]:[])
   ];
-
-  fields.forEach(([title, key, opts]) => {
-    const label = document.createElement('label');
-    const sel = document.createElement('select');
-    label.textContent = title;
-    opts.forEach(([val, text]) => sel.add(new Option(String(text), String(val))));
-    sel.value = String(e[key]);
-    sel.onchange = () => {
-      e[key] = ['size', 'width', 'zoom'].includes(key) ? +sel.value : sel.value;
-      dirty = true;
-      paint();
-    };
-    label.append(sel);
-    root.append(label);
+  fields.forEach(([label,prop,opts])=>{
+    const l=document.createElement('label'),s=document.createElement('select');
+    l.textContent=label;opts.forEach(([v,t])=>s.add(new Option(t,v)));
+    s.value=item[prop];
+    s.onchange=()=>{item[prop]=['size','width','zoom'].includes(prop)?+s.value:s.value;isDirty=true;paint();};
+    l.append(s);m.append(l);
   });
+  const colorTarget=document.createElement('select');
+  colorTarget.add(new Option('線色','stroke'));
+  if(item.type!=='E')colorTarget.add(new Option('背景色','background'));
+  if(item.type==='A')colorTarget.add(new Option('文字色','color'));
+  m.append(colorTarget);
 
-  const targetSel = document.createElement('select');
-  targetSel.add(new Option('線色', 'stroke'));
-  if (e.type !== 'E') targetSel.add(new Option('背景色', 'background'));
-  if (e.type === 'A') targetSel.add(new Option('文字色', 'color'));
-  root.append(targetSel);
-
-  const palette = document.createElement('div');
-  palette.className = 'palette';
-  colors.forEach(col => {
-    const btn = document.createElement('button');
-    btn.title = col === 'transparent' ? '塗り潰しなし' : col;
-    btn.style.background = col === 'transparent' ? 'repeating-linear-gradient(45deg,#fff 0 4px,#bbb 4px 8px)' : col;
-    btn.onclick = () => {
-      e[targetSel.value] = col;
-      dirty = true;
-      paint();
-    };
-    palette.append(btn);
+  const pal=document.createElement('div');pal.className='palette';
+  colors.forEach(col=>{
+    const b=document.createElement('button');
+    b.style.background=col==='transparent'?'repeating-linear-gradient(45deg,#fff 0 3px,#ccc 3px 6px)':col;
+    b.onclick=()=>{item[colorTarget.value]=col;isDirty=true;paint();};
+    pal.append(b);
   });
-  root.append(palette);
-  showMenu(event);
+  m.append(pal);
+  m.hidden=false;
+  m.style.left=clamp(ev.clientX,5,window.innerWidth-m.offsetWidth-10)+'px';
+  m.style.top=clamp(ev.clientY,5,window.innerHeight-m.offsetHeight-10)+'px';
 }
 
-// スキップ処理
-function getNextPlaybackTime(t) {
-  let cur = t;
-  for (let i = 0; i <= elements.length; i++) {
-    const active = elements.filter(e => e.type === 'D' && cur >= e.start && cur < e.end);
-    if (!active.length) break;
-    cur = Math.max(...active.map(e => e.end));
+// キャンバスマウス操作
+canvas.onpointerdown=ev=>{
+  if(ev.button!==0||!isEditing||isLocked())return;
+  commitText();video.pause();
+  const q=getPoint(ev),item=hitElement(q);
+
+  if(connectingOwner){
+    if(!item||!['A','B','C'].includes(item.type))return;
+    if(connectingOwner==='start'){connectingOwner=item.id;message('接続先の要素を選択してください');return;}
+    const o1=findElement(connectingOwner),o2=item;
+    if(!o1||(o1.type==='A')===(o2.type==='A')){message('接続はコメントと強調枠・拡大枠の間で行ってください');return;}
+    const comment=o1.type==='A'?o1:o2,owner=o1.type==='A'?o2:o1;
+    const fromP=nearestPort(owner,{x:comment.x+comment.w/2,y:comment.y+comment.h/2});
+    const lineElem={
+      id:uid(),type:'E',ownerId:owner.id,commentId:comment.id,
+      from:fromP,to:nearestPort(comment,port(owner,fromP)),
+      stroke:owner.stroke||'#ef4444',width:owner.width||3,dash:owner.dash||'solid',
+      line:'orthogonal',terminal:'arrow'
+    };
+    elements.push(lineElem);selectedIds=new Set([lineElem.id]);connectingOwner=null;isDirty=true;paint();return;
   }
-  return Math.min(cur, duration());
+
+  if(!ev.ctrlKey&&!ev.shiftKey)selectedIds.clear();
+  if(item)selectedIds.add(item.id);
+  tracks();paint();
+  if(!item)return;
+
+  const old=structuredClone(item);
+  const isResize=item.type!=='E'&&q.x>item.x+item.w-18&&q.y>item.y+item.h-18;
+  const ends=item.type==='E'?getLineEnds(item):null;
+  const endTarget=ends&&Math.hypot(ends[0].x-q.x,ends[0].y-q.y)<16?'from':'to';
+
+  bindDrag(ev,mev=>{
+    const p=getPoint(mev);
+    if(item.type==='E'){
+      const target=findElement(endTarget==='from'?item.ownerId:item.commentId);
+      item[endTarget]=nearestPort(target,p);
+    }else if(isResize){
+      item.w=clamp(old.w+p.x-q.x,30,canvas.width-item.x);
+      item.h=clamp(old.h+p.y-q.y,20,canvas.height-item.y);
+    }else{
+      item.x=clamp(old.x+p.x-q.x,0,canvas.width-item.w);
+      item.y=clamp(old.y+p.y-q.y,0,canvas.height-item.h);
+    }
+    isDirty=true;paint();
+  });
+};
+
+canvas.ondblclick=ev=>{
+  if(!isEditing||isLocked())return;
+  const item=hitElement(getPoint(ev));
+  if(item?.type!=='A')return;
+  commitText();video.pause();
+  const scaleRatio=canvas.clientWidth/canvas.width;
+  const div=document.createElement('div');
+  div.className='editor';div.contentEditable='true';div.innerText=item.text;
+  Object.assign(div.style,{
+    left:item.x*scaleRatio+'px',top:item.y*scaleRatio+'px',
+    width:item.w*scaleRatio+'px',height:item.h*scaleRatio+'px',
+    fontSize:(item.size||20)*scaleRatio+'px',fontFamily:item.font==='mincho'?'serif':'sans-serif',
+    color:item.color,background:item.background!=='transparent'?item.background:'#fff'
+  });
+  $('surface').append(div);
+  div.focus();
+  editorNode=div;editorNode.item=item;
+  div.onblur=commitText;
+};
+
+// スキップ制御計算
+function getNextPlayTime(t){
+  for(let i=0;i<elements.length;i++){
+    const sk=elements.find(e=>e.type==='D'&&t>=e.start&&t<e.end);
+    if(!sk)break;
+    t=sk.end;
+  }
+  return Math.min(t,duration());
 }
 
 // 編集動画レンダリング
-function createRecorder(stream) {
-  const mimeTypes = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
-  const mimeType = mimeTypes.find(t => MediaRecorder.isTypeSupported(t));
-  if (!mimeType) throw new Error('対応する録画形式がブラウザにありません');
-  return new MediaRecorder(stream, { mimeType });
-}
+async function renderVideoBlob(){
+  const outCanvas=document.createElement('canvas');
+  outCanvas.width=canvas.width;outCanvas.height=canvas.height;
+  const outCtx=outCanvas.getContext('2d');
+  const orgTime=video.currentTime;
+  await seek(getNextPlayTime(0));
+  const stream=outCanvas.captureStream(30);
+  const rec=new MediaRecorder(stream,{mimeType:MediaRecorder.isTypeSupported('video/mp4')?'video/mp4':'video/webm'});
+  const chunks=[];
+  rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+  const finished=new Promise(res=>rec.onstop=()=>res(new Blob(chunks,{type:rec.mimeType})));
 
-function collectData(recorder) {
-  return new Promise((resolve, reject) => {
-    const parts = [];
-    recorder.ondataavailable = e => { if (e.data.size) parts.push(e.data); };
-    recorder.onstop = () => resolve(new Blob(parts, { type: recorder.mimeType }));
-    recorder.onerror = e => reject(e.error || new Error('recorder.onerror = e => reject(e.error || new Error('録画データの収集に失敗しました'));
-  });
-}
+  rec.start(200);
+  video.playbackRate=1;video.muted=false;await video.play();
 
-async function audioReady() {
-  if (!audio) {
-    audio = new AudioContext();
-    audioSource = audio.createMediaElementSource(video);
-    audioSink = audio.createMediaStreamDestination();
-    audioSource.connect(audio.destination);
-    audioSource.connect(audioSink);
-  }
-  if (audio.state === 'suspended') {
-    await audio.resume();
-  }
-}
-
-async function renderEditedVideo() {
-  if (!canvas.captureStream) throw new Error('このブラウザは編集動画の生成に対応していません');
-  if (getNextPlaybackTime(0) >= duration()) throw new Error('全区間がスキップされているため保存できません');
-
-  const originTime = video.currentTime;
-  const originMuted = video.muted;
-  const originRate = video.playbackRate;
-
-  const outputCanvas = document.createElement('canvas');
-  outputCanvas.width = canvas.width;
-  outputCanvas.height = canvas.height;
-  const outCtx = outputCanvas.getContext('2d');
-
-  let stream, rec, frameId, detached = false;
-  video.pause();
-
-  try {
-    await audioReady();
-    audioSource.disconnect(audio.destination);
-    detached = true;
-
-    await seek(getNextPlaybackTime(0));
-    const drawFrame = () => {
-      outCtx.drawImage(video, 0, 0, outputCanvas.width, outputCanvas.height);
-      paint(outCtx, video.currentTime, true);
-    };
-
-    drawFrame();
-    stream = outputCanvas.captureStream(30);
-    audioSink.stream.getAudioTracks().forEach(t => stream.addTrack(t.clone()));
-
-    rec = createRecorder(stream);
-    const resultPromise = collectData(rec);
-    resultPromise.catch(() => {});
-
-    const finishedPromise = new Promise((resolve, reject) => {
-      const loop = async () => {
-        try {
-          if (video.ended || video.currentTime >= duration()) {
-            resolve();
-            return;
-          }
-          const next = getNextPlaybackTime(video.currentTime);
-          if (next > video.currentTime) {
-            video.pause();
-            await seek(next);
-            if (next >= duration()) {
-              resolve();
-              return;
-            }
-            await video.play();
-          }
-          if (video.readyState >= 2 && !video.seeking) {
-            drawFrame();
-          }
-          frameId = requestAnimationFrame(loop);
-        } catch (err) {
-          reject(err);
-        }
-      };
-      frameId = requestAnimationFrame(loop);
-    });
-    finishedPromise.catch(() => {});
-
-    rec.start(250);
-    video.muted = false;
-    video.playbackRate = 1;
-    await video.play();
-
-    await Promise.race([
-      finishedPromise,
-      resultPromise.then(() => { throw new Error('書き出しが途中で中断されました'); })
-    ]);
-
-    video.pause();
-    rec.stop();
-    return await resultPromise;
-  } finally {
-    cancelAnimationFrame(frameId);
-    video.pause();
-    if (rec && rec.state === 'recording') rec.stop();
-    if (stream) stream.getTracks().forEach(t => t.stop());
-    if (detached && audioSource && audio) {
-      audioSource.connect(audio.destination);
+  const drawLoop=async()=>{
+    if(video.paused||video.ended||video.currentTime>=duration()){
+      rec.stop();return;
     }
-    video.muted = originMuted;
-    video.playbackRate = originRate;
-    await seek(Math.min(originTime, duration()));
-  }
+    const next=getNextPlayTime(video.currentTime);
+    if(next>video.currentTime){
+      video.pause();await seek(next);
+      if(next>=duration()){rec.stop();return;}
+      await video.play();
+    }
+    outCtx.drawImage(video,0,0,outCanvas.width,outCanvas.height);
+    paint(outCtx,video.currentTime,true);
+    requestAnimationFrame(drawLoop);
+  };
+  requestAnimationFrame(drawLoop);
+  const resultBlob=await finished;
+  video.pause();await seek(orgTime);
+  return resultBlob;
 }
 
-// 編集結果の保存
-async function saveEdit() {
+// 保存
+async function saveEdit(){
   commitText();
-  if (!current || locked()) return;
-  busy = true;
-  updateUI();
-  try {
-    message('編集動画を生成・保存しています。そのままお待ちください...');
-    const blob = await renderEditedVideo();
-    if (!blob || !blob.size) throw new Error('編集動画の生成に失敗しました');
-
-    const editId = revision ? revision.id : uid();
-    const editPayload = {
-      id: editId,
-      videoId: current.id,
-      name: revision ? revision.name : `編集 ${(current.edits ? current.edits.length : 0) + 1}`,
-      expectedVersion: revision ? revision.version : 0,
-      editData: {
-        schemaVersion: 1,
-        coordinateSystem: 'source-pixels',
-        sourceWidth: canvas.width,
-        sourceHeight: canvas.height,
-        elements: clone(elements)
-      }
+  if(!currentVideo||isLocked())return;
+  isBusy=true;updateUI();
+  try{
+    message('編集動画を生成・保存しています...');
+    const blob=await renderVideoBlob();
+    const editId=currentEdit?.id||uid();
+    const payload={
+      id:editId,
+      videoId:currentVideo.id,
+      name:currentEdit?.name||`編集 ${serverData.edits.filter(e=>e.videoId===currentVideo.id).length+1}`,
+      expectedVersion:currentEdit?.version||0,
+      editData:{schemaVersion:1,coordinateSystem:'source-pixels',sourceWidth:canvas.width,sourceHeight:canvas.height,elements}
     };
-
-    const res = await api('edit.save', editPayload, blob);
-    revision = res.edit;
-    dirty = false;
-    await refreshList();
-    message('編集結果と編集動画を正常に保存しました');
-  } finally {
-    busy = false;
-    updateUI();
+    const res=await api('edit.save',payload,blob);
+    currentEdit=res.edit;
+    isDirty=false;
+    await reloadList();
+    message('編集結果を正常に保存しました');
+  }finally{
+    isBusy=false;updateUI();
   }
 }
 
 // 録画機能
-async function toggleRecord() {
-  if (writer && writer.state === 'recording') {
-    writer.stop();
-    return;
+async function toggleRecord(){
+  if(recorder&&recorder.state==='recording'){
+    recorder.stop();return;
   }
-  if (!await leavePrompt()) return;
-  if (!navigator.mediaDevices?.getDisplayMedia) {
-    throw new Error('画面録画にはHTTPSまたはlocalhost環境が必要です');
-  }
-
-  busy = true;
-  updateUI();
-  try {
-    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+  if(!await leavePrompt())return;
+  isBusy=true;updateUI();
+  try{
+    screenStream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:true});
     clearState();
-    video.srcObject = screenStream;
-    video.muted = true;
-    await video.play();
+    video.srcObject=screenStream;video.muted=true;await video.play();
+    fit();
 
-    writer = createRecorder(screenStream);
-    const resultPromise = collectData(writer);
-    resultPromise.catch(() => {});
+    const chunks=[];
+    const mime=MediaRecorder.isTypeSupported('video/mp4')?'video/mp4':'video/webm';
+    recorder=new MediaRecorder(screenStream,{mimeType:mime});
+    recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
 
-    screenStream.getVideoTracks()[0].onended = () => {
-      if (writer && writer.state === 'recording') writer.stop();
-    };
+    const recDone=new Promise(res=>recorder.onstop=()=>res(new Blob(chunks,{type:mime})));
+    screenStream.getVideoTracks()[0].onended=()=>{if(recorder?.state==='recording')recorder.stop();};
 
-    writer.start(500);
-    busy = false;
-    updateUI();
-    message('録画中... 音声を含める場合は共有ダイアログの「システム音声を含める」を選択してください。');
+    recorder.start(500);
+    isBusy=false;updateUI();
+    message('録画中... 音声を含める場合は画面共有ダイアログでシステム音声を選択してください。');
 
-    const recordedBlob = await resultPromise;
-    busy = true;
-    updateUI();
+    const recordedBlob=await recDone;
+    isBusy=true;updateUI();
+    screenStream.getTracks().forEach(t=>t.stop());
+    screenStream=null;video.srcObject=null;video.muted=false;
 
-    screenStream.getTracks().forEach(t => t.stop());
-    screenStream = null;
-    video.srcObject = null;
-    video.muted = false;
-
-    message('録画動画をアップロード・登録しています...');
-    const nowStr = new Date().toLocaleString('ja-JP');
-    const defaultFolderId = serverData.folders[0]?.id;
-    const uploadRes = await api('video.upload', {
-      id: uid(),
-      folderId: defaultFolderId,
-      name: `録画 ${nowStr}`
-    }, recordedBlob);
-
-    await refreshList();
-    busy = false;
-    await loadEntity(uploadRes.video, null, false);
-    message('録画を保存しました。「編集開始」ボタンから編集可能です。');
-  } finally {
-    if (screenStream) screenStream.getTracks().forEach(t => t.stop());
-    screenStream = null;
-    writer = null;
-    video.srcObject = null;
-    video.muted = false;
-    busy = false;
-    updateUI();
+    message('動画を登録しています...');
+    const defFolderId=serverData.folders[0]?.id;
+    const res=await api('video.upload',{id:uid(),folderId:defFolderId,name:`録画 ${new Date().toLocaleString('ja-JP')}`},recordedBlob);
+    await reloadList();
+    await loadEntity(res.video,null,false);
+    message('録画完了。編集開始から編集が可能です。');
+  }catch(e){
+    message('録画に失敗または中止されました: '+e.message);
+  }finally{
+    if(screenStream)screenStream.getTracks().forEach(t=>t.stop());
+    screenStream=null;recorder=null;video.srcObject=null;video.muted=false;
+    isBusy=false;updateUI();
   }
 }
 
-// ダウンロード
-async function downloadFile() {
-  if (editing && (dirty || !revision?.renderedFileId)) {
-    await saveEdit();
-  }
-  const fileId = revision?.renderedFileId ? revision.renderedFileId : current.originalFileId;
-  window.location.href = `index.php?api=v1&action=file.download&id=${encodeURIComponent(fileId)}`;
-}
-
-// PDF出力
-async function openPDFDialog() {
-  if (!elements.some(e => e.type === 'F')) {
-    message('タイムライン上を右クリックして「PDF位置」を追加してください');
-    return;
-  }
-  if (renderedPlayback) {
-    busy = true;
-    updateUI();
-    try {
-      const streamUrl = `index.php?api=v1&action=file.stream&id=${encodeURIComponent(current.originalFileId)}`;
-      await setSourceURL(streamUrl);
-      renderedPlayback = false;
-    } finally {
-      busy = false;
-      updateUI();
+// ツリービュー
+function tree(){
+  const root=$('tree');root.replaceChildren();
+  function row(name,depth,isOpenable,clickFn,menuFn,dragId=null){
+    const d=document.createElement('div');d.className='row';
+    d.style.marginLeft=(depth*16)+'px';
+    const s=document.createElement('span');s.className='name';s.textContent=name;
+    s.onclick=()=>{if(!s.isContentEditable&&clickFn)clickFn();};
+    d.append(s);
+    if(menuFn)d.oncontextmenu=ev=>menuFn(ev,s);
+    if(dragId){
+      d.draggable=true;
+      d.ondragstart=ev=>ev.dataTransfer.setData('text/plain',dragId);
     }
+    return d;
   }
-  $('pdfDialog').showModal();
+  serverData.folders.filter(f=>!f.parentFolderId).forEach(f=>{
+    const fNode=row('📁 '+f.name,0,false,null,(ev,span)=>openMenu(ev,[
+      ['子フォルダ追加',async()=>{
+        await api('folder.create',{name:'新規フォルダ',parentFolderId:f.id});
+        await reloadList();
+      }],
+      ['フォルダ名変更',()=>{
+        span.contentEditable='true';span.focus();
+        span.onblur=async()=>{
+          span.contentEditable='false';
+          await api('folder.rename',{id:f.id,name:span.textContent.trim()||f.name});
+          await reloadList();
+        };
+      }],
+      ['フォルダ削除',async()=>{
+        if(confirm(`フォルダ「${f.name}」を削除しますか？配下のデータも削除されます。`)){
+          await api('folder.delete',{id:f.id});
+          await reloadList();
+        }
+      }]
+    ]));
+    fNode.ondragover=ev=>ev.preventDefault();
+    fNode.ondrop=async ev=>{
+      ev.preventDefault();
+      const vid=ev.dataTransfer.getData('text/plain');
+      if(vid){await api('video.move',{id:vid,folderId:f.id});await reloadList();}
+    };
+    root.append(fNode);
+
+    serverData.videos.filter(v=>v.folderId===f.id).forEach(v=>{
+      const vNode=row('🎬 '+v.name,1,true,()=>loadEntity(v,null,false),(ev,span)=>openMenu(ev,[
+        ['元動画を再生',()=>loadEntity(v,null,false)],
+        ['新規編集を開始',()=>loadEntity(v,null,true)],
+        ['名前変更',()=>{
+          span.contentEditable='true';span.focus();
+          span.onblur=async()=>{
+            span.contentEditable='false';
+            await api('video.rename',{id:v.id,name:span.textContent.trim()||v.name});
+            await reloadList();
+          };
+        }],
+        ['ダウンロード',()=>{window.location.href=`index.php?api=v1&action=file.download&id=${v.originalFileId}`;}]
+      ]),v.id);
+      root.append(vNode);
+
+      serverData.edits.filter(e=>e.videoId===v.id).forEach(ed=>{
+        const edNode=row(' └ ✂ '+ed.name,2,true,()=>loadEntity(v,ed,true),(ev,span)=>openMenu(ev,[
+          ['編集を再開',()=>loadEntity(v,ed,true)],
+          ['保存済み動画を再生',()=>loadEntity(v,ed,false)],
+          ['編集名変更',()=>{
+            span.contentEditable='true';span.focus();
+            span.onblur=async()=>{
+              span.contentEditable='false';
+              await api('edit.rename',{id:ed.id,name:span.textContent.trim()||ed.name});
+              await reloadList();
+            };
+          }],
+          ['ダウンロード',()=>{
+            const fid=ed.renderedFileId||v.originalFileId;
+            window.location.href=`index.php?api=v1&action=file.download&id=${fid}`;
+          }],
+          ['削除',async()=>{
+            if(confirm(`編集「${ed.name}」を削除しますか？`)){
+              await api('edit.delete',{id:ed.id});
+              await reloadList();
+            }
+          }]
+        ]));
+        root.append(edNode);
+      });
+    });
+  });
 }
 
-async function executePDFPrint() {
-  $('pdfDialog').close();
-  commitText();
-  video.pause();
-
-  const originTime = video.currentTime;
-  const layoutCount = +document.querySelector('[name=layout]:checked').value;
-  const times = elements.filter(e => e.type === 'F').map(e => e.time ?? e.start).sort((a, b) => a - b);
-
-  busy = true;
-  updateUI();
-  $('printArea').replaceChildren();
-
-  try {
-    let currentSheet = null;
-    for (let i = 0; i < times.length; i++) {
-      await seek(Math.min(times[i], Math.max(0, duration() - 0.001)));
-      const shotCanvas = document.createElement('canvas');
-      shotCanvas.width = canvas.width;
-      shotCanvas.height = canvas.height;
-      const sCtx = shotCanvas.getContext('2d');
-      sCtx.drawImage(video, 0, 0, shotCanvas.width, shotCanvas.height);
-      paint(sCtx, video.currentTime, true);
-
-      if (i % layoutCount === 0) {
-        currentSheet = document.createElement('div');
-        currentSheet.className = 'sheet';
-        $('printArea').append(currentSheet);
-      }
-
-      const shotDiv = document.createElement('div');
-      shotDiv.className = 'shot';
-      const img = new Image();
-      img.src = shotCanvas.toDataURL('image/png');
-      img.style.maxHeight = layoutCount === 2 ? '118mm' : '245mm';
-      await img.decode();
-
-      const cap = document.createElement('p');
-      cap.textContent = `${current.name} ／ ${times[i].toFixed(1)} 秒`;
-      shotDiv.append(img, cap);
-      currentSheet.append(shotDiv);
+// イベントバインド
+$('primary').onclick=()=>{
+  if(screenStream||!isEditing){toggleRecord();}
+  else{
+    if(video.paused){if(video.ended)video.currentTime=0;video.play();}
+    else video.pause();
+    updateUI();
+  }
+};
+$('begin').onclick=async()=>{
+  if(renderedPlayback){
+    video.src=`index.php?api=v1&action=file.stream&id=${currentVideo.originalFileId}`;
+    await new Promise(r=>video.onloadedmetadata=r);
+    renderedPlayback=false;
+  }
+  isEditing=true;video.pause();await seek(0);updateUI();
+};
+$('save').onclick=saveEdit;
+$('finish').onclick=async()=>{
+  if(!await leavePrompt())return;
+  if(currentEdit?.renderedFileId){
+    video.src=`index.php?api=v1&action=file.stream&id=${currentEdit.renderedFileId}`;
+    await new Promise(r=>video.onloadedmetadata=r);
+    renderedPlayback=true;
+  }
+  isEditing=false;updateUI();
+};
+$('download').onclick=()=>{
+  const fid=currentEdit?.renderedFileId||currentVideo.originalFileId;
+  window.location.href=`index.php?api=v1&action=file.download&id=${fid}`;
+};
+$('pdf').onclick=()=>{
+  if(!elements.some(e=>e.type==='F')){message('PDF位置が指定されていません（タイムラインを右クリックして追加）');return;}
+  $('pdfDialog').showModal();
+};
+$('print').onclick=async()=>{
+  $('pdfDialog').close();commitText();video.pause();
+  const orgTime=video.currentTime,cnt=+document.querySelector('[name=layout]:checked').value;
+  const times=elements.filter(e=>e.type==='F').map(e=>e.time??e.start).sort((a,b)=>a-b);
+  isBusy=true;updateUI();$('printArea').replaceChildren();
+  try{
+    let sheet=null;
+    for(let i=0;i<times.length;i++){
+      await seek(times[i]);
+      const sc=document.createElement('canvas');sc.width=canvas.width;sc.height=canvas.height;
+      const sctx=sc.getContext('2d');sctx.drawImage(video,0,0,sc.width,sc.height);paint(sctx,times[i],true);
+      if(i%cnt===0){sheet=document.createElement('div');sheet.className='sheet';$('printArea').append(sheet);}
+      const shot=document.createElement('div');shot.className='shot';
+      const img=new Image();img.src=sc.toDataURL();
+      img.style.maxHeight=cnt===2?'115mm':'240mm';await img.decode();
+      const p=document.createElement('p');p.textContent=`${currentVideo.name} / ${times[i].toFixed(1)}s`;
+      shot.append(img,p);sheet.append(shot);
     }
     window.print();
-  } finally {
-    await seek(originTime);
-    busy = false;
-    updateUI();
+  }finally{
+    await seek(orgTime);isBusy=false;updateUI();
   }
-}
+};
+$('cancelPDF').onclick=()=>$('pdfDialog').close();
 
-// 削除処理
-async function removeItem(type, id, displayName) {
-  if (!await leavePrompt()) return;
-  const warn = type === 'edit' ? 'この編集を削除しますか？' : '配下の動画や編集データも完全に削除されます。削除しますか？';
-  if (!confirm(`「${displayName}」を削除しますか？\n${warn}`)) return;
+$('list').onclick=()=>{$('library').hidden=$('veil').hidden=false;};
+$('closeList').onclick=$('veil').onclick=()=>{$('library').hidden=$('veil').hidden=true;};
+$('upload').onclick=$('upload2').onclick=()=>$('file').click();
+$('file').onchange=async ev=>{
+  const f=ev.target.files[0];ev.target.value='';
+  if(!f||!await leavePrompt())return;
+  isBusy=true;updateUI();
+  try{
+    message('動画をアップロード中...');
+    const defFolderId=serverData.folders[0]?.id;
+    const res=await api('video.upload',{folderId:defFolderId,name:f.name.replace(/\.[^.]+$/,'')},f);
+    await reloadList();
+    await loadEntity(res.video,null,false);
+  }finally{isBusy=false;updateUI();}
+};
+$('new').onclick=async()=>{if(await leavePrompt()){clearState();$('library').hidden=$('veil').hidden=true;updateUI();}};
+$('folder').onclick=async()=>{await api('folder.create',{name:'新規フォルダ'});await reloadList();};
 
-  busy = true;
-  updateUI();
-  try {
-    if (type === 'folder') await api('folder.delete', { id });
-    else if (type === 'video') await api('video.delete', { id });
-    else if (type === 'edit') await api('edit.delete', { id });
-
-    if ((type === 'video' && current?.id === id) || (type === 'edit' && revision?.id === id)) {
-      clearState();
-    }
-    await refreshList();
-    message('削除が完了しました');
-  } finally {
-    busy = false;
-    updateUI();
-  }
-}
-
-// ツリービュー構築
-function tree() {
-  const root = $('tree');
-  root.replaceChildren();
-
-  function makeRow(nameText, depth, isBranch, dateStr, entityType, entityId) {
-    const node = document.createElement('div');
-    node.className = 'row';
-    node.setAttribute('data-entity-type', entityType);
-    node.setAttribute('data-entity-id', entityId);
-    node.style.marginLeft = (depth * 16) + 'px';
-
-    const expBtn = document.createElement('button');
-    expBtn.className = 'expander';
-    expBtn.textContent = isBranch ? (collapsed.has(entityId) ? '▸' : '▾') : '·';
-
-    const span = document.createElement('span');
-    span.className = 'name';
-    span.textContent = nameText;
-
-    const time = document.createElement('time');
-    time.textContent = dateStr ? new Date(dateStr).toLocaleString('ja-JP') : '';
-
-    node.append(expBtn, span, time);
-    return { node, expBtn, span };
-  }
-
-  function renderFolder(folder, depth) {
-    const { node, expBtn, span } = makeRow(folder.name, depth, true, folder.createdAt, 'folder', folder.id);
-    root.append(node);
-
-    expBtn.onclick = () => {
-      if (collapsed.has(folder.id)) collapsed.delete(folder.id);
-      else collapsed.add(folder.id);
-      tree();
-    };
-
-    span.ondblclick = () => {
-      if (locked()) return;
-      span.contentEditable = 'true';
-      span.focus();
-    };
-
-    span.onblur = safe(async () => {
-      if (!span.isContentEditable) return;
-      span.contentEditable = 'false';
-      const val = span.textContent.trim() || folder.name;
-      if (val !== folder.name) {
-        await api('folder.rename', { id: folder.id, name: val });
-        await refreshList();
-      }
-    });
-
-    span.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); span.blur(); } };
-
-    node.oncontextmenu = ev => {
-      openMenu(ev, [
-        ['子フォルダ追加', safe(async () => {
-          await api('folder.create', { parentFolderId: folder.id, name: '新しいフォルダ' });
-          collapsed.delete(folder.id);
-          await refreshList();
-        })],
-        ['フォルダ削除', () => removeItem('folder', folder.id, folder.name)]
-      ]);
-    };
-
-    node.ondragover = ev => {
-      if (!locked()) {
-        ev.preventDefault();
-        node.classList.add('drop');
-      }
-    };
-    node.ondragleave = () => node.classList.remove('drop');
-    node.ondrop = safe(async ev => {
-      ev.preventDefault();
-      node.classList.remove('drop');
-      const vId = ev.dataTransfer.getData('text/plain');
-      if (!vId) return;
-      await api('video.move', { id: vId, folderId: folder.id });
-      collapsed.delete(folder.id);
-      await refreshList();
-    });
-
-    if (collapsed.has(folder.id)) return;
-
-    // 子フォルダ
-    serverData.folders.filter(f => f.parentFolderId === folder.id).forEach(cf => renderFolder(cf, depth + 1));
-
-    // 所属動画
-    serverData.videos.filter(v => v.folderId === folder.id).forEach(vid => {
-      const edits = serverData.edits.filter(e => e.videoId === vid.id);
-      const vRow = makeRow(vid.name, depth + 1, edits.length > 0, vid.createdAt, 'video', vid.id);
-      vRow.node.draggable = true;
-
-      vRow.node.ondragstart = ev => {
-        if (locked() || vRow.span.isContentEditable) ev.preventDefault();
-        else ev.dataTransfer.setData('text/plain', vid.id);
-      };
-
-      vRow.expBtn.onclick = () => {
-        if (collapsed.has(vid.id)) collapsed.delete(vid.id);
-        else collapsed.add(vid.id);
-        tree();
-      };
-
-      vRow.span.onclick = safe(async () => {
-        if (!locked() && !vRow.span.isContentEditable) await loadEntity(vid, null, false);
-      });
-
-      vRow.span.ondblclick = () => {
-        if (locked()) return;
-        vRow.span.contentEditable = 'true';
-        vRow.span.focus();
-      };
-
-      vRow.span.onblur = safe(async () => {
-        if (!vRow.span.isContentEditable) return;
-        vRow.span.contentEditable = 'false';
-        const val = vRow.span.textContent.trim() || vid.name;
-        if (val !== vid.name) {
-          await api('video.rename', { id: vid.id, name: val });
-          await refreshList();
-        }
-      });
-
-      vRow.span.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); vRow.span.blur(); } };
-
-      vRow.node.oncontextmenu = ev => {
-        openMenu(ev, [
-          ['再生する', () => loadEntity(vid, null, false)],
-          ['新規編集を開始', () => loadEntity(vid, null, true)],
-          ['ダウンロード', () => {
-            window.location.href = `index.php?api=v1&action=file.download&id=${encodeURIComponent(vid.originalFileId)}`;
-          }],
-          ['動画削除', () => removeItem('video', vid.id, vid.name)]
-        ]);
-      };
-      root.append(vRow.node);
-
-      if (collapsed.has(vid.id)) return;
-
-      // 元動画ノード
-      const origRow = makeRow('元動画', depth + 2, false, vid.createdAt, 'original', vid.id);
-      origRow.span.onclick = safe(async () => { if (!locked()) await loadEntity(vid, null, false); });
-      origRow.node.oncontextmenu = ev => {
-        openMenu(ev, [
-          ['再生する', () => loadEntity(vid, null, false)],
-          ['ダウンロード', () => {
-            window.location.href = `index.php?api=v1&action=file.download&id=${encodeURIComponent(vid.originalFileId)}`;
-          }]
-        ]);
-      };
-      root.append(origRow.node);
-
-      // 編集一覧ノード
-      edits.forEach(ed => {
-        const edRow = makeRow(ed.name, depth + 2, false, ed.updatedAt, 'edit', ed.id);
-        edRow.span.onclick = safe(async () => {
-          if (!locked() && !edRow.span.isContentEditable) await loadEntity(vid, ed, true);
-        });
-        edRow.span.ondblclick = () => {
-          if (locked()) return;
-          edRow.span.contentEditable = 'true';
-          edRow.span.focus();
-        };
-        edRow.span.onblur = safe(async () => {
-          if (!edRow.span.isContentEditable) return;
-          edRow.span.contentEditable = 'false';
-          const val = edRow.span.textContent.trim() || ed.name;
-          if (val !== ed.name) {
-            await api('edit.rename', { id: ed.id, name: val });
-            await refreshList();
-          }
-        });
-        edRow.span.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); edRow.span.blur(); } };
-
-        edRow.node.oncontextmenu = ev => {
-          openMenu(ev, [
-            ['編集する', () => loadEntity(vid, ed, true)],
-            ['保存済み動画を再生', async () => {
-              if (await loadEntity(vid, ed, false)) {
-                if (audio) await audio.resume();
-                await video.play();
-              }
-            }],
-            ['ダウンロード', () => {
-              const fid = ed.renderedFileId || vid.originalFileId;
-              window.location.href = `index.php?api=v1&action=file.download&id=${encodeURIComponent(fid)}`;
-            }],
-            ['PDF出力', async () => {
-              if (await loadEntity(vid, ed, true)) await openPDFDialog();
-            }],
-            ['編集削除', () => removeItem('edit', ed.id, ed.name)]
-          ]);
-        };
-        root.append(edRow.node);
-      });
-    });
-  }
-
-  serverData.folders.filter(f => !f.parentFolderId).forEach(rootFolder => renderFolder(rootFolder, 0));
-}
-
-// 境界スプリッターのドラッグによる割合調整
-$('split').onpointerdown = event => {
-  if (event.button !== 0) return;
-  event.preventDefault();
-  const startY = event.clientY;
-  const stageEl = $('stage');
-  const tlEl = $('timeline');
-  const startStageH = stageEl.offsetHeight;
-  const startTlH = tlEl.offsetHeight;
-
-  drag(event, ev => {
-    const dy = ev.clientY - startY;
-    if (editing) {
-      const newTlH = clamp(startTlH - dy, 120, 480);
-      tlEl.style.height = newTlH + 'px';
+// 境界スプリッター
+$('split').onpointerdown=ev=>{
+  const startY=ev.clientY,initH=$('timeline').offsetHeight;
+  bindDrag(ev,mev=>{
+    if(isEditing){
+const nh = clamp(initH - (mev.clientY - startY), 120, 450);
+      $('timeline').style.height = nh + 'px';
     }
     fit();
   });
 };
 
-// UIイベントのバインド
-$('list').onclick = () => library(true);
-$('closeList').onclick = $('veil').onclick = () => library(false);
-
-$('upload').onclick = $('upload2').onclick = () => $('file').click();
-$('file').onchange = safe(async event => {
-  const f = event.target.files[0];
-  event.target.value = '';
-  if (!f || !await leavePrompt()) return;
-
-  busy = true;
-  updateUI();
-  try {
-    message('動画をアップロードしています...');
-    const defaultFolderId = serverData.folders[0]?.id;
-    const res = await api('video.upload', {
-      id: uid(),
-      folderId: defaultFolderId,
-      name: f.name.replace(/\.[^.]+$/, '')
-    }, f);
-
-    await refreshList();
-    await loadEntity(res.video, null, false);
-    message('動画のアップロードが完了しました');
-  } finally {
-    busy = false;
-    updateUI();
-  }
-});
-
-$('new').onclick = safe(async () => {
-  if (await leavePrompt()) {
-    clearState();
-    library(false);
-    updateUI();
-    message('「録画開始」ボタンを押して画面共有を開始してください');
-  }
-});
-
-$('folder').onclick = safe(async () => {
-  await api('folder.create', { parentFolderId: null, name: '新しいフォルダ' });
-  await refreshList();
-});
-
-$('primary').onclick = safe(async () => {
-  if (screenStream || !editing) {
-    await toggleRecord();
-    return;
-  }
-  commitText();
-  if (video.paused) {
-    if (audio) await audio.resume();
-    if (video.ended) await seek(0);
-    await video.play();
-  } else {
+// タイムライン・再生操作
+$('tracks').onpointerdown = ev => {
+  if (ev.button === 0 && !isLocked() && !ev.target.closest('.clip')) {
     video.pause();
-  }
-  updateUI();
-});
-
-$('begin').onclick = safe(async () => {
-  if (renderedPlayback) {
-    const streamUrl = `index.php?api=v1&action=file.stream&id=${encodeURIComponent(current.originalFileId)}`;
-    await setSourceURL(streamUrl);
-    renderedPlayback = false;
-  }
-  editing = true;
-  video.pause();
-  await seek(0);
-  updateUI();
-  message('右クリックで各要素を追加できます。コメントは枠内ダブルクリックで直接編集可能です。');
-});
-
-$('save').onclick = safe(saveEdit);
-
-$('finish').onclick = safe(async () => {
-  if (!await leavePrompt()) return;
-  if (revision?.renderedFileId) {
-    const streamUrl = `index.php?api=v1&action=file.stream&id=${encodeURIComponent(revision.renderedFileId)}`;
-    await setSourceURL(streamUrl);
-    renderedPlayback = true;
-  } else {
-    await seek(0);
-  }
-  editing = false;
-  updateUI();
-});
-
-$('download').onclick = safe(downloadFile);
-$('pdf').onclick = safe(openPDFDialog);
-$('print').onclick = safe(executePDFPrint);
-$('cancelPDF').onclick = () => $('pdfDialog').close();
-
-canvas.oncontextmenu = event => elementMenu(event, hit(point(event)), false);
-$('tracks').oncontextmenu = event => elementMenu(event, null, true);
-
-$('tracks').onpointerdown = event => {
-  if (event.button === 0 && !locked() && !event.target.closest('.clip')) {
-    video.pause();
-    video.currentTime = timeAtEvent(event);
+    video.currentTime = getTimeAtEvent(ev);
   }
 };
+$('tracks').oncontextmenu = ev => openElementMenu(ev, null, true);
+canvas.oncontextmenu = ev => openElementMenu(ev, hitElement(getPoint(ev)), false);
 
-$('handle').onpointerdown = event => {
-  if (locked()) return;
-  event.stopPropagation();
+$('handle').onpointerdown = ev => {
+  if (isLocked()) return;
+  ev.stopPropagation();
   video.pause();
-  const r = timelineRange();
-  drag(event, ev => video.currentTime = timeAtEvent(ev, r));
+  bindDrag(ev, mev => { video.currentTime = getTimeAtEvent(mev); });
 };
 
 $('scale').oninput = () => { tracks(); paint(); };
@@ -2249,66 +1382,61 @@ $('viewZoom').onchange = () => {
 
 video.onseeked = () => { tracks(); paint(); };
 video.onplay = video.onpause = video.onended = updateUI;
-video.onerror = () => message('動画の再生に失敗しました。対応コーデックをご確認ください。');
+video.onerror = () => message('動画の再生に失敗しました。形式を確認してください。');
 
-document.addEventListener('pointerdown', event => {
-  if (!event.target.closest('#menu')) $('menu').hidden = true;
+document.addEventListener('pointerdown', ev => {
+  if (!ev.target.closest('#menu')) $('menu').hidden = true;
 });
-
-document.addEventListener('keydown', event => {
-  if (event.key === 'Escape') {
-    connecting = null;
+document.addEventListener('keydown', ev => {
+  if (ev.key === 'Escape') {
+    connectingOwner = null;
     $('menu').hidden = true;
   }
 });
-
-window.addEventListener('resize', () => { commitText(); updateUI(); });
-window.addEventListener('beforeunload', event => {
-  if (dirty || screenStream || busy) {
-    event.preventDefault();
-    event.returnValue = '';
+window.addEventListener('resize', () => { commitText(); fit(); });
+window.addEventListener('beforeunload', ev => {
+  if (isDirty || screenStream || isBusy) {
+    ev.preventDefault();
+    ev.returnValue = '';
   }
 });
 
-// 再生ループとスキップ制御
-let lastStart = -1, isSkipping = false;
+// 再生フレームループ（スキップ制御・タイムライン同期）
+let isSkipping = false;
 async function playbackLoop() {
-  if (!busy && editing && !video.paused && !isSkipping) {
-    const next = getNextPlaybackTime(video.currentTime);
-    if (next > video.currentTime) {
+  if (!isBusy && isEditing && !video.paused && !isSkipping) {
+    const nxt = getNextPlayTime(video.currentTime);
+    if (nxt > video.currentTime) {
       isSkipping = true;
       try {
-        await seek(next);
-        if (next < duration()) await video.play();
-      } catch (err) {
-        message(err.message);
+        await seek(nxt);
+        if (nxt < duration()) await video.play();
+      } catch (e) {
+        message(e.message);
       } finally {
         isSkipping = false;
       }
     }
   }
   paint();
-  if (editing) {
-    const curStart = timelineRange().start;
-    if (Math.abs(curStart - lastStart) > 0.05) {
-      lastStart = curStart;
-      tracks();
-    } else {
-      updateClock();
-    }
+  if (isEditing) {
+    tracks();
+    updateClock();
   }
   requestAnimationFrame(playbackLoop);
 }
 
 // 初期化実行
-try {
-  await refreshList();
-  updateUI();
-  requestAnimationFrame(playbackLoop);
-} catch (err) {
-  message('初期化に失敗しました: ' + err.message);
-  document.querySelectorAll('button').forEach(b => b.disabled = true);
-}
+(async () => {
+  try {
+    await reloadList();
+    updateUI();
+    requestAnimationFrame(playbackLoop);
+  } catch (err) {
+    message('初期化エラー: ' + err.message);
+    document.querySelectorAll('button').forEach(b => b.disabled = true);
+  }
+})();
 })();
 </script>
 </body>
