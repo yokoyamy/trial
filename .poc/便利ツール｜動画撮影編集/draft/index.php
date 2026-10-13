@@ -1384,4 +1384,63 @@ $('handle').onpointerdown=ev=>{
   bindDrag(ev,mev=>{video.currentTime=getTimeAtEvent(mev);});
 };
 
-$('scale
+// スケール変更・動画イベント
+$('scale').oninput=()=>{tracks();paint();};
+$('viewZoom').onchange=ev=>{displayZoom=+ev.target.value;fit();};
+
+video.onseeked=()=>{tracks();paint();updateClock();};
+video.onplay=video.onpause=video.onended=updateUI;
+video.onerror=()=>message('動画の再生に失敗しました。形式を確認してください。');
+
+// グローバルイベント
+document.addEventListener('pointerdown',ev=>{if(!ev.target.closest('#menu'))$('menu').hidden=true;});
+document.addEventListener('keydown',ev=>{
+  if(ev.key==='Escape'){connectingOwner=null;$('menu').hidden=true;}
+});
+window.addEventListener('resize',()=>{commitText();fit();});
+window.addEventListener('beforeunload',ev=>{
+  if(isDirty||screenStream||isBusy){ev.preventDefault();ev.returnValue='';}
+});
+
+// 再生同期＆スキップ処理ループ
+let skipping=false;
+async function playLoop(){
+  if(!isBusy&&isEditing&&!video.paused&&!skipping){
+    const next=getNextPlayTime(video.currentTime);
+    if(next>video.currentTime){
+      skipping=true;
+      try{
+        video.pause();
+        await seek(next);
+        if(next<duration())await video.play();
+      }catch(e){
+        message(e.message);
+      }finally{
+        skipping=false;
+      }
+    }
+  }
+  paint();
+  if(isEditing){
+    updateClock();
+  }
+  requestAnimationFrame(playLoop);
+}
+
+// 初期起動処理
+(async()=>{
+  try{
+    await reloadList();
+    updateUI();
+    requestAnimationFrame(playLoop);
+    message('準備完了：録画開始または動画一覧から動画を選択してください。');
+  }catch(err){
+    console.error(err);
+    message('初期化失敗: '+err.message);
+  }
+})();
+
+})();
+</script>
+</body>
+</html>
