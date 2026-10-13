@@ -4,7 +4,6 @@
 // ============================================================================
 declare(strict_types=1);
 
-// PHPエラーがHTMLとして出力されてJSONパースが壊れるのを完全抑止
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
 
@@ -24,7 +23,7 @@ function genUuid(): string {
     );
 }
 
-// 初期化
+// ストレージ準備
 if (!is_dir($storageDir)) @mkdir($storageDir, 0777, true);
 if (!is_dir($filesDir)) @mkdir($filesDir, 0777, true);
 if (!is_dir($tmpDir)) @mkdir($tmpDir, 0777, true);
@@ -53,7 +52,7 @@ if (!file_exists($metaFile)) {
 if (isset($_GET['api']) && $_GET['api'] === 'v1') {
     $action = $_GET['action'] ?? '';
 
-    // 動画ストリーム & ダウンロード
+    // ストリーム / ダウンロード
     if ($action === 'file.stream' || $action === 'file.download') {
         $fileId = $_GET['id'] ?? '';
         $meta = json_decode((string)@file_get_contents($metaFile), true) ?: [];
@@ -66,7 +65,7 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
         if (!file_exists($filePath)) { http_response_code(404); exit('File missing'); }
 
         $size = filesize($filePath);
-        $mime = $fileMeta['mimeType'] ?: 'video/mp4';
+        $mime = !empty($fileMeta['mimeType']) ? $fileMeta['mimeType'] : 'video/mp4';
 
         if ($action === 'file.download') {
             header('Content-Type: ' . $mime);
@@ -76,7 +75,6 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
             exit;
         }
 
-        // 206 Partial Content (Range対応)
         $start = 0; $end = $size - 1;
         if (isset($_SERVER['HTTP_RANGE']) && preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $m)) {
             $start = (int)$m[1];
@@ -144,7 +142,6 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
         sendErr('NOT_FOUND', '編集データが存在しません', 404);
     }
 
-    // POST更新
     $rid = null; $payload = [];
     if (isset($_SERVER['CONTENT_TYPE']) && strpos($_SERVER['CONTENT_TYPE'], 'multipart/form-data') !== false) {
         $metaRaw = json_decode($_POST['metadata'] ?? '{}', true) ?: [];
@@ -189,23 +186,43 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
             break;
 
         case 'folder.delete':
-            $delIds = [$payload['id']];
-            $meta['folders'] = array_values(array_filter($meta['folders'], fn($f) => !in_array($f['id'], $delIds, true)));
+            $meta['folders'] = array_values(array_filter($meta['folders'], fn($f) => $f['id'] !== $payload['id']));
             $ret = ['id' => $payload['id']];
             break;
 
         case 'video.upload':
             if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
                 if ($lockFp) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
-                sendErr('UPLOAD_ERROR', '動画アップロードに失敗しました', 400, $rid);
+                sendErr('UPLOAD_ERROR', '動画アップロードに失敗しました (エラーコード: ' . ($_FILES['file']['error'] ?? 'empty') . ')', 400, $rid);
             }
             $fid = genUuid();
-            $ext = pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION) ?: 'mp4';
+            $origName = $_FILES['file']['name'];
+            $ext = pathinfo($origName, PATHINFO_EXTENSION);
+            if (!$ext) {
+                $ext = (isset($_FILES['file']['type']) && strpos($_FILES['file']['type'], 'mp4') !== false) ? 'mp4' : 'webm';
+            }
             $rel = 'files/' . $fid . '.' . $ext;
-            @move_uploaded_file($_FILES['file']['tmp_name'], $storageDir . '/' . $rel);
-            $meta['files'][] = ['id' => $fid, 'storagePath' => $rel, 'mimeType' => $_FILES['file']['type'] ?: 'video/mp4', 'size' => filesize($storageDir . '/' . $rel), 'createdAt' => $now];
+            if (!@move_uploaded_file($_FILES['file']['tmp_name'], $storageDir . '/' . $rel)) {
+                if ($lockFp) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
+                sendErr('SAVE_FAILED', '動画ファイルの配置に失敗しました', 500, $rid);
+            }
+            $meta['files'][] = [
+                'id' => $fid,
+                'storagePath' => $rel,
+                'mimeType' => $_FILES['file']['type'] ?: 'video/mp4',
+                'size' => filesize($storageDir . '/' . $rel),
+                'createdAt' => $now
+            ];
             $vid = $payload['id'] ?? genUuid();
-            $vObj = ['id' => $vid, 'folderId' => $payload['folderId'], 'name' => $payload['name'] ?? '録画動画', 'originalFileId' => $fid, 'createdAt' => $now, 'updatedAt' => $now];
+            $folderId = $payload['folderId'] ?? ($meta['folders'][0]['id'] ?? null);
+            $vObj = [
+                'id' => $vid,
+                'folderId' => $folderId,
+                'name' => $payload['name'] ?? '録画動画',
+                'originalFileId' => $fid,
+                'createdAt' => $now,
+                'updatedAt' => $now
+            ];
             $meta['videos'][] = $vObj;
             $ret = ['video' => $vObj];
             break;
@@ -304,7 +321,9 @@ video{display:block;width:100%;height:100%}
 #overlay{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 #actions{justify-content:center}
 #primary{background:#2563eb;color:#fff;font-weight:bold}
-#primary:hover{background:#1d4ed8}
+#primary.recording{background:#dc2626;animation:pulse 1.5s infinite}
+@keyframes pulse{0%{opacity:1}50%{opacity:.7}100%{opacity:1}}
+#primary:hover{opacity:.9}
 #split{height:6px;background:#cbd5e1;cursor:ns-resize;border-radius:3px}
 #split:hover{background:#94a3b8}
 #status{min-height:18px;color:#607089;font-size:11px}
@@ -422,20 +441,20 @@ let serverData={folders:[],videos:[],edits:[],files:[]};
 let currentVideo=null,currentEdit=null,elements=[];
 let isEditing=false,isDirty=false,isBusy=false,recorder=null,screenStream=null;
 let selectedIds=new Set(),connectingOwner=null,editorNode=null,renderedPlayback=false;
-let displayZoom=1.0;
+let displayZoom=1.0,recTimer=null,recStartTime=0;
 
 const message=msg=>{$('status').textContent=msg;};
 const duration=()=>Number.isFinite(video.duration)?video.duration:0;
 const isLocked=()=>isBusy||!!screenStream;
 const findElement=id=>elements.find(e=>e.id===id);
 
-async function api(action,payload={},fileBlob=null){
+async function api(action,payload={},fileBlob=null,fileName='file.mp4'){
   const reqId=uid();
   let res;
   if(fileBlob){
     const form=new FormData();
     form.append('metadata',JSON.stringify({requestId:reqId,payload}));
-    form.append('file',fileBlob);
+    form.append('file',fileBlob,fileName);
     res=await fetch(`index.php?api=v1&action=${action}`,{method:'POST',body:form});
   }else{
     res=await fetch(`index.php?api=v1&action=${action}`,{
@@ -487,10 +506,13 @@ function updateUI(){
   
   if(screenStream){
     $('primary').textContent='録画停止';
+    $('primary').classList.add('recording');
   }else if(isEditing){
     $('primary').textContent=video.paused?'編集再生':'編集再生停止';
+    $('primary').classList.remove('recording');
   }else{
     $('primary').textContent='録画開始';
+    $('primary').classList.remove('recording');
   }
   $('primary').disabled=isBusy;
   document.querySelectorAll('header button, #actions button, #library button').forEach(b=>{
@@ -948,22 +970,24 @@ async function renderVideoBlob(){
   const orgTime=video.currentTime;
   await seek(getNextPlayTime(0));
   const stream=outCanvas.captureStream(30);
-  const rec=new MediaRecorder(stream,{mimeType:MediaRecorder.isTypeSupported('video/mp4')?'video/mp4':'video/webm'});
+  const mime=MediaRecorder.isTypeSupported('video/mp4')?'video/mp4':'video/webm';
+  const rec=new MediaRecorder(stream,{mimeType:mime});
   const chunks=[];
-  rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
-  const finished=new Promise(res=>rec.onstop=()=>res(new Blob(chunks,{type:rec.mimeType})));
+  rec.ondataavailable=e=>{if(e.data&&e.data.size>0)chunks.push(e.data);};
+  const finished=new Promise(res=>rec.onstop=()=>res(new Blob(chunks,{type:mime})));
 
   rec.start(200);
   video.playbackRate=1;video.muted=false;await video.play();
 
   const drawLoop=async()=>{
     if(video.paused||video.ended||video.currentTime>=duration()){
-      rec.stop();return;
+      if(rec.state==='recording')rec.stop();
+      return;
     }
     const next=getNextPlayTime(video.currentTime);
     if(next>video.currentTime){
       video.pause();await seek(next);
-      if(next>=duration()){rec.stop();return;}
+      if(next>=duration()){if(rec.state==='recording')rec.stop();return;}
       await video.play();
     }
     outCtx.drawImage(video,0,0,outCanvas.width,outCanvas.height);
@@ -992,7 +1016,7 @@ async function saveEdit(){
       expectedVersion:currentEdit?.version||0,
       editData:{schemaVersion:1,coordinateSystem:'source-pixels',sourceWidth:canvas.width,sourceHeight:canvas.height,elements}
     };
-    const res=await api('edit.save',payload,blob);
+    const res=await api('edit.save',payload,blob,'rendered.mp4');
     currentEdit=res.edit;
     isDirty=false;
     await reloadList();
@@ -1002,10 +1026,12 @@ async function saveEdit(){
   }
 }
 
-// 録画機能
+// 録画機能（停止・Blob生成・PHP保存を確実に完結）
 async function toggleRecord(){
   if(recorder&&recorder.state==='recording'){
-    recorder.stop();return;
+    message('録画を停止しています。処理完了までお待ちください...');
+    recorder.stop();
+    return;
   }
   if(!await leavePrompt())return;
   isBusy=true;updateUI();
@@ -1016,30 +1042,59 @@ async function toggleRecord(){
     fit();
 
     const chunks=[];
-    const mime=MediaRecorder.isTypeSupported('video/mp4')?'video/mp4':'video/webm';
-    recorder=new MediaRecorder(screenStream,{mimeType:mime});
-    recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+    const mime=MediaRecorder.isTypeSupported('video/mp4;codecs=avc1')?'video/mp4;codecs=avc1':
+               MediaRecorder.isTypeSupported('video/mp4')?'video/mp4':
+               MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm';
 
-    const recDone=new Promise(res=>recorder.onstop=()=>res(new Blob(chunks,{type:mime})));
-    screenStream.getVideoTracks()[0].onended=()=>{if(recorder?.state==='recording')recorder.stop();};
+    recorder=new MediaRecorder(screenStream,{mimeType:mime});
+    recorder.ondataavailable=e=>{
+      if(e.data&&e.data.size>0)chunks.push(e.data);
+    };
+
+    const recDone=new Promise((resolve,reject)=>{
+      recorder.onstop=()=>{
+        const ext=mime.includes('mp4')?'mp4':'webm';
+        const blob=new Blob(chunks,{type:mime});
+        resolve({blob,ext});
+      };
+      recorder.onerror=e=>reject(e.error||new Error('録画エラー'));
+    });
+
+    screenStream.getVideoTracks()[0].onended=()=>{
+      if(recorder&&recorder.state==='recording')recorder.stop();
+    };
 
     recorder.start(500);
+    recStartTime=Date.now();
+    recTimer=setInterval(()=>{
+      const sec=Math.floor((Date.now()-recStartTime)/1000);
+      message(`録画中 (${sec}秒) 共有のシステム音声は画面選択ダイアログで指定します。「録画停止」で保存します。`);
+    },1000);
+
     isBusy=false;updateUI();
-    message('録画中... 音声を含める場合は画面共有ダイアログでシステム音声を選択してください。');
+    message('録画中 (0秒) 「録画停止」をクリックして保存します。');
 
-    const recordedBlob=await recDone;
-    isBusy=true;updateUI();
+    // 停止待機
+    const {blob,ext}=await recDone;
+    clearInterval(recTimer);recTimer=null;
+    
+    // ストリーム解放
     screenStream.getTracks().forEach(t=>t.stop());
-    screenStream=null;video.srcObject=null;video.muted=false;
+    screenStream=null;recorder=null;video.srcObject=null;video.muted=false;
 
-    message('動画を登録しています...');
+    isBusy=true;updateUI();
+    message(`録画データをアップロード・保存しています (${(blob.size/1024/1024).toFixed(2)} MB)...`);
+
     const defFolderId=serverData.folders[0]?.id;
-    const res=await api('video.upload',{id:uid(),folderId:defFolderId,name:`録画 ${new Date().toLocaleString('ja-JP')}`},recordedBlob);
+    const recName=`録画 ${new Date().toLocaleString('ja-JP')}`;
+    const res=await api('video.upload',{id:uid(),folderId:defFolderId,name:recName},blob,`recording.${ext}`);
+
     await reloadList();
     await loadEntity(res.video,null,false);
-    message('録画完了。編集開始から編集が可能です。');
+    message('録画を保存しました。そのまま再生、または「編集開始」で編集できます。');
   }catch(e){
-    message('録画に失敗または中止されました: '+e.message);
+    clearInterval(recTimer);recTimer=null;
+    message('録画が中止または失敗しました: '+e.message);
   }finally{
     if(screenStream)screenStream.getTracks().forEach(t=>t.stop());
     screenStream=null;recorder=null;video.srcObject=null;video.muted=false;
@@ -1207,7 +1262,7 @@ $('file').onchange=async ev=>{
   try{
     message('動画をアップロード中...');
     const defFolderId=serverData.folders[0]?.id;
-    const res=await api('video.upload',{folderId:defFolderId,name:f.name.replace(/\.[^.]+$/,'')},f);
+    const res=await api('video.upload',{folderId:defFolderId,name:f.name.replace(/\.[^.]+$/,'')},f,f.name);
     await reloadList();
     await loadEntity(res.video,null,false);
   }finally{isBusy=false;updateUI();}
