@@ -62,8 +62,10 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
         $mime = $file['mimeType'] ?: 'video/webm';
 
         if ($action === 'file.download') {
+            $ext = pathinfo($path, PATHINFO_EXTENSION) ?: 'webm';
+            $dlName = rawurlencode($_GET['filename'] ?? ('video.' . $ext));
             header('Content-Type: ' . $mime);
-            header('Content-Disposition: attachment; filename="' . basename($path) . '"');
+            header("Content-Disposition: attachment; filename=\"{$dlName}\"; filename*=UTF-8''{$dlName}");
             header('Content-Length: ' . $size);
             readfile($path);
             exit;
@@ -309,9 +311,11 @@ video{display:block;width:100%;height:100%}
 .palette{display:grid;grid-template-columns:repeat(6,20px);gap:3px;padding:3px}
 .palette button{width:20px;height:20px;padding:0;border:1px solid #ccd6e3}
 .editor{position:absolute;white-space:pre-wrap;overflow:auto;padding:3px;outline:2px solid #60a5fa;z-index:3;background:#fff}
-dialog{max-width:90vw;border:1px solid #ccd6e3;border-radius:4px}
+dialog{max-width:90vw;border:1px solid #ccd6e3;border-radius:4px;padding:14px}
 dialog::backdrop{background:#0005}
 dialog label{display:block;margin:10px 0}
+.dl-link{display:inline-block;margin:12px 0;padding:6px 12px;background:#2563eb;color:#fff;text-decoration:none;border-radius:4px;font-weight:bold}
+.dl-link:hover{background:#1d4ed8}
 [hidden]{display:none!important}
 #printArea{display:none}
 @media print{
@@ -370,6 +374,7 @@ body>*:not(#printArea){display:none!important}
 </aside>
 <input id="file" type="file" accept="video/*" hidden>
 <div id="menu" hidden></div>
+
 <dialog id="pdfDialog">
   <h3>PDF出力</h3>
   <label><input type="radio" name="layout" value="1" checked> 1ページに1画面</label>
@@ -377,6 +382,15 @@ body>*:not(#printArea){display:none!important}
   <button id="print">印刷へ進む</button>
   <button id="cancelPDF">キャンセル</button>
 </dialog>
+
+<dialog id="dlDialog">
+  <h3 style="margin-top:0">動画ダウンロード</h3>
+  <p id="dlMessage">以下のリンクをクリックして動画を保存してください：</p>
+  <div><a id="dlActionLink" class="dl-link" target="_blank" rel="noopener noreferrer">動画ファイルをダウンロード</a></div>
+  <small style="color:#64748b;display:block;margin-bottom:12px">※保存が始まらない場合は、リンクを右クリックして「名前を付けてリンク先を保存」を選択してください。</small>
+  <button id="closeDlDialog">閉じる</button>
+</dialog>
+
 <div id="printArea"></div>
 
 <script>
@@ -399,6 +413,18 @@ const message=msg=>{$('status').textContent=msg;};
 const duration=()=>Number.isFinite(video.duration)?video.duration:0;
 const isLocked=()=>isBusy||!!screenStream;
 const findElem=id=>elements.find(e=>e.id===id);
+
+// サンドボックス(iframe)対応の安全なダウンロード
+function triggerDownload(fid, filename){
+  if(!fid)return;
+  const url=`index.php?api=v1&action=file.download&id=${fid}&filename=${encodeURIComponent(filename)}`;
+  const a=$('dlActionLink');
+  a.href=url;
+  a.download=filename;
+  a.textContent=`${filename} をダウンロード`;
+  $('dlDialog').showModal();
+}
+$('closeDlDialog').onclick=()=>$('dlDialog').close();
 
 async function api(act,payload={},blob=null,fn='file.mp4'){
   const rid=uid();let res;
@@ -1011,7 +1037,7 @@ async function toggleRecord(){
   }
 }
 
-// 動画一覧ツリー（business_ui.md 3.3 準拠）
+// 動画一覧ツリー
 function renderTree(){
   const root=$('tree');root.replaceChildren();
 
@@ -1057,10 +1083,8 @@ function renderTree(){
     };
     root.append(fRow);
 
-    // 子フォルダのレンダリング
     data.folders.filter(cf=>cf.parentFolderId===f.id).forEach(cf=>renderFolder(cf,depth+1));
 
-    // フォルダ配下の動画のレンダリング
     data.videos.filter(v=>v.folderId===f.id).forEach(v=>{
       const vRow=makeRow('video',v.id,'🎬 '+v.name,depth+1,v.createdAt,()=>loadTarget(v,null,false),(ev,span)=>openMenu(ev,[
         ['元動画を再生',()=>loadTarget(v,null,false)],
@@ -1069,17 +1093,15 @@ function renderTree(){
           span.contentEditable='true';span.focus();
           span.onblur=async()=>{span.contentEditable='false';await api('video.rename',{id:v.id,name:span.textContent.trim()||v.name});await loadData();};
         }],
-        ['ダウンロード',()=>{window.location.href=`index.php?api=v1&action=file.download&id=${v.originalFileId}`;}]
+        ['ダウンロード',()=>triggerDownload(v.originalFileId, v.name+'.mp4')]
       ]),true);
       root.append(vRow);
 
-      // 元動画
       const origRow=makeRow('file',v.originalFileId,' └ 📹 元動画',depth+2,v.createdAt,()=>loadTarget(v,null,false),(ev)=>openMenu(ev,[
-        ['ダウンロード',()=>{window.location.href=`index.php?api=v1&action=file.download&id=${v.originalFileId}`;}]
+        ['ダウンロード',()=>triggerDownload(v.originalFileId, v.name+'_元動画.mp4')]
       ]));
       root.append(origRow);
 
-      // 編集動画
       data.edits.filter(ed=>ed.videoId===v.id).forEach(ed=>{
         const edRow=makeRow('edit',ed.id,' └ ✂ '+ed.name,depth+2,ed.createdAt,()=>loadTarget(v,ed,true),(ev,span)=>openMenu(ev,[
           ['編集を再開',()=>loadTarget(v,ed,true)],
@@ -1090,7 +1112,7 @@ function renderTree(){
           }],
           ['ダウンロード',()=>{
             const fid=ed.renderedFileId||v.originalFileId;
-            window.location.href=`index.php?api=v1&action=file.download&id=${fid}`;
+            triggerDownload(fid, `${v.name}_${ed.name}.mp4`);
           }],
           ['削除',async()=>{
             if(confirm(`編集「${ed.name}」を削除しますか？`)){await api('edit.delete',{id:ed.id});await loadData();}
@@ -1141,7 +1163,8 @@ $('finish').onclick=async()=>{
 };
 $('download').onclick=()=>{
   const fid=currentEdit?.renderedFileId||currentVideo.originalFileId;
-  window.location.href=`index.php?api=v1&action=file.download&id=${fid}`;
+  const name=currentVideo.name+(currentEdit?`_${currentEdit.name}`:'')+'.mp4';
+  triggerDownload(fid, name);
 };
 $('pdf').onclick=()=>{
   if(!elements.some(e=>e.type==='F')){message('PDF位置が指定されていません（タイムラインを右クリックして追加）');return;}
@@ -1250,4 +1273,4 @@ async function playLoop(){
 })();
 </script>
 </body>
-</html> 
+</html>
