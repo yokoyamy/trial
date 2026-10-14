@@ -313,10 +313,11 @@ video{display:block;width:100%;height:100%}
 #scroll{flex:1;overflow-y:auto;overflow-x:hidden}
 #tracks{position:relative;min-height:130px;touch-action:none}
 .tick{position:absolute;top:0;height:18px;border-left:1px solid #dde4ed;font-size:9px;color:#64748b}
-.clip{position:absolute;height:24px;padding:3px 5px;border:1px solid #91b5e6;background:#e0ecff;border-radius:3px;overflow:hidden;white-space:nowrap;cursor:move;user-select:none;font-size:11px}
+.clip{position:absolute;height:24px;padding:3px 6px;border:1px solid #91b5e6;background:#e0ecff;border-radius:3px;overflow:hidden;white-space:nowrap;cursor:move;user-select:none;font-size:11px}
 .clip.B{background:#fff1bd}.clip.C{background:#d9f3e6}.clip.D{background:#ffe2e6}.clip.F{background:#eee2ff}
 .clip.selected{outline:2px solid #2563eb;outline-offset:-2px}
-.edge{position:absolute;top:0;bottom:0;width:5px;background:#0002;cursor:ew-resize}
+.edge{position:absolute;top:0;bottom:0;width:8px;background:rgba(0,0,0,0.12);cursor:ew-resize}
+.edge:hover{background:rgba(37,99,235,0.4)}
 .edge.start{left:0}.edge.end{right:0}
 #playhead{position:absolute;top:0;bottom:0;width:2px;background:#e44972;pointer-events:none;z-index:2}
 #handle{position:absolute;left:-5px;top:0;width:12px;height:16px;background:#e44972;clip-path:polygon(0 0,100% 0,100% 65%,50% 100%,0 65%);pointer-events:auto;cursor:ew-resize}
@@ -767,11 +768,9 @@ function hitElem(q){
       const ends=getEnds(e);
       if(!ends) return false;
       const [p, u, v, qEnd] = ends;
-      // 1. 端点（開始・終了）のクリック判定
       if(Math.hypot(p.x - q.x, p.y - q.y) < 18 || Math.hypot(qEnd.x - q.x, qEnd.y - q.y) < 18){
         return true;
       }
-      // 2. 線分全体のクリック判定
       const segments = [
         [p, u],
         e.line==='orthogonal' ? [u, {x:(u.x+v.x)/2, y:u.y}] : [u, v],
@@ -810,6 +809,7 @@ function getTimeAt(ev){
   return clamp(r.start+(ev.clientX-rect.left-10)/r.width*r.span,0,duration());
 }
 
+// タイムライン描画（正確な幅計算と適切な余白処理）
 function tracks(){
   if(!isEditing)return;
   const root=$('tracks'),r=getRange();
@@ -836,8 +836,13 @@ function tracks(){
     clip.setAttribute('data-element-id',e.id);
     clip.textContent=e.type==='A'?(e.text||titles.A):titles[e.type];
 
-    const left=10+(Math.max(st,r.start)-r.start)/r.span*r.width;
-    const w=e.type==='F'?8:Math.max(4,(Math.min(en,r.start+r.span)-Math.max(st,r.start))/r.span*r.width);
+    // 表示区間内での正確な位置と幅の計算
+    const visStart = Math.max(st, r.start);
+    const visEnd = Math.min(en, r.start + r.span);
+    const left = 10 + ((visStart - r.start) / r.span) * r.width;
+    const durInView = Math.max(0, visEnd - visStart);
+    const w = e.type==='F' ? 8 : Math.max(6, (durInView / r.span) * r.width);
+
     Object.assign(clip.style,{left:left+'px',top:(22+ri*27)+'px',width:w+'px'});
 
     if(e.type!=='F'){
@@ -855,9 +860,16 @@ function tracks(){
       const ox=ev.clientX,os=e.start,oe=e.end;
       bindDrag(ev,mev=>{
         const dt=(mev.clientX-ox)/r.width*r.span;
-        if(isS)e.start=clamp(os+dt,0,e.end-0.1);
-        else if(isE)e.end=clamp(oe+dt,e.start+0.1,duration());
-        else{const len=oe-os;e.start=clamp(os+dt,0,duration()-len);e.end=e.start+len;}
+        const minLen = 0.2; // 最小長 0.2秒
+        if(isS){
+          e.start=clamp(os+dt,0,oe-minLen);
+        }else if(isE){
+          e.end=clamp(oe+dt,os+minLen,duration());
+        }else{
+          const len=oe-os;
+          e.start=clamp(os+dt,0,duration()-len);
+          e.end=e.start+len;
+        }
         isDirty=true;tracks();paint();
       });
       tracks();paint();
@@ -894,9 +906,12 @@ function openElemMenu(ev,item,isTl){
   const items=[];
 
   const addE=type=>{
-    const r=getRange();
-    const defaultLen=Math.max(0.5, Math.min(2.0, r.span / 8));
-    const ne={id:uid(),type,start:t,end:type==='F'?t:Math.min(duration(),t+defaultLen)};
+    // 新規追加時の長さを適正な固定2.0秒に設定
+    const defLen = 2.0;
+    const endT = type==='F' ? t : Math.min(duration(), t + defLen);
+    const startT = (type!=='F' && endT - t < 0.3) ? Math.max(0, endT - 0.3) : t;
+
+    const ne={id:uid(),type,start:startT,end:endT};
     if(type==='F')ne.time=t;
     if(['A','B','C'].includes(type)){
       Object.assign(ne,{x:clamp(q.x,0,canvas.width-200),y:clamp(q.y,0,canvas.height-100),w:200,h:80,stroke:'#ef4444',width:3,dash:'solid',shape:'rect',background:'transparent'});
@@ -976,7 +991,7 @@ function openFormatMenu(ev,item){
   m.style.top=clamp(ev.clientY,5,window.innerHeight-m.offsetHeight-10)+'px';
 }
 
-// キャンバス操作（接続線の両端ドラッグ・枠の移動/サイズ変更）
+// キャンバス操作
 canvas.onpointerdown=ev=>{
   if(ev.button!==0||!isEditing||isLocked())return;
   commitText();video.pause();
@@ -1007,14 +1022,13 @@ canvas.onpointerdown=ev=>{
   const isRes=item.type!=='E'&&q.x>item.x+item.w-18&&q.y>item.y+item.h-18;
   const ends=item.type==='E'?getEnds(item):null;
 
-  // 接続線の場合：開始端(from:水色)か終了端(to:緑色)かを判定
   let endTarget=null;
   if(ends){
     const distFrom = Math.hypot(ends[0].x - q.x, ends[0].y - q.y);
     const distTo   = Math.hypot(ends[3].x - q.x, ends[3].y - q.y);
     if(distFrom < 20) endTarget = 'from';
     else if(distTo < 20) endTarget = 'to';
-    else endTarget = distFrom <= distTo ? 'from' : 'to'; // 線の中央付近を掴んだ場合は近い端点を移動
+    else endTarget = distFrom <= distTo ? 'from' : 'to';
   }
 
   bindDrag(ev,mev=>{
@@ -1305,358 +1319,4 @@ function renderTree(){
 
   function renderFolder(f,depth){
     const fRow=makeRow('folder',f.id,'📁 '+f.name,depth,f.createdAt,null,(ev,span)=>openMenu(ev,[
-      ['子フォルダ追加',async()=>{await api('folder.create',{name:'新規フォルダ',parentFolderId:f.id});await loadData();}],
-      ['最上位階層へ移動',async()=>{await api('folder.move',{id:f.id,parentFolderId:null});await loadData();}],
-      ['名前変更',()=>{
-        span.contentEditable='true';span.focus();
-        span.onblur=async()=>{span.contentEditable='false';await api('folder.rename',{id:f.id,name:span.textContent.trim()||f.name});await loadData();};
-      }],
-      ['フォルダ削除',async()=>{
-        if(confirm(`フォルダ「${f.name}」を削除しますか？配下のデータもすべて削除されます。`)){
-          await api('folder.delete',{id:f.id});await loadData();
-        }
-      }]
-    ]),true);
-
-    fRow.ondragover=ev=>{ev.preventDefault();fRow.classList.add('drop');};
-    fRow.ondragleave=()=>fRow.classList.remove('drop');
-    fRow.ondrop=async ev=>{
-      ev.preventDefault();fRow.classList.remove('drop');
-      const transferData=ev.dataTransfer.getData('text/plain');
-      if(!transferData)return;
-      const [type,id]=transferData.split(':');
-      if(type==='video'){
-        await api('video.move',{id,folderId:f.id});
-        await loadData();
-      }else if(type==='folder'){
-        if(id!==f.id){
-          try{
-            await api('folder.move',{id,parentFolderId:f.id});
-            await loadData();
-          }catch(err){
-            message(err.message);
-          }
-        }
-      }
-    };
-    root.append(fRow);
-
-    // 子フォルダの再帰描画
-    data.folders.filter(sub=>sub.parentFolderId===f.id).forEach(sub=>renderFolder(sub,depth+1));
-
-    // フォルダ内の動画
-    data.videos.filter(v=>v.folderId===f.id).forEach(v=>{
-      const vRow=makeRow('video',v.id,'🎬 '+v.name,depth+1,v.createdAt,()=>loadTarget(v,null,false),(ev,span)=>openMenu(ev,[
-        ['元動画を再生',()=>loadTarget(v,null,false)],
-        ['新規編集を開始',()=>loadTarget(v,null,true)],
-        ['名前変更',()=>{
-          span.contentEditable='true';span.focus();
-          span.onblur=async()=>{span.contentEditable='false';await api('video.rename',{id:v.id,name:span.textContent.trim()||v.name});await loadData();};
-        }],
-        ['ダウンロード',()=>triggerDownload(v.originalFileId, v.name)],
-        ['削除',async()=>{
-          if(confirm(`動画「${v.name}」を削除しますか？配下の編集もすべて削除されます。`)){
-            await api('video.delete',{id:v.id});await loadData();
-          }
-        }]
-      ]),true);
-      root.append(vRow);
-
-      // 動画配下の編集データ
-      data.edits.filter(ed=>ed.videoId===v.id).forEach(ed=>{
-        const edRow=makeRow('edit',ed.id,'📝 '+ed.name,depth+2,ed.createdAt,()=>loadTarget(v,ed,false),(ev,span)=>openMenu(ev,[
-          ['編集動画を再生',()=>loadTarget(v,ed,false)],
-          ['この編集を再開',()=>loadTarget(v,ed,true)],
-          ['名前変更',()=>{
-            span.contentEditable='true';span.focus();
-            span.onblur=async()=>{span.contentEditable='false';await api('edit.rename',{id:ed.id,name:span.textContent.trim()||ed.name});await loadData();};
-          }],
-          ['ダウンロード',()=>triggerDownload(ed.renderedFileId||v.originalFileId, `${v.name}_${ed.name}`)],
-          ['PDF出力',async()=>{
-            await loadTarget(v,ed,true);
-            openPdfDialog();
-          }],
-          ['削除',async()=>{
-            if(confirm(`編集「${ed.name}」を削除しますか？`)){await api('edit.delete',{id:ed.id});await loadData();}
-          }]
-        ]));
-        root.append(edRow);
-      });
-    });
-  }
-
-  data.folders.filter(f=>!f.parentFolderId).forEach(f=>renderFolder(f,0));
-}
-
-// ---------------- 操作イベント割り当て ----------------
-$('primary').onclick=async()=>{
-  if(screenStream||!isEditing){
-    await toggleRecord();
-  }else{
-    commitText();
-    if(video.paused){
-      if(video.ended)await seek(0);
-      video.play();
-    }else{
-      video.pause();
-    }
-    updateUI();
-  }
-};
-
-$('begin').onclick=async()=>{
-  if(!currentVideo)return;
-  if(renderedPlayback){
-    await setVideoSrcAndSeekZero(`index.php?api=v1&action=file.stream&id=${currentVideo.originalFileId}`);
-    renderedPlayback=false;
-  }
-  isEditing=true;video.pause();
-  await seek(0);updateUI();
-  message('編集モードを開始しました。右クリックで各要素を追加できます。');
-};
-
-$('save').onclick=saveEdit;
-
-// 編集作業終了：保存せずに破棄して終了可能
-$('finish').onclick=async()=>{
-  if(!await leavePrompt())return;
-  if(currentEdit?.renderedFileId){
-    await setVideoSrcAndSeekZero(`index.php?api=v1&action=file.stream&id=${currentEdit.renderedFileId}`);
-    renderedPlayback=true;
-  }
-  isEditing=false;
-  await seek(0);
-  updateUI();
-  message('編集作業を終了しました（先頭を表示中）');
-};
-
-$('download').onclick=async()=>{
-  if(!currentVideo)return;
-  if(isEditing && (isDirty || !currentEdit?.renderedFileId)){
-    if(confirm('最新の編集内容を動画に書き出して保存後、ダウンロードしますか？\n（キャンセルを押すと直前の保存済み動画または元動画をダウンロードします）')){
-      const ok=await saveEdit();
-      if(!ok)return;
-    }
-  }
-  const fid=currentEdit?.renderedFileId||currentVideo.originalFileId;
-  const name=currentVideo.name+(currentEdit?'_'+currentEdit.name:'');
-  triggerDownload(fid,name);
-};
-
-function openPdfDialog(){
-  if(!elements.some(e=>e.type==='F')){
-    message('タイムライン右クリックから「PDF位置追加」を行ってください');
-    return;
-  }
-  $('pdfDialog').showModal();
-}
-
-$('pdf').onclick=openPdfDialog;
-
-// PDF印刷実行
-$('print').onclick=async()=>{
-  $('pdfDialog').close();
-  commitText();
-  video.pause();
-  const ot=video.currentTime;
-  const cnt=+document.querySelector('input[name="layout"]:checked').value;
-  const times=elements.filter(e=>e.type==='F').map(e=>e.time??e.start).sort((a,b)=>a-b);
-
-  isBusy=true;updateUI();
-  $('printArea').replaceChildren();
-
-  try{
-    let sheet=null;
-    for(let i=0;i<times.length;i++){
-      await seek(times[i]);
-      const sc=document.createElement('canvas');
-      sc.width=canvas.width;
-      sc.height=canvas.height;
-      const sctx=sc.getContext('2d');
-      sctx.drawImage(video,0,0,sc.width,sc.height);
-      paint(sctx,video.currentTime,true);
-
-      if(i%cnt===0){
-        sheet=document.createElement('div');
-        sheet.className='sheet';
-        $('printArea').append(sheet);
-      }
-      const shot=document.createElement('div'),img=new Image();
-      shot.className='shot';
-      img.src=sc.toDataURL('image/jpeg',0.9);
-      img.style.maxHeight=cnt===2?'125mm':'260mm';
-      await img.decode();
-      shot.append(img);
-      sheet.append(shot);
-    }
-    window.print();
-  }catch(e){
-    message('PDF生成エラー: '+e.message);
-  }finally{
-    await seek(ot);
-    isBusy=false;
-    updateUI();
-  }
-};
-$('cancelPDF').onclick=()=>$('pdfDialog').close();
-
-canvas.oncontextmenu=ev=>openElemMenu(ev,hitElem(getPt(ev)),false);
-$('tracks').oncontextmenu=ev=>openElemMenu(ev,null,true);
-
-$('tracks').onpointerdown=ev=>{
-  if(ev.button===0&&!isLocked()&&!ev.target.closest('.clip')){
-    video.pause();
-    video.currentTime=getTimeAt(ev);
-  }
-};
-
-$('handle').onpointerdown=ev=>{
-  if(isLocked())return;
-  ev.stopPropagation();
-  video.pause();
-  bindDrag(ev,mev=>{
-    video.currentTime=getTimeAt(mev);
-  });
-};
-
-$('scale').oninput=()=>{
-  lastTlSpan=-1;
-  tracks();
-  paint();
-};
-
-video.onseeked=()=>{
-  tracks();
-  paint();
-};
-video.onplay=video.onpause=video.onended=updateUI;
-video.onerror=()=>message('動画の再生に失敗しました。対応コーデックか確認してください。');
-
-// 画面分割スプリッター（高さ変更）
-$('split').onpointerdown=ev=>{
-  ev.preventDefault();
-  const initY=ev.clientY;
-  const initTlH=$('timeline').offsetHeight;
-  const onMove=mev=>{
-    const deltaY=initY-mev.clientY;
-    const newH=clamp(initTlH+deltaY,100,window.innerHeight*0.6);
-    $('timeline').style.height=newH+'px';
-    fit();
-  };
-  const onEnd=()=>{
-    window.removeEventListener('pointermove',onMove);
-    window.removeEventListener('pointerup',onEnd);
-  };
-  window.addEventListener('pointermove',onMove);
-  window.addEventListener('pointerup',onEnd);
-};
-
-$('viewZoom').oninput=()=>{
-  displayZoom=+($('viewZoom').value);
-  $('zoomVal').textContent=Math.round(displayZoom*100)+'%';
-  fit();
-};
-
-$('list').onclick=()=>{$('library').hidden=$('veil').hidden=false;};
-$('closeList').onclick=$('veil').onclick=()=>{$('library').hidden=$('veil').hidden=true;};
-$('upload').onclick=$('upload2').onclick=()=>$('file').click();
-
-$('file').onchange=async ev=>{
-  const f=ev.target.files[0];
-  ev.target.value='';
-  if(!f||!await leavePrompt())return;
-  isBusy=true;updateUI();
-  try{
-    message(`アップロード中 (${(f.size/1024/1024).toFixed(2)} MB)...`);
-    const defFolderId=data.folders[0]?.id;
-    const name=f.name.replace(/\.[^.]+$/,'');
-    const res=await api('video.upload',{id:uid(),folderId:defFolderId,name},f,f.name);
-    await loadData();
-    await loadTarget(res.video,null,false);
-    await seek(0);
-    message('アップロード完了。先頭を表示しています。「編集開始」で編集できます。');
-  }catch(e){
-    message(e.message);
-  }finally{
-    isBusy=false;updateUI();
-  }
-};
-
-$('new').onclick=async()=>{
-  if(await leavePrompt()){
-    clearState();
-    $('library').hidden=$('veil').hidden=true;
-    updateUI();
-    message('録画開始を押して画面共有を開始してください');
-  }
-};
-
-$('folder').onclick=async()=>{
-  const name=prompt('フォルダ名を入力してください:','新規フォルダ');
-  if(name){
-    await api('folder.create',{name:name.trim(),parentFolderId:null});
-    await loadData();
-  }
-};
-
-document.addEventListener('pointerdown',ev=>{
-  if(!ev.target.closest('#menu'))$('menu').hidden=true;
-});
-document.addEventListener('keydown',ev=>{
-  if(ev.key==='Escape'){
-    connectingOwner=null;
-    $('menu').hidden=true;
-  }
-});
-window.addEventListener('resize',()=>{commitText();fit();});
-window.addEventListener('beforeunload',ev=>{
-  if(isDirty||screenStream||isBusy){
-    ev.preventDefault();
-    ev.returnValue='';
-  }
-});
-
-// 再生ループ（スキップ区間のジャンプ制御およびタイムライン・描画更新）
-async function playLoop(){
-  if(!isBusy&&isEditing&&!video.paused&&!isSkipping){
-    const next=getSkipTime(video.currentTime);
-    if(next>video.currentTime){
-      isSkipping=true;
-      try{
-        await seek(next);
-        if(next<duration()&&!video.paused)await video.play();
-      }catch(err){
-        console.error(err);
-      }finally{
-        isSkipping=false;
-      }
-    }
-  }
-  paint();
-  if(isEditing){
-    const r=getRange();
-    if(Math.abs(r.start-lastTlStart)>0.05||Math.abs(r.span-lastTlSpan)>0.01){
-      lastTlStart=r.start;
-      lastTlSpan=r.span;
-      tracks();
-    }else{
-      updateClock();
-    }
-  }
-  requestAnimationFrame(playLoop);
-}
-
-// アプリ起動処理
-(async()=>{
-  try{
-    await loadData();
-    updateUI();
-    requestAnimationFrame(playLoop);
-  }catch(e){
-    message('初期化エラー: '+e.message);
-  }
-})();
-})();
-</script>
-</body>
-</html>
+      ['子フォルダ追加',async()=>{await api('folder.create',{name:'新規フォルダ',parentFolderId:f.id});await
