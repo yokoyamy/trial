@@ -59,11 +59,16 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
         if (!file_exists($path)) { http_response_code(404); exit('Physical File Missing'); }
 
         $size = filesize($path);
-        $mime = $file['mimeType'] ?: 'video/webm';
+        $mime = !empty($file['mimeType']) ? $file['mimeType'] : 'video/webm';
 
         if ($action === 'file.download') {
-            $ext = pathinfo($path, PATHINFO_EXTENSION) ?: 'webm';
-            $dlName = rawurlencode($_GET['filename'] ?? ('video.' . $ext));
+            $ext = pathinfo($path, PATHINFO_EXTENSION);
+            if (!$ext) {
+                $ext = strpos($mime, 'mp4') !== false ? 'mp4' : 'webm';
+            }
+            $baseName = $_GET['filename'] ?? 'video';
+            $baseName = preg_replace('/\.(mp4|webm|mov)$/i', '', $baseName);
+            $dlName = rawurlencode($baseName . '.' . $ext);
             header('Content-Type: ' . $mime);
             header("Content-Disposition: attachment; filename=\"{$dlName}\"; filename*=UTF-8''{$dlName}");
             header('Content-Length: ' . $size);
@@ -190,7 +195,9 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
                 $respond(false, ['code' => 'UPLOAD_ERR', 'message' => 'ファイル受信に失敗しました'], $rid, 400);
             }
             $fid = uuid();
-            $ext = pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION) ?: 'webm';
+            $mime = $_FILES['file']['type'] ?: 'video/webm';
+            $ext = pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION);
+            if (!$ext) $ext = strpos($mime, 'mp4') !== false ? 'mp4' : 'webm';
             $rel = "files/{$fid}.{$ext}";
             move_uploaded_file($_FILES['file']['tmp_name'], "{$storageDir}/{$rel}");
             
@@ -199,7 +206,7 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
                 $targetFolderId = $meta['folders'][0]['id'];
             }
 
-            $meta['files'][] = ['id' => $fid, 'storagePath' => $rel, 'mimeType' => $_FILES['file']['type'] ?: 'video/webm', 'size' => filesize("{$storageDir}/{$rel}"), 'createdAt' => $now];
+            $meta['files'][] = ['id' => $fid, 'storagePath' => $rel, 'mimeType' => $mime, 'size' => filesize("{$storageDir}/{$rel}"), 'createdAt' => $now];
             $vid = ['id' => $payload['id'] ?? uuid(), 'folderId' => $targetFolderId, 'name' => $payload['name'] ?? '動画', 'originalFileId' => $fid, 'createdAt' => $now, 'updatedAt' => $now];
             $meta['videos'][] = $vid;
             $respond(true, ['video' => $vid], $rid);
@@ -228,9 +235,12 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
             $rfid = null;
             if (isset($_FILES['file']) && $_FILES['file']['error'] === UPLOAD_ERR_OK) {
                 $rfid = uuid();
-                $rel = "files/{$rfid}.mp4";
+                $mime = $_FILES['file']['type'] ?: 'video/webm';
+                $ext = pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION);
+                if (!$ext) $ext = strpos($mime, 'mp4') !== false ? 'mp4' : 'webm';
+                $rel = "files/{$rfid}.{$ext}";
                 move_uploaded_file($_FILES['file']['tmp_name'], "{$storageDir}/{$rel}");
-                $meta['files'][] = ['id' => $rfid, 'storagePath' => $rel, 'mimeType' => 'video/mp4', 'size' => filesize("{$storageDir}/{$rel}"), 'createdAt' => $now];
+                $meta['files'][] = ['id' => $rfid, 'storagePath' => $rel, 'mimeType' => $mime, 'size' => filesize("{$storageDir}/{$rel}"), 'createdAt' => $now];
             }
             $entry = [
                 'id' => $eid, 'videoId' => $payload['videoId'], 'name' => $payload['name'],
@@ -414,14 +424,25 @@ const duration=()=>Number.isFinite(video.duration)?video.duration:0;
 const isLocked=()=>isBusy||!!screenStream;
 const findElem=id=>elements.find(e=>e.id===id);
 
-// サンドボックス(iframe)対応の安全なダウンロード
-function triggerDownload(fid, filename){
+function getFileMeta(fid){
+  return data.files.find(f=>f.id===fid)||null;
+}
+
+// サンドボックス対応ダウンロード
+function triggerDownload(fid, baseName){
   if(!fid)return;
-  const url=`index.php?api=v1&action=file.download&id=${fid}&filename=${encodeURIComponent(filename)}`;
+  const fm=getFileMeta(fid);
+  let ext='webm';
+  if(fm&&fm.mimeType){
+    if(fm.mimeType.includes('mp4'))ext='mp4';
+    else if(fm.mimeType.includes('webm'))ext='webm';
+  }
+  const cleanName=baseName.replace(/\.[^.]+$/,'')+'.'+ext;
+  const url=`index.php?api=v1&action=file.download&id=${fid}&filename=${encodeURIComponent(cleanName)}`;
   const a=$('dlActionLink');
   a.href=url;
-  a.download=filename;
-  a.textContent=`${filename} をダウンロード`;
+  a.download=cleanName;
+  a.textContent=`${cleanName} をダウンロード`;
   $('dlDialog').showModal();
 }
 $('closeDlDialog').onclick=()=>$('dlDialog').close();
@@ -466,19 +487,23 @@ function fit(){
 }
 
 function updateUI(){
-  const hasV=!!currentVideo;
-  $('surface').hidden=!hasV;$('empty').hidden=hasV;
+  const hasMedia=!!video.srcObject||(!!video.src&&video.src!==window.location.href);
+  $('surface').hidden=!hasMedia;
+  $('empty').hidden=hasMedia;
   $('timeline').hidden=!isEditing;
   $('begin').hidden=!currentVideo||isEditing||!!screenStream;
   $('save').hidden=$('finish').hidden=!isEditing;
   $('download').hidden=$('pdf').hidden=!currentVideo||!!screenStream;
 
   if(screenStream){
-    $('primary').textContent='録画停止';$('primary').classList.add('recording');
+    $('primary').textContent='録画停止';
+    $('primary').classList.add('recording');
   }else if(isEditing){
-    $('primary').textContent=video.paused?'編集再生':'編集再生停止';$('primary').classList.remove('recording');
+    $('primary').textContent=video.paused?'編集再生':'編集再生停止';
+    $('primary').classList.remove('recording');
   }else{
-    $('primary').textContent='録画開始';$('primary').classList.remove('recording');
+    $('primary').textContent='録画開始';
+    $('primary').classList.remove('recording');
   }
   $('primary').disabled=isBusy;
   document.querySelectorAll('header button,#actions button,#library button').forEach(b=>{
@@ -683,14 +708,21 @@ function bindDrag(ev,onMove){
   window.addEventListener('pointermove',onMove);window.addEventListener('pointerup',onEnd);
 }
 
+// タイムスケール範囲の計算
 function getRange(){
-  const s=+$('scale').value,span=Math.max(0.1,duration()*(0.1+0.9*(s-1)/9));
-  return{span,start:clamp(video.currentTime-span/2,0,Math.max(0,duration()-span)),width:Math.max(1,$('tracks').clientWidth-20)};
+  const s=+$('scale').value; // 1(拡大) ~ 10(全域)
+  const d=duration()||1;
+  const span=clamp(d*(0.1+0.9*(s-1)/9),0.05,d);
+  const start=clamp(video.currentTime-span/2,0,Math.max(0,d-span));
+  const width=Math.max(1,$('tracks').clientWidth-20);
+  return{span,start,width};
 }
+
 function getTimeAt(ev){
   const r=getRange(),rect=$('tracks').getBoundingClientRect();
   return clamp(r.start+(ev.clientX-rect.left-10)/r.width*r.span,0,duration());
 }
+
 function tracks(){
   if(!isEditing)return;
   const root=$('tracks'),r=getRange();
@@ -746,6 +778,7 @@ function tracks(){
   root.style.height=Math.max(130,rows.length*27+30)+'px';
   updateClock();
 }
+
 function updateClock(){
   $('clock').textContent=`${video.currentTime.toFixed(1)} / ${duration().toFixed(1)} 秒`;
   const r=getRange();
@@ -903,7 +936,7 @@ canvas.ondblclick=ev=>{
   editorNode=div;editorNode.item=item;div.onblur=commitText;
 };
 
-// スキップ制御
+// スキップ区間
 function getSkipTime(t){
   for(let i=0;i<elements.length;i++){
     const sk=elements.find(e=>e.type==='D'&&t>=e.start&&t<e.end);
@@ -912,7 +945,7 @@ function getSkipTime(t){
   return Math.min(t,duration());
 }
 
-// 編集動画の確定保存
+// 編集動画の保存確定
 async function saveEdit(){
   commitText();
   if(!currentVideo||isLocked())return;
@@ -924,7 +957,9 @@ async function saveEdit(){
     const ot=video.currentTime;
     await seek(getSkipTime(0));
     const st=oc.captureStream(30);
-    const mime=MediaRecorder.isTypeSupported('video/mp4')?'video/mp4':'video/webm';
+    const mime=MediaRecorder.isTypeSupported('video/mp4;codecs=avc1')?'video/mp4':
+               MediaRecorder.isTypeSupported('video/mp4')?'video/mp4':
+               MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm';
     const mr=new MediaRecorder(st,{mimeType:mime});
     const chunks=[];
     mr.ondataavailable=e=>{if(e.data&&e.data.size>0)chunks.push(e.data);};
@@ -952,12 +987,13 @@ async function saveEdit(){
     video.pause();await seek(ot);
 
     const eid=currentEdit?.id||uid();
+    const ext=mime.includes('mp4')?'mp4':'webm';
     const res=await api('edit.save',{
       id:eid,videoId:currentVideo.id,
       name:currentEdit?.name||`編集 ${data.edits.filter(e=>e.videoId===currentVideo.id).length+1}`,
       expectedVersion:currentEdit?.version||0,
       editData:{schemaVersion:1,coordinateSystem:'source-pixels',sourceWidth:canvas.width,sourceHeight:canvas.height,elements}
-    },outBlob,'rendered.mp4');
+    },outBlob,`rendered.${ext}`);
 
     currentEdit=res.edit;isDirty=false;
     await loadData();
@@ -979,8 +1015,15 @@ async function toggleRecord(){
   try{
     screenStream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:true});
     clearState();
-    video.srcObject=screenStream;video.muted=true;await video.play();
-    fit();
+    video.srcObject=screenStream;video.muted=true;
+    
+    await new Promise(res=>{
+      video.onloadedmetadata=()=>{
+        video.play();
+        fit();
+        res();
+      };
+    });
 
     const chunks=[];
     const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')?'video/webm;codecs=vp9,opus':
@@ -1093,12 +1136,12 @@ function renderTree(){
           span.contentEditable='true';span.focus();
           span.onblur=async()=>{span.contentEditable='false';await api('video.rename',{id:v.id,name:span.textContent.trim()||v.name});await loadData();};
         }],
-        ['ダウンロード',()=>triggerDownload(v.originalFileId, v.name+'.mp4')]
+        ['ダウンロード',()=>triggerDownload(v.originalFileId, v.name)]
       ]),true);
       root.append(vRow);
 
       const origRow=makeRow('file',v.originalFileId,' └ 📹 元動画',depth+2,v.createdAt,()=>loadTarget(v,null,false),(ev)=>openMenu(ev,[
-        ['ダウンロード',()=>triggerDownload(v.originalFileId, v.name+'_元動画.mp4')]
+        ['ダウンロード',()=>triggerDownload(v.originalFileId, v.name+'_元動画')]
       ]));
       root.append(origRow);
 
@@ -1112,7 +1155,7 @@ function renderTree(){
           }],
           ['ダウンロード',()=>{
             const fid=ed.renderedFileId||v.originalFileId;
-            triggerDownload(fid, `${v.name}_${ed.name}.mp4`);
+            triggerDownload(fid, `${v.name}_${ed.name}`);
           }],
           ['削除',async()=>{
             if(confirm(`編集「${ed.name}」を削除しますか？`)){await api('edit.delete',{id:ed.id});await loadData();}
@@ -1126,15 +1169,21 @@ function renderTree(){
   data.folders.filter(f=>!f.parentFolderId).forEach(f=>renderFolder(f,0));
 }
 
-// UIイベント
+// 操作ボタン
 $('primary').onclick=()=>{
-  if(screenStream||!isEditing){toggleRecord();}
-  else{
-    if(video.paused){if(video.ended)video.currentTime=0;video.play();}
-    else video.pause();
+  if(screenStream||!isEditing){
+    toggleRecord();
+  }else{
+    if(video.paused){
+      if(video.ended)video.currentTime=0;
+      video.play();
+    }else{
+      video.pause();
+    }
     updateUI();
   }
 };
+
 $('begin').onclick=async()=>{
   if(renderedPlayback){
     await new Promise((res)=>{
@@ -1163,7 +1212,7 @@ $('finish').onclick=async()=>{
 };
 $('download').onclick=()=>{
   const fid=currentEdit?.renderedFileId||currentVideo.originalFileId;
-  const name=currentVideo.name+(currentEdit?`_${currentEdit.name}`:'')+'.mp4';
+  const name=currentVideo.name+(currentEdit?`_${currentEdit.name}`:'');
   triggerDownload(fid, name);
 };
 $('pdf').onclick=()=>{
@@ -1227,50 +1276,4 @@ $('tracks').oncontextmenu=ev=>openElemMenu(ev,null,true);
 canvas.oncontextmenu=ev=>openElemMenu(ev,hitElem(getPt(ev)),false);
 $('handle').onpointerdown=ev=>{
   if(isLocked())return;
-  ev.stopPropagation();video.pause();bindDrag(ev,mev=>{video.currentTime=getTimeAt(mev);});
-};
-
-$('scale').oninput=()=>{tracks();paint();};
-$('viewZoom').onchange=ev=>{displayZoom=+ev.target.value;fit();};
-video.onseeked=()=>{tracks();paint();updateClock();};
-video.onplay=video.onpause=video.onended=updateUI;
-video.onerror=()=>message('動画の再生に失敗しました。');
-
-document.addEventListener('pointerdown',ev=>{if(!ev.target.closest('#menu'))$('menu').hidden=true;});
-document.addEventListener('keydown',ev=>{if(ev.key==='Escape'){connectingOwner=null;$('menu').hidden=true;}});
-window.addEventListener('resize',()=>{commitText();fit();});
-window.addEventListener('beforeunload',ev=>{if(isDirty||screenStream||isBusy){ev.preventDefault();ev.returnValue='';}});
-
-let isSkipping=false;
-async function playLoop(){
-  if(!isBusy&&isEditing&&!video.paused&&!isSkipping){
-    const next=getSkipTime(video.currentTime);
-    if(next>video.currentTime){
-      isSkipping=true;
-      try{
-        video.pause();await seek(next);
-        if(next<duration())await video.play();
-      }catch(e){message(e.message);}
-      finally{isSkipping=false;}
-    }
-  }
-  paint();
-  if(isEditing)updateClock();
-  requestAnimationFrame(playLoop);
-}
-
-// 起動
-(async()=>{
-  try{
-    await loadData();
-    updateUI();
-    requestAnimationFrame(playLoop);
-    message('準備完了：録画開始または動画一覧から動画を選択してください。');
-  }catch(err){
-    message('初期化失敗: '+err.message);
-  }
-})();
-})();
-</script>
-</body>
-</html>
+  ev.stopPropagation();video.pause();bindDrag(ev,mev=>{video.currentTime
