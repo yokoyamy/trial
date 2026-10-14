@@ -1,4 +1,4 @@
-<?php 
+<?php
 declare(strict_types=1);
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
@@ -45,7 +45,6 @@ if (!file_exists($metaFile)) {
 if (isset($_GET['api']) && $_GET['api'] === 'v1') {
     $action = $_GET['action'] ?? '';
 
-    // ストリーミング・ダウンロード
     if ($action === 'file.stream' || $action === 'file.download') {
         $fid = $_GET['id'] ?? '';
         $raw = @file_get_contents($metaFile);
@@ -54,18 +53,16 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
         foreach ($meta['files'] ?? [] as $f) {
             if ($f['id'] === $fid) { $file = $f; break; }
         }
-        if (!$file) { http_response_code(404); exit('File Not Found in Metadata'); }
+        if (!$file) { http_response_code(404); exit('File Not Found'); }
         $path = $storageDir . '/' . $file['storagePath'];
-        if (!file_exists($path)) { http_response_code(404); exit('Physical File Missing'); }
+        if (!file_exists($path)) { http_response_code(404); exit('File Missing'); }
 
         $size = filesize($path);
         $mime = !empty($file['mimeType']) ? $file['mimeType'] : 'video/webm';
 
         if ($action === 'file.download') {
             $ext = pathinfo($path, PATHINFO_EXTENSION);
-            if (!$ext) {
-                $ext = strpos($mime, 'mp4') !== false ? 'mp4' : 'webm';
-            }
+            if (!$ext) $ext = strpos($mime, 'mp4') !== false ? 'mp4' : 'webm';
             $baseName = $_GET['filename'] ?? 'video';
             $baseName = preg_replace('/\.(mp4|webm|mov)$/i', '', $baseName);
             $dlName = rawurlencode($baseName . '.' . $ext);
@@ -98,9 +95,7 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
         exit;
     }
 
-    // JSON API
     header('Content-Type: application/json; charset=UTF-8');
-    
     $lockFp = fopen($metaFile, 'c+');
     if ($lockFp) flock($lockFp, LOCK_EX);
 
@@ -111,12 +106,8 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
         $fileContent = stream_get_contents($lockFp);
     }
     $meta = json_decode((string)$fileContent, true);
-    if (!is_array($meta) || !isset($meta['schemaVersion'])) {
-        $meta = getInitialMeta();
-    }
-    if (empty($meta['folders'])) {
-        $meta['folders'] = getInitialMeta()['folders'];
-    }
+    if (!is_array($meta) || !isset($meta['schemaVersion'])) $meta = getInitialMeta();
+    if (empty($meta['folders'])) $meta['folders'] = getInitialMeta()['folders'];
 
     $reqs = json_decode((string)@file_get_contents($reqFile), true) ?: [];
 
@@ -131,10 +122,7 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
             }
             @file_put_contents($reqFile, json_encode($reqs, JSON_UNESCAPED_UNICODE), LOCK_EX);
         }
-        if ($lockFp) {
-            flock($lockFp, LOCK_UN);
-            fclose($lockFp);
-        }
+        if ($lockFp) { flock($lockFp, LOCK_UN); fclose($lockFp); }
         http_response_code($code);
         echo json_encode($ok ? ['ok' => true, 'requestId' => $rid, 'data' => $data] : ['ok' => false, 'requestId' => $rid, 'error' => $data], JSON_UNESCAPED_UNICODE);
         exit;
@@ -147,9 +135,7 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
 
     if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'edit.get') {
         $eid = $_GET['id'] ?? '';
-        foreach ($meta['edits'] as $e) {
-            if ($e['id'] === $eid) $respond(true, ['edit' => $e], null);
-        }
+        foreach ($meta['edits'] as $e) { if ($e['id'] === $eid) $respond(true, ['edit' => $e], null); }
         $respond(false, ['code' => 'NOT_FOUND', 'message' => '編集データが見つかりません'], null, 404);
     }
 
@@ -179,6 +165,26 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
             foreach ($meta['folders'] as &$f) { if ($f['id'] === $payload['id']) { $f['name'] = $payload['name']; $f['updatedAt'] = $now; break; } }
             $respond(true, ['id' => $payload['id']], $rid);
 
+        case 'folder.move':
+            $targetId = $payload['id'] ?? '';
+            $newParentId = $payload['parentFolderId'] ?? null;
+            // 循環参照チェック
+            $chk = $newParentId;
+            $isCycle = false;
+            while ($chk) {
+                if ($chk === $targetId) { $isCycle = true; break; }
+                $parent = null;
+                foreach ($meta['folders'] as $f) { if ($f['id'] === $chk) { $parent = $f['parentFolderId']; break; } }
+                $chk = $parent;
+            }
+            if ($isCycle) {
+                $respond(false, ['code' => 'INVALID_MOVE', 'message' => '自身または子孫フォルダへは移動できません'], $rid, 400);
+            }
+            foreach ($meta['folders'] as &$f) {
+                if ($f['id'] === $targetId) { $f['parentFolderId'] = $newParentId; $f['updatedAt'] = $now; break; }
+            }
+            $respond(true, ['id' => $targetId], $rid);
+
         case 'folder.delete':
             $del = [$payload['id']]; $chg = true;
             while ($chg) {
@@ -188,11 +194,12 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
                 }
             }
             $meta['folders'] = array_values(array_filter($meta['folders'], fn($f) => !in_array($f['id'], $del, true)));
+            $meta['videos'] = array_values(array_filter($meta['videos'], fn($v) => !in_array($v['folderId'], $del, true)));
             $respond(true, ['id' => $payload['id']], $rid);
 
         case 'video.upload':
             if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
-                $respond(false, ['code' => 'UPLOAD_ERR', 'message' => 'ファイル受信に失敗しました'], $rid, 400);
+                $respond(false, ['code' => 'UPLOAD_ERR', 'message' => 'ファイル受信失敗'], $rid, 400);
             }
             $fid = uuid();
             $mime = $_FILES['file']['type'] ?: 'video/webm';
@@ -200,12 +207,10 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
             if (!$ext) $ext = strpos($mime, 'mp4') !== false ? 'mp4' : 'webm';
             $rel = "files/{$fid}.{$ext}";
             move_uploaded_file($_FILES['file']['tmp_name'], "{$storageDir}/{$rel}");
-            
             $targetFolderId = $payload['folderId'] ?? null;
             if (!$targetFolderId || !array_filter($meta['folders'], fn($f) => $f['id'] === $targetFolderId)) {
                 $targetFolderId = $meta['folders'][0]['id'];
             }
-
             $meta['files'][] = ['id' => $fid, 'storagePath' => $rel, 'mimeType' => $mime, 'size' => filesize("{$storageDir}/{$rel}"), 'createdAt' => $now];
             $vid = ['id' => $payload['id'] ?? uuid(), 'folderId' => $targetFolderId, 'name' => $payload['name'] ?? '動画', 'originalFileId' => $fid, 'createdAt' => $now, 'updatedAt' => $now];
             $meta['videos'][] = $vid;
@@ -308,18 +313,20 @@ video{display:block;width:100%;height:100%}
 #library{position:fixed;inset:0 auto 0 0;width:min(440px,100vw);background:#fff;z-index:11;display:flex;flex-direction:column;box-shadow:3px 0 15px #0003}
 #library .toolbar{padding:6px;border-bottom:1px solid #ccd6e3}
 #tree{flex:1;overflow:auto;padding:6px}
-.row{display:flex;align-items:center;gap:5px;min-height:26px;padding:2px 4px;border-radius:2px;user-select:none}
+.row{display:flex;align-items:center;gap:5px;min-height:26px;padding:2px 4px;border-radius:2px;user-select:none;cursor:default}
 .row:hover{background:#edf4ff}
 .row.drop{background:#e0ecff;outline:1px dashed #2563eb}
 .name{flex:1;cursor:pointer;overflow-wrap:anywhere}
 .name[contenteditable=true]{outline:1px solid #2563eb;background:#fff}
 .row time{font-size:10px;color:#64748b}
-#menu{position:fixed;z-index:30;background:#fff;border:1px solid #ccd6e3;border-radius:3px;padding:4px;max-height:85vh;max-width:90vw;overflow:auto;box-shadow:0 3px 12px #0003}
+#menu{position:fixed;z-index:30;background:#fff;border:1px solid #ccd6e3;border-radius:3px;padding:6px;max-height:85vh;max-width:90vw;overflow:auto;box-shadow:0 3px 12px #0003}
 #menu>button{display:block;width:100%;text-align:left;border:0;background:transparent;height:24px}
 #menu>button:hover{background:#edf4ff}
 #menu label{display:flex;justify-content:space-between;gap:10px;padding:3px}
-.palette{display:grid;grid-template-columns:repeat(6,20px);gap:3px;padding:3px}
+.palette{display:grid;grid-template-columns:repeat(6,20px);gap:3px;padding:4px 0}
 .palette button{width:20px;height:20px;padding:0;border:1px solid #ccd6e3}
+.menu-close-btn{margin-top:6px;width:100%!important;border:1px solid #ccd6e3!important;border-radius:3px;background:#f1f5f9!important;text-align:center!important;height:26px}
+.menu-close-btn:hover{background:#e2e8f0!important}
 .editor{position:absolute;white-space:pre-wrap;overflow:auto;padding:3px;outline:2px solid #60a5fa;z-index:3;background:#fff}
 dialog{max-width:90vw;border:1px solid #ccd6e3;border-radius:4px;padding:14px}
 dialog::backdrop{background:#0005}
@@ -809,7 +816,10 @@ function openElemMenu(ev,item,isTl){
   const items=[];
 
   const addE=type=>{
-    const ne={id:uid(),type,start:t,end:type==='F'?t:Math.min(duration(),t+3)};
+    // デフォルトの長さを「約1メモリ分(目盛りの1区間)」に設定
+    const r=getRange();
+    const defaultLen=Math.max(0.5, Math.min(2.0, r.span / 8));
+    const ne={id:uid(),type,start:t,end:type==='F'?t:Math.min(duration(),t+defaultLen)};
     if(type==='F')ne.time=t;
     if(['A','B','C'].includes(type)){
       Object.assign(ne,{x:clamp(q.x,0,canvas.width-200),y:clamp(q.y,0,canvas.height-100),w:200,h:80,stroke:'#ef4444',width:3,dash:'solid',shape:'rect',background:'transparent'});
@@ -870,7 +880,16 @@ function openFormatMenu(ev,item){
     b.style.background=col==='transparent'?'repeating-linear-gradient(45deg,#fff 0 3px,#ccc 3px 6px)':col;
     b.onclick=()=>{item[colorTarget.value]=col;isDirty=true;paint();};pal.append(b);
   });
-  m.append(pal);m.hidden=false;
+  m.append(pal);
+
+  // 閉じるボタン
+  const closeBtn=document.createElement('button');
+  closeBtn.textContent='閉じる';
+  closeBtn.className='menu-close-btn';
+  closeBtn.onclick=()=>m.hidden=true;
+  m.append(closeBtn);
+
+  m.hidden=false;
   m.style.left=clamp(ev.clientX,5,window.innerWidth-m.offsetWidth-10)+'px';
   m.style.top=clamp(ev.clientY,5,window.innerHeight-m.offsetHeight-10)+'px';
 }
@@ -1084,9 +1103,30 @@ async function toggleRecord(){
   }
 }
 
-// 動画一覧ツリー
+// 動画一覧ツリー（フォルダ階層・移動対応）
 function renderTree(){
   const root=$('tree');root.replaceChildren();
+
+  // ルート階層へのドロップ用エリア
+  const rootDropZone=document.createElement('div');
+  rootDropZone.className='row';
+  rootDropZone.style.border='1px dashed #ccd6e3';
+  rootDropZone.style.margin='4px 0';
+  rootDropZone.style.justifyContent='center';
+  rootDropZone.textContent='📂 ルート階層（ここにドロップで最上位へ移動）';
+  rootDropZone.ondragover=ev=>{ev.preventDefault();rootDropZone.classList.add('drop');};
+  rootDropZone.ondragleave=()=>rootDropZone.classList.remove('drop');
+  rootDropZone.ondrop=async ev=>{
+    ev.preventDefault();rootDropZone.classList.remove('drop');
+    const transferData=ev.dataTransfer.getData('text/plain');
+    if(!transferData)return;
+    const [type,id]=transferData.split(':');
+    if(type==='folder'){
+      await api('folder.move',{id,parentFolderId:null});
+      await loadData();
+    }
+  };
+  root.append(rootDropZone);
 
   function makeRow(type,id,lbl,depth,timeText='',onClick=null,onMenu=null,canDrag=false){
     const row=document.createElement('div');
@@ -1103,7 +1143,9 @@ function renderTree(){
     if(onMenu)row.oncontextmenu=ev=>onMenu(ev,span);
     if(canDrag){
       row.draggable=true;
-      row.ondragstart=ev=>ev.dataTransfer.setData('text/plain',id);
+      row.ondragstart=ev=>{
+        ev.dataTransfer.setData('text/plain',`${type}:${id}`);
+      };
     }
     return row;
   }
@@ -1111,6 +1153,7 @@ function renderTree(){
   function renderFolder(f,depth){
     const fRow=makeRow('folder',f.id,'📁 '+f.name,depth,f.createdAt,null,(ev,span)=>openMenu(ev,[
       ['子フォルダ追加',async()=>{await api('folder.create',{name:'新規フォルダ',parentFolderId:f.id});await loadData();}],
+      ['最上位階層へ移動',async()=>{await api('folder.move',{id:f.id,parentFolderId:null});await loadData();}],
       ['名前変更',()=>{
         span.contentEditable='true';span.focus();
         span.onblur=async()=>{span.contentEditable='false';await api('folder.rename',{id:f.id,name:span.textContent.trim()||f.name});await loadData();};
@@ -1120,18 +1163,34 @@ function renderTree(){
           await api('folder.delete',{id:f.id});await loadData();
         }
       }]
-    ]));
+    ]),true);
+
     fRow.ondragover=ev=>{ev.preventDefault();fRow.classList.add('drop');};
     fRow.ondragleave=()=>fRow.classList.remove('drop');
     fRow.ondrop=async ev=>{
       ev.preventDefault();fRow.classList.remove('drop');
-      const vid=ev.dataTransfer.getData('text/plain');
-      if(vid){await api('video.move',{id:vid,folderId:f.id});await loadData();}
+      const transferData=ev.dataTransfer.getData('text/plain');
+      if(!transferData)return;
+      const [type,id]=transferData.split(':');
+      if(type==='video'){
+        await api('video.move',{id,folderId:f.id});
+        await loadData();
+      }else if(type==='folder'){
+        if(id===f.id)return;
+        try{
+          await api('folder.move',{id,parentFolderId:f.id});
+          await loadData();
+        }catch(e){
+          message(e.message);
+        }
+      }
     };
     root.append(fRow);
 
+    // 子フォルダの再帰描画
     data.folders.filter(cf=>cf.parentFolderId===f.id).forEach(cf=>renderFolder(cf,depth+1));
 
+    // フォルダ直下の動画
     data.videos.filter(v=>v.folderId===f.id).forEach(v=>{
       const vRow=makeRow('video',v.id,'🎬 '+v.name,depth+1,v.createdAt,()=>loadTarget(v,null,false),(ev,span)=>openMenu(ev,[
         ['元動画を再生',()=>loadTarget(v,null,false)],
@@ -1140,7 +1199,10 @@ function renderTree(){
           span.contentEditable='true';span.focus();
           span.onblur=async()=>{span.contentEditable='false';await api('video.rename',{id:v.id,name:span.textContent.trim()||v.name});await loadData();};
         }],
-        ['ダウンロード',()=>triggerDownload(v.originalFileId, v.name)]
+        ['ダウンロード',()=>triggerDownload(v.originalFileId, v.name)],
+        ['削除',async()=>{
+          if(confirm(`動画「${v.name}」を削除しますか？`)){await api('video.delete',{id:v.id});await loadData();}
+        }]
       ]),true);
       root.append(vRow);
 
@@ -1170,6 +1232,7 @@ function renderTree(){
     });
   }
 
+  // 親フォルダを持たないルートフォルダから順に描画
   data.folders.filter(f=>!f.parentFolderId).forEach(f=>renderFolder(f,0));
 }
 
@@ -1232,122 +1295,4 @@ $('print').onclick=async()=>{
     let sheet=null;
     for(let i=0;i<times.length;i++){
       await seek(times[i]);
-      const sc=document.createElement('canvas');sc.width=canvas.width;sc.height=canvas.height;
-      const sctx=sc.getContext('2d');sctx.drawImage(video,0,0,sc.width,sc.height);paint(sctx,times[i],true);
-      if(i%cnt===0){sheet=document.createElement('div');sheet.className='sheet';$('printArea').append(sheet);}
-      const shot=document.createElement('div');shot.className='shot';
-      const img=new Image();img.src=sc.toDataURL();img.style.maxHeight=cnt===2?'115mm':'240mm';await img.decode();
-      const p=document.createElement('p');p.textContent=`${currentVideo.name} / ${times[i].toFixed(1)}s`;
-      shot.append(img,p);sheet.append(shot);
-    }
-    window.print();
-  }finally{
-    await seek(ot);isBusy=false;updateUI();
-  }
-};
-$('cancelPDF').onclick=()=>$('pdfDialog').close();
-
-$('list').onclick=()=>{$('library').hidden=$('veil').hidden=false;};
-$('closeList').onclick=$('veil').onclick=()=>{$('library').hidden=$('veil').hidden=true;};
-$('upload').onclick=$('upload2').onclick=()=>$('file').click();
-$('file').onchange=async ev=>{
-  const f=ev.target.files[0];ev.target.value='';
-  if(!f||!await leavePrompt())return;
-  isBusy=true;updateUI();
-  try{
-    message('動画をアップロード中...');
-    const defFolderId=data.folders[0]?.id;
-    const res=await api('video.upload',{folderId:defFolderId,name:f.name.replace(/\.[^.]+$/,'')},f,f.name);
-    await loadData();await loadTarget(res.video,null,false);
-  }finally{isBusy=false;updateUI();}
-};
-$('new').onclick=async()=>{if(await leavePrompt()){clearState();$('library').hidden=$('veil').hidden=true;updateUI();}};
-$('folder').onclick=async()=>{await api('folder.create',{name:'新規フォルダ'});await loadData();};
-
-$('split').onpointerdown=ev=>{
-  const sy=ev.clientY,ih=$('timeline').offsetHeight;
-  bindDrag(ev,mev=>{
-    if(isEditing)$('timeline').style.height=clamp(ih-(mev.clientY-sy),120,450)+'px';
-    fit();
-  });
-};
-$('tracks').onpointerdown=ev=>{
-  if(ev.button===0&&!isLocked()&&!ev.target.closest('.clip')){
-    video.pause();video.currentTime=getTimeAt(ev);
-  }
-};
-$('tracks').oncontextmenu=ev=>openElemMenu(ev,null,true);
-canvas.oncontextmenu=ev=>openElemMenu(ev,hitElem(getPt(ev)),false);
-$('handle').onpointerdown=ev=>{
-  if(isLocked())return;
-  ev.stopPropagation();video.pause();bindDrag(ev,mev=>{
-    video.currentTime=getTimeAt(mev);
-  });
-};
-
-// タイムスケール操作時の即時再計算・再描画
-$('scale').oninput=()=>{
-  lastTlStart=-1;
-  lastTlSpan=-1;
-  tracks();
-  paint();
-};
-
-$('viewZoom').onchange=ev=>{
-  displayZoom=+ev.target.value;
-  fit();
-};
-
-video.onseeked=()=>{tracks();paint();};
-video.onplay=()=>updateUI();
-video.onpause=()=>updateUI();
-video.onended=()=>updateUI();
-video.onerror=()=>message('動画の再生に失敗しました。対応コーデックをご確認ください。');
-
-document.addEventListener('pointerdown',ev=>{if(!ev.target.closest('#menu'))$('menu').hidden=true;});
-document.addEventListener('keydown',ev=>{if(ev.key==='Escape'){connectingOwner=null;$('menu').hidden=true;}});
-window.addEventListener('resize',()=>{commitText();fit();});
-
-// スキップ区間のスキップとトラック目盛りの同期ループ
-async function playLoop(){
-  if(!isBusy&&isEditing&&!video.paused&&!isSkipping){
-    const nextT=getSkipTime(video.currentTime);
-    if(nextT>video.currentTime){
-      isSkipping=true;
-      try{
-        await seek(nextT);
-        if(nextT<duration())await video.play();
-      }catch(e){
-        message(e.message);
-      }finally{
-        isSkipping=false;
-      }
-    }
-  }
-  paint();
-  if(isEditing){
-    const {start,span}=getRange();
-    if(Math.abs(start-lastTlStart)>0.05||Math.abs(span-lastTlSpan)>0.01){
-      lastTlStart=start;
-      lastTlSpan=span;
-      tracks();
-    }else{
-      updateClock();
-    }
-  }
-  requestAnimationFrame(playLoop);
-}
-
-// 初期化
-(async()=>{
-  try{
-    await loadData();
-    updateUI();
-    requestAnimationFrame(playLoop);
-  }catch(e){ message('初期化エラー: '+e.message);
-  }
-})();
-})();
-</script>
-</body>
-</html>
+      const sc=document.createElement('canvas');sc.width=canvas.
