@@ -418,6 +418,7 @@ let currentVideo=null,currentEdit=null,elements=[];
 let isEditing=false,isDirty=false,isBusy=false,mediaRec=null,screenStream=null;
 let selectedIds=new Set(),connectingOwner=null,editorNode=null,renderedPlayback=false;
 let displayZoom=1.0,recTimer=null,recStart=0;
+let lastTlStart=-1,lastTlSpan=-1,isSkipping=false;
 
 const message=msg=>{$('status').textContent=msg;};
 const duration=()=>Number.isFinite(video.duration)?video.duration:0;
@@ -428,7 +429,6 @@ function getFileMeta(fid){
   return data.files.find(f=>f.id===fid)||null;
 }
 
-// サンドボックス対応ダウンロード
 function triggerDownload(fid, baseName){
   if(!fid)return;
   const fm=getFileMeta(fid);
@@ -709,10 +709,12 @@ function bindDrag(ev,onMove){
 }
 
 // タイムスケール範囲の計算
+// 右(10): 全域（広い・縮小） / 左(1): 拡大表示（狭い・拡大）
 function getRange(){
-  const s=+$('scale').value; // 1(拡大) ~ 10(全域)
-  const d=duration()||1;
-  const span=clamp(d*(0.1+0.9*(s-1)/9),0.05,d);
+  const s=+($('scale').value);
+  const d=Math.max(duration(),0.1);
+  const minSpan=Math.min(d,Math.max(1,d*0.1));
+  const span=minSpan+(d-minSpan)*((s-1)/9);
   const start=clamp(video.currentTime-span/2,0,Math.max(0,d-span));
   const width=Math.max(1,$('tracks').clientWidth-20);
   return{span,start,width};
@@ -730,7 +732,9 @@ function tracks(){
 
   for(let i=0;i<=8;i++){
     const tick=document.createElement('span');tick.className='tick';
-    tick.style.left=(10+r.width*i/8)+'px';tick.textContent=(r.start+r.span*i/8).toFixed(1)+'s';
+    tick.style.left=(10+r.width*i/8)+'px';
+    const sec=r.start+(r.span*i/8);
+    tick.textContent=sec.toFixed(1)+'s';
     if(i===8)tick.style.transform='translateX(-100%)';
     root.append(tick);
   }
@@ -1281,10 +1285,14 @@ $('handle').onpointerdown=ev=>{
   });
 };
 
-// タイムスケール変更時の即時再計算
-$('scale').oninput=()=>{tracks();paint();};
+// タイムスケール操作時の即時再計算・再描画
+$('scale').oninput=()=>{
+  lastTlStart=-1;
+  lastTlSpan=-1;
+  tracks();
+  paint();
+};
 
-// 表示倍率の変更
 $('viewZoom').onchange=ev=>{
   displayZoom=+ev.target.value;
   fit();
@@ -1300,8 +1308,7 @@ document.addEventListener('pointerdown',ev=>{if(!ev.target.closest('#menu'))$('m
 document.addEventListener('keydown',ev=>{if(ev.key==='Escape'){connectingOwner=null;$('menu').hidden=true;}});
 window.addEventListener('resize',()=>{commitText();fit();});
 
-// スキップ処理とタイムライン再生同期ループ
-let lastTlStart=-1,isSkipping=false;
+// スキップ区間のスキップとトラック目盛りの同期ループ
 async function playLoop(){
   if(!isBusy&&isEditing&&!video.paused&&!isSkipping){
     const nextT=getSkipTime(video.currentTime);
@@ -1319,9 +1326,10 @@ async function playLoop(){
   }
   paint();
   if(isEditing){
-    const curStart=getRange().start;
-    if(Math.abs(curStart-lastTlStart)>0.05){
-      lastTlStart=curStart;
+    const {start,span}=getRange();
+    if(Math.abs(start-lastTlStart)>0.05||Math.abs(span-lastTlSpan)>0.01){
+      lastTlStart=start;
+      lastTlSpan=span;
       tracks();
     }else{
       updateClock();
@@ -1330,17 +1338,10 @@ async function playLoop(){
   requestAnimationFrame(playLoop);
 }
 
-// 初期化処理
+// 初期化
 (async()=>{
   try{
     await loadData();
     updateUI();
     requestAnimationFrame(playLoop);
   }catch(e){
-    message('初期化エラー: '+e.message);
-  }
-})();
-})();
-</script>
-</body>
-</html>
