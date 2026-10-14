@@ -1276,4 +1276,71 @@ $('tracks').oncontextmenu=ev=>openElemMenu(ev,null,true);
 canvas.oncontextmenu=ev=>openElemMenu(ev,hitElem(getPt(ev)),false);
 $('handle').onpointerdown=ev=>{
   if(isLocked())return;
-  ev.stopPropagation();video.pause();bindDrag(ev,mev=>{video.currentTime
+  ev.stopPropagation();video.pause();bindDrag(ev,mev=>{
+    video.currentTime=getTimeAt(mev);
+  });
+};
+
+// タイムスケール変更時の即時再計算
+$('scale').oninput=()=>{tracks();paint();};
+
+// 表示倍率の変更
+$('viewZoom').onchange=ev=>{
+  displayZoom=+ev.target.value;
+  fit();
+};
+
+video.onseeked=()=>{tracks();paint();};
+video.onplay=()=>updateUI();
+video.onpause=()=>updateUI();
+video.onended=()=>updateUI();
+video.onerror=()=>message('動画の再生に失敗しました。対応コーデックをご確認ください。');
+
+document.addEventListener('pointerdown',ev=>{if(!ev.target.closest('#menu'))$('menu').hidden=true;});
+document.addEventListener('keydown',ev=>{if(ev.key==='Escape'){connectingOwner=null;$('menu').hidden=true;}});
+window.addEventListener('resize',()=>{commitText();fit();});
+
+// スキップ処理とタイムライン再生同期ループ
+let lastTlStart=-1,isSkipping=false;
+async function playLoop(){
+  if(!isBusy&&isEditing&&!video.paused&&!isSkipping){
+    const nextT=getSkipTime(video.currentTime);
+    if(nextT>video.currentTime){
+      isSkipping=true;
+      try{
+        await seek(nextT);
+        if(nextT<duration())await video.play();
+      }catch(e){
+        message(e.message);
+      }finally{
+        isSkipping=false;
+      }
+    }
+  }
+  paint();
+  if(isEditing){
+    const curStart=getRange().start;
+    if(Math.abs(curStart-lastTlStart)>0.05){
+      lastTlStart=curStart;
+      tracks();
+    }else{
+      updateClock();
+    }
+  }
+  requestAnimationFrame(playLoop);
+}
+
+// 初期化処理
+(async()=>{
+  try{
+    await loadData();
+    updateUI();
+    requestAnimationFrame(playLoop);
+  }catch(e){
+    message('初期化エラー: '+e.message);
+  }
+})();
+})();
+</script>
+</body>
+</html>
