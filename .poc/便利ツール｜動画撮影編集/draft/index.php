@@ -23,15 +23,22 @@ if (!is_dir($storageDir)) @mkdir($storageDir, 0777, true);
 if (!is_dir($filesDir))   @mkdir($filesDir, 0777, true);
 if (!is_dir($tmpDir))     @mkdir($tmpDir, 0777, true);
 if (!file_exists($htaccess))  @file_put_contents($htaccess, "Require all denied\n");
-if (!file_exists($reqFile))   @file_put_contents($reqFile, '{}');
 if (!file_exists($retryFile)) @file_put_contents($retryFile, '[]');
-if (!file_exists($metaFile)) {
+if (!file_exists($reqFile))   @file_put_contents($reqFile, '{}');
+
+function getInitialMeta(): array {
     $now = gmdate('Y-m-d\TH:i:s\Z');
-    @file_put_contents($metaFile, json_encode([
+    return [
         'schemaVersion' => 1,
         'folders' => [['id' => uuid(), 'parentFolderId' => null, 'name' => 'デフォルトフォルダ', 'createdAt' => $now, 'updatedAt' => $now]],
-        'videos' => [], 'edits' => [], 'files' => []
-    ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        'videos' => [],
+        'edits' => [],
+        'files' => []
+    ];
+}
+
+if (!file_exists($metaFile)) {
+    @file_put_contents($metaFile, json_encode(getInitialMeta(), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
 }
 
 // ---------------- API ----------------
@@ -41,17 +48,18 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
     // ストリーミング・ダウンロード
     if ($action === 'file.stream' || $action === 'file.download') {
         $fid = $_GET['id'] ?? '';
-        $meta = json_decode((string)@file_get_contents($metaFile), true) ?: [];
+        $raw = @file_get_contents($metaFile);
+        $meta = json_decode((string)$raw, true) ?: [];
         $file = null;
         foreach ($meta['files'] ?? [] as $f) {
             if ($f['id'] === $fid) { $file = $f; break; }
         }
-        if (!$file) { http_response_code(404); exit('File Not Found'); }
+        if (!$file) { http_response_code(404); exit('File Not Found in Metadata'); }
         $path = $storageDir . '/' . $file['storagePath'];
-        if (!file_exists($path)) { http_response_code(404); exit('File Missing'); }
+        if (!file_exists($path)) { http_response_code(404); exit('Physical File Missing'); }
 
         $size = filesize($path);
-        $mime = $file['mimeType'] ?: 'video/mp4';
+        $mime = $file['mimeType'] ?: 'video/webm';
 
         if ($action === 'file.download') {
             header('Content-Type: ' . $mime);
@@ -85,21 +93,42 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
 
     // JSON API
     header('Content-Type: application/json; charset=UTF-8');
-    $lock = fopen($metaFile, 'c+');
-    if ($lock) flock($lock, LOCK_EX);
+    
+    // 安全な排他ロック（ファイルを再生成せず直接更新）
+    $lockFp = fopen($metaFile, 'c+');
+    if ($lockFp) flock($lockFp, LOCK_EX);
 
-    $meta = json_decode((string)@file_get_contents($metaFile), true) ?: ['schemaVersion'=>1,'folders'=>[],'videos'=>[],'edits'=>[],'files'=>[]];
+    clearstatcache(true, $metaFile);
+    $fileContent = '';
+    if ($lockFp) {
+        rewind($lockFp);
+        $fileContent = stream_get_contents($lockFp);
+    }
+    $meta = json_decode((string)$fileContent, true);
+    if (!is_array($meta) || !isset($meta['schemaVersion'])) {
+        $meta = getInitialMeta();
+    }
+    if (empty($meta['folders'])) {
+        $meta['folders'] = getInitialMeta()['folders'];
+    }
+
     $reqs = json_decode((string)@file_get_contents($reqFile), true) ?: [];
 
-    $respond = function(bool $ok, $data, ?string $rid, int $code = 200) use ($lock, $metaFile, $reqFile, &$meta, &$reqs) {
+    $respond = function(bool $ok, $data, ?string $rid, int $code = 200) use ($lockFp, $reqFile, &$meta, &$reqs) {
         if ($ok && $rid) {
             $reqs[$rid] = $data;
-            @file_put_contents($metaFile . '.tmp', json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-            @rename($metaFile . '.tmp', $metaFile);
-            @file_put_contents($reqFile . '.tmp', json_encode($reqs, JSON_UNESCAPED_UNICODE));
-            @rename($reqFile . '.tmp', $reqFile);
+            if ($lockFp) {
+                rewind($lockFp);
+                ftruncate($lockFp, 0);
+                fwrite($lockFp, json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+                fflush($lockFp);
+            }
+            @file_put_contents($reqFile, json_encode($reqs, JSON_UNESCAPED_UNICODE), LOCK_EX);
         }
-        if ($lock) { flock($lock, LOCK_UN); fclose($lock); }
+        if ($lockFp) {
+            flock($lockFp, LOCK_UN);
+            fclose($lockFp);
+        }
         http_response_code($code);
         echo json_encode($ok ? ['ok' => true, 'requestId' => $rid, 'data' => $data] : ['ok' => false, 'requestId' => $rid, 'error' => $data], JSON_UNESCAPED_UNICODE);
         exit;
@@ -163,8 +192,14 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
             $ext = pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION) ?: 'webm';
             $rel = "files/{$fid}.{$ext}";
             move_uploaded_file($_FILES['file']['tmp_name'], "{$storageDir}/{$rel}");
+            
+            $targetFolderId = $payload['folderId'] ?? null;
+            if (!$targetFolderId || !array_filter($meta['folders'], fn($f) => $f['id'] === $targetFolderId)) {
+                $targetFolderId = $meta['folders'][0]['id'];
+            }
+
             $meta['files'][] = ['id' => $fid, 'storagePath' => $rel, 'mimeType' => $_FILES['file']['type'] ?: 'video/webm', 'size' => filesize("{$storageDir}/{$rel}"), 'createdAt' => $now];
-            $vid = ['id' => $payload['id'] ?? uuid(), 'folderId' => $payload['folderId'] ?? ($meta['folders'][0]['id'] ?? null), 'name' => $payload['name'] ?? '動画', 'originalFileId' => $fid, 'createdAt' => $now, 'updatedAt' => $now];
+            $vid = ['id' => $payload['id'] ?? uuid(), 'folderId' => $targetFolderId, 'name' => $payload['name'] ?? '動画', 'originalFileId' => $fid, 'createdAt' => $now, 'updatedAt' => $now];
             $meta['videos'][] = $vid;
             $respond(true, ['video' => $vid], $rid);
 
@@ -302,7 +337,7 @@ body>*:not(#printArea){display:none!important}
 </header>
 <main>
   <section id="stage">
-    <div id="empty">録画開始で共有画面を選択してください。<br>一覧から既存動画を開けます。</div>
+    <div id="empty">録画開始で共有画面を選択してください。<br>一覧から既存動画を開けます</div>
     <div id="surface" hidden><video id="video" playsinline></video><canvas id="overlay"></canvas></div>
   </section>
   <div id="split"></div>
@@ -387,7 +422,8 @@ async function loadData(){
   const res=await fetch('index.php?api=v1&action=list');
   const json=await res.json();
   if(!json.ok)throw new Error('一覧取得失敗');
-  data=json.data;renderTree();
+  data=json.data;
+  renderTree();
 }
 
 function commitText(){
@@ -449,7 +485,6 @@ async function leavePrompt(){
   return false;
 }
 
-// 動画/編集ロード（録画直後もこの統一関数で確実に呼び出す）
 async function loadTarget(vidObj,editObj=null,asEdit=false){
   if(!await leavePrompt())return;
   isBusy=true;updateUI();
@@ -463,7 +498,6 @@ async function loadTarget(vidObj,editObj=null,asEdit=false){
     const targetFid=(!asEdit&&editObj?.renderedFileId)?editObj.renderedFileId:vidObj.originalFileId;
     renderedPlayback=(targetFid===editObj?.renderedFileId);
 
-    // ビデオ要素のsrcセットと確実な読み込み待機
     await new Promise((res,rej)=>{
       const onMeta=()=>{video.removeEventListener('loadedmetadata',onMeta);video.removeEventListener('error',onErr);res();};
       const onErr=()=>{video.removeEventListener('loadedmetadata',onMeta);video.removeEventListener('error',onErr);rej(new Error('動画の読み込みに失敗しました'));};
@@ -482,7 +516,7 @@ async function loadTarget(vidObj,editObj=null,asEdit=false){
   }
 }
 
-// 接続線・幾何
+// 接続線・描画幾何
 function getPort(e,p){
   if(e.shape==='ellipse')return{x:e.x+e.w/2+Math.cos(p.angle||0)*e.w/2,y:e.y+e.h/2+Math.sin(p.angle||0)*e.h/2};
   const r=p.ratio??0.5;
@@ -615,7 +649,6 @@ function bindDrag(ev,onMove){
   window.addEventListener('pointermove',onMove);window.addEventListener('pointerup',onEnd);
 }
 
-// タイムライン描画
 function getRange(){
   const s=+$('scale').value,span=Math.max(0.1,duration()*(0.1+0.9*(s-1)/9));
   return{span,start:clamp(video.currentTime-span/2,0,Math.max(0,duration()-span)),width:Math.max(1,$('tracks').clientWidth-20)};
@@ -771,7 +804,7 @@ function openFormatMenu(ev,item){
   m.style.top=clamp(ev.clientY,5,window.innerHeight-m.offsetHeight-10)+'px';
 }
 
-// キャンバスマウス処理
+// キャンバス操作
 canvas.onpointerdown=ev=>{
   if(ev.button!==0||!isEditing||isLocked())return;
   commitText();video.pause();
@@ -845,7 +878,7 @@ function getSkipTime(t){
   return Math.min(t,duration());
 }
 
-// 編集動画保存
+// 編集動画の確定保存
 async function saveEdit(){
   commitText();
   if(!currentVideo||isLocked())return;
@@ -912,7 +945,6 @@ async function toggleRecord(){
   try{
     screenStream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:true});
     clearState();
-    // 録画中のプレビュー用
     video.srcObject=screenStream;video.muted=true;await video.play();
     fit();
 
@@ -948,7 +980,6 @@ async function toggleRecord(){
     const {blob,ext}=await doneProm;
     clearInterval(recTimer);recTimer=null;
 
-    // ストリームの確実なクリーンアップ
     screenStream.getTracks().forEach(t=>t.stop());
     screenStream=null;mediaRec=null;video.srcObject=null;video.muted=false;
 
@@ -960,7 +991,6 @@ async function toggleRecord(){
     const res=await api('video.upload',{id:uid(),folderId:defFolderId,name},blob,`recording.${ext}`);
 
     await loadData();
-    // 録画したファイルを即座に読み込み
     await loadTarget(res.video,null,false);
     message('録画を保存し読み込みました。「編集開始」で編集できます。');
   }catch(e){
@@ -1062,7 +1092,7 @@ function renderTree(){
   data.folders.filter(f=>!f.parentFolderId).forEach(f=>renderFolder(f,0));
 }
 
-// UIイベント紐付け
+// UIイベント
 $('primary').onclick=()=>{
   if(screenStream||!isEditing){toggleRecord();}
   else{
@@ -1073,7 +1103,7 @@ $('primary').onclick=()=>{
 };
 $('begin').onclick=async()=>{
   if(renderedPlayback){
-    await new Promise((res,rej)=>{
+    await new Promise((res)=>{
       const onMeta=()=>{video.removeEventListener('loadedmetadata',onMeta);res();};
       video.addEventListener('loadedmetadata',onMeta);
       video.src=`index.php?api=v1&action=file.stream&id=${currentVideo.originalFileId}`;
@@ -1087,7 +1117,7 @@ $('save').onclick=saveEdit;
 $('finish').onclick=async()=>{
   if(!await leavePrompt())return;
   if(currentEdit?.renderedFileId){
-    await new Promise((res,rej)=>{
+    await new Promise((res)=>{
       const onMeta=()=>{video.removeEventListener('loadedmetadata',onMeta);res();};
       video.addEventListener('loadedmetadata',onMeta);
       video.src=`index.php?api=v1&action=file.stream&id=${currentEdit.renderedFileId}`;
@@ -1176,7 +1206,6 @@ document.addEventListener('keydown',ev=>{if(ev.key==='Escape'){connectingOwner=n
 window.addEventListener('resize',()=>{commitText();fit();});
 window.addEventListener('beforeunload',ev=>{if(isDirty||screenStream||isBusy){ev.preventDefault();ev.returnValue='';}});
 
-// 再生同期・スキップループ
 let isSkipping=false;
 async function playLoop(){
   if(!isBusy&&isEditing&&!video.paused&&!isSkipping){
