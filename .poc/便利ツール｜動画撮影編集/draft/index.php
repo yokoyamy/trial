@@ -1344,4 +1344,10 @@ async function playLoop(){
     await loadData();
     updateUI();
     requestAnimationFrame(playLoop);
-  }catch(e){
+  }catch(e){ message('初期化エラー: '+e.message);
+  }
+})();
+})();
+</script>
+</body>
+</html>
