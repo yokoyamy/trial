@@ -168,7 +168,6 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
         case 'folder.move':
             $targetId = $payload['id'] ?? '';
             $newParentId = $payload['parentFolderId'] ?? null;
-            // 循環参照チェック
             $chk = $newParentId;
             $isCycle = false;
             while ($chk) {
@@ -364,7 +363,7 @@ body>*:not(#printArea){display:none!important}
   <div id="actions" class="toolbar">
     <button id="primary">録画開始</button>
     <button id="begin" hidden>編集開始</button>
-    <button id="save" hidden>編集結果保存</button>
+    <button id="save" hidden title="現在の編集を元に新しい動画ファイルを書き出して保存します">編集動画を書き出し保存</button>
     <button id="download" hidden>ダウンロード</button>
     <button id="pdf" hidden>PDF出力</button>
     <button id="finish" hidden>編集作業終了</button>
@@ -374,7 +373,7 @@ body>*:not(#printArea){display:none!important}
     <div class="toolbar">
       <strong id="clock">0.0 / 0.0 秒</strong>
       <label>タイムスケール <input id="scale" type="range" min="1" max="10" step="0.1" value="10"></label>
-      <small>右クリック：要素追加／書式／削除</small>
+      <small>編集再生：画面上プレビュー / 保存：ファイル生成</small>
     </div>
     <div id="scroll"><div id="tracks"><div id="playhead"><div id="handle"></div></div></div></div>
   </section>
@@ -426,6 +425,7 @@ let isEditing=false,isDirty=false,isBusy=false,mediaRec=null,screenStream=null;
 let selectedIds=new Set(),connectingOwner=null,editorNode=null,renderedPlayback=false;
 let displayZoom=1.0,recTimer=null,recStart=0;
 let lastTlStart=-1,lastTlSpan=-1,isSkipping=false;
+let renderAbortController=null; // 書き出し中断制御用
 
 const message=msg=>{$('status').textContent=msg;};
 const duration=()=>Number.isFinite(video.duration)?video.duration:0;
@@ -512,9 +512,9 @@ function updateUI(){
     $('primary').textContent='録画開始';
     $('primary').classList.remove('recording');
   }
-  $('primary').disabled=isBusy;
+  $('primary').disabled=isBusy&&!renderAbortController;
   document.querySelectorAll('header button,#actions button,#library button').forEach(b=>{
-    if(b!==$('primary'))b.disabled=isLocked();
+    if(b!==$('primary')&&b!==$('save'))b.disabled=isLocked();
   });
   fit();tracks();paint();
 }
@@ -537,7 +537,7 @@ async function leavePrompt(){
   if(isLocked())return false;
   commitText();
   if(!isDirty)return true;
-  if(confirm('未保存の編集を保存しますか？')){await saveEdit();return true;}
+  if(confirm('未保存の編集を書き出し保存しますか？')){await saveEdit();return true;}
   if(confirm('変更を破棄しますか？')){isDirty=false;return true;}
   return false;
 }
@@ -715,8 +715,6 @@ function bindDrag(ev,onMove){
   window.addEventListener('pointermove',onMove);window.addEventListener('pointerup',onEnd);
 }
 
-// タイムスケール範囲の計算
-// 右(10): 全域（広い・縮小） / 左(1): 拡大表示（狭い・拡大）
 function getRange(){
   const s=+($('scale').value);
   const d=Math.max(duration(),0.1);
@@ -816,7 +814,6 @@ function openElemMenu(ev,item,isTl){
   const items=[];
 
   const addE=type=>{
-    // デフォルトの長さを「約1メモリ分(目盛りの1区間)」に設定
     const r=getRange();
     const defaultLen=Math.max(0.5, Math.min(2.0, r.span / 8));
     const ne={id:uid(),type,start:t,end:type==='F'?t:Math.min(duration(),t+defaultLen)};
@@ -882,7 +879,6 @@ function openFormatMenu(ev,item){
   });
   m.append(pal);
 
-  // 閉じるボタン
   const closeBtn=document.createElement('button');
   closeBtn.textContent='閉じる';
   closeBtn.className='menu-close-btn';
@@ -968,16 +964,36 @@ function getSkipTime(t){
   return Math.min(t,duration());
 }
 
-// 編集動画の保存確定
+// 編集動画の保存確定（中断対応）
 async function saveEdit(){
+  if(renderAbortController){
+    renderAbortController.aborted=true;
+    message('書き出しを中断しています...');
+    return;
+  }
+
   commitText();
   if(!currentVideo||isLocked())return;
-  isBusy=true;updateUI();
+  isBusy=true;
+  renderAbortController={aborted:false};
+  updateUI();
+
+  // 書き出し中はボタン表示を変更
+  $('save').hidden=false;
+  $('save').disabled=false;
+  $('save').textContent='書き出しを中断';
+  $('save').style.background='#f97316';
+  $('save').style.color='#fff';
+
+  const origTime=video.currentTime;
+  const origMuted=video.muted;
+  const origRate=video.playbackRate;
+
   try{
-    message('編集動画を書き出し中...');
+    message('編集内容を動画ファイルに書き出しています... [書き出しを中断] で中止できます');
     const oc=document.createElement('canvas');oc.width=canvas.width;oc.height=canvas.height;
     const octx=oc.getContext('2d');
-    const ot=video.currentTime;
+
     await seek(getSkipTime(0));
     const st=oc.captureStream(30);
     const mime=MediaRecorder.isTypeSupported('video/mp4;codecs=avc1')?'video/mp4':
@@ -986,29 +1002,48 @@ async function saveEdit(){
     const mr=new MediaRecorder(st,{mimeType:mime});
     const chunks=[];
     mr.ondataavailable=e=>{if(e.data&&e.data.size>0)chunks.push(e.data);};
-    const fin=new Promise(res=>mr.onstop=()=>res(new Blob(chunks,{type:mime})));
+
+    const fin=new Promise((resolve,reject)=>{
+      mr.onstop=()=>resolve(new Blob(chunks,{type:mime}));
+      mr.onerror=e=>reject(e.error||new Error('書き出しエラー'));
+    });
 
     mr.start(200);
     video.playbackRate=1;video.muted=false;await video.play();
 
+    let animId=null;
     const loop=async()=>{
+      if(renderAbortController.aborted){
+        cancelAnimationFrame(animId);
+        video.pause();
+        if(mr.state==='recording')mr.stop();
+        return;
+      }
       if(video.paused||video.ended||video.currentTime>=duration()){
-        if(mr.state==='recording')mr.stop();return;
+        cancelAnimationFrame(animId);
+        if(mr.state==='recording')mr.stop();
+        return;
       }
       const nxt=getSkipTime(video.currentTime);
       if(nxt>video.currentTime){
         video.pause();await seek(nxt);
         if(nxt>=duration()){if(mr.state==='recording')mr.stop();return;}
-        await video.play();
+        if(!renderAbortController.aborted)await video.play();
       }
       octx.drawImage(video,0,0,oc.width,oc.height);
       paint(octx,video.currentTime,true);
-      requestAnimationFrame(loop);
+      message(`書き出し中: ${video.currentTime.toFixed(1)}s / ${duration().toFixed(1)}s (中止するには「書き出しを中断」)`);
+      animId=requestAnimationFrame(loop);
     };
-    requestAnimationFrame(loop);
+    animId=requestAnimationFrame(loop);
     const outBlob=await fin;
-    video.pause();await seek(ot);
 
+    if(renderAbortController.aborted){
+      message('書き出しを中断しました');
+      return;
+    }
+
+    message('サーバーへ動画を保存しています...');
     const eid=currentEdit?.id||uid();
     const ext=mime.includes('mp4')?'mp4':'webm';
     const res=await api('edit.save',{
@@ -1020,9 +1055,23 @@ async function saveEdit(){
 
     currentEdit=res.edit;isDirty=false;
     await loadData();
-    message('編集動画を正常に保存しました');
+    message('編集動画の書き出し・保存が完了しました');
+  }catch(e){
+    if(!renderAbortController.aborted){
+      message('書き出しに失敗しました: '+e.message);
+    }
   }finally{
-    isBusy=false;updateUI();
+    renderAbortController=null;
+    video.pause();
+    video.muted=origMuted;
+    video.playbackRate=origRate;
+    await seek(origTime);
+
+    $('save').textContent='編集動画を書き出し保存';
+    $('save').style.background='';
+    $('save').style.color='';
+    isBusy=false;
+    updateUI();
   }
 }
 
@@ -1103,11 +1152,10 @@ async function toggleRecord(){
   }
 }
 
-// 動画一覧ツリー（フォルダ階層・移動対応）
+// 動画一覧ツリー
 function renderTree(){
   const root=$('tree');root.replaceChildren();
 
-  // ルート階層へのドロップ用エリア
   const rootDropZone=document.createElement('div');
   rootDropZone.className='row';
   rootDropZone.style.border='1px dashed #ccd6e3';
@@ -1187,10 +1235,8 @@ function renderTree(){
     };
     root.append(fRow);
 
-    // 子フォルダの再帰描画
     data.folders.filter(cf=>cf.parentFolderId===f.id).forEach(cf=>renderFolder(cf,depth+1));
 
-    // フォルダ直下の動画
     data.videos.filter(v=>v.folderId===f.id).forEach(v=>{
       const vRow=makeRow('video',v.id,'🎬 '+v.name,depth+1,v.createdAt,()=>loadTarget(v,null,false),(ev,span)=>openMenu(ev,[
         ['元動画を再生',()=>loadTarget(v,null,false)],
@@ -1232,7 +1278,6 @@ function renderTree(){
     });
   }
 
-  // 親フォルダを持たないルートフォルダから順に描画
   data.folders.filter(f=>!f.parentFolderId).forEach(f=>renderFolder(f,0));
 }
 
@@ -1263,226 +1308,13 @@ $('begin').onclick=async()=>{
   }
   isEditing=true;video.pause();await seek(0);updateUI();
 };
+
 $('save').onclick=saveEdit;
+
 $('finish').onclick=async()=>{
   if(!await leavePrompt())return;
   if(currentEdit?.renderedFileId){
     await new Promise((res)=>{
       const onData=()=>{video.removeEventListener('loadeddata',onData);res();};
       video.addEventListener('loadeddata',onData);
-      video.src=`index.php?api=v1&action=file.stream&id=${currentEdit.renderedFileId}`;
-      video.load();
-    });
-    renderedPlayback=true;
-  }
-  isEditing=false;updateUI();
-};
-$('download').onclick=()=>{
-  const fid=currentEdit?.renderedFileId||currentVideo.originalFileId;
-  const name=currentVideo.name+(currentEdit?`_${currentEdit.name}`:'');
-  triggerDownload(fid, name);
-};
-$('pdf').onclick=()=>{
-  if(!elements.some(e=>e.type==='F')){message('PDF位置が指定されていません（タイムラインを右クリックして追加）');return;}
-  $('pdfDialog').showModal();
-};
-$('print').onclick=async()=>{
-  $('pdfDialog').close();commitText();video.pause();
-  const ot=video.currentTime,cnt=+document.querySelector('[name=layout]:checked').value;
-  const times=elements.filter(e=>e.type==='F').map(e=>e.time??e.start).sort((a,b)=>a-b);
-  isBusy=true;updateUI();$('printArea').replaceChildren();
-  try{
-    let sheet=null;
-    for(let i=0;i<times.length;i++){
-      await seek(times[i]);
-      const sc=document.createElement('canvas');sc.width=canvas.width;sc.height=canvas.height;
-      const sctx=sc.getContext('2d');
-      sctx.drawImage(video,0,0,sc.width,sc.height);
-      paint(sctx,video.currentTime,true);
-
-      if(i%cnt===0){
-        sheet=document.createElement('div');
-        sheet.className='sheet';
-        $('printArea').append(sheet);
-      }
-      const shot=document.createElement('div'),img=new Image(),lbl=document.createElement('p');
-      shot.className='shot';
-      img.src=sc.toDataURL('image/jpeg',0.9);
-      img.style.maxHeight=cnt===2?'115mm':'245mm';
-      await img.decode();
-      lbl.textContent=`${currentVideo.name} ／ ${times[i].toFixed(1)} 秒`;
-      shot.append(img,lbl);
-      sheet.append(shot);
-    }
-    window.print();
-  }catch(e){
-    message('PDF生成エラー: '+e.message);
-  }finally{
-    await seek(ot);
-    isBusy=false;
-    updateUI();
-  }
-};
-$('cancelPDF').onclick=()=>$('pdfDialog').close();
-
-// タイムライン・ステージの各種イベント
-canvas.oncontextmenu=ev=>openElemMenu(ev,hitElem(getPt(ev)),false);
-$('tracks').oncontextmenu=ev=>openElemMenu(ev,null,true);
-
-$('tracks').onpointerdown=ev=>{
-  if(ev.button===0&&!isLocked()&&!ev.target.closest('.clip')){
-    video.pause();
-    video.currentTime=getTimeAt(ev);
-  }
-};
-
-$('handle').onpointerdown=ev=>{
-  if(isLocked())return;
-  ev.stopPropagation();
-  video.pause();
-  bindDrag(ev,mev=>{
-    video.currentTime=getTimeAt(mev);
-  });
-};
-
-$('scale').oninput=()=>{
-  lastTlSpan=-1; // 強制再描画
-  tracks();
-  paint();
-};
-
-video.onseeked=()=>{
-  tracks();
-  paint();
-};
-video.onplay=video.onpause=video.onended=updateUI;
-video.onerror=()=>message('動画の再生に失敗しました。対応コーデックか確認してください。');
-
-// 画面分割スプリッター（動画領域とタイムラインの比率変更）
-$('split').onpointerdown=ev=>{
-  ev.preventDefault();
-  const initY=ev.clientY;
-  const initTlH=$('timeline').offsetHeight;
-  const onMove=mev=>{
-    const deltaY=initY-mev.clientY;
-    const newH=clamp(initTlH+deltaY,100,window.innerHeight*0.6);
-    $('timeline').style.height=newH+'px';
-    fit();
-  };
-  const onUp=()=>{
-    window.removeEventListener('pointermove',onMove);
-    window.removeEventListener('pointerup',onUp);
-  };
-  window.addEventListener('pointermove',onMove);
-  window.addEventListener('pointerup',onUp);
-};
-
-// 表示倍率セレクト
-$('viewZoom').onchange=()=>{
-  displayZoom=+($('viewZoom').value);
-  fit();
-};
-
-// ヘッダー・ライブラリボタン
-$('list').onclick=()=>{$('library').hidden=$('veil').hidden=false;};
-$('closeList').onclick=$('veil').onclick=()=>{$('library').hidden=$('veil').hidden=true;};
-$('upload').onclick=$('upload2').onclick=()=>$('file').click();
-
-$('file').onchange=async ev=>{
-  const f=ev.target.files[0];
-  ev.target.value='';
-  if(!f||!await leavePrompt())return;
-  isBusy=true;updateUI();
-  try{
-    message(`アップロード中 (${(f.size/1024/1024).toFixed(2)} MB)...`);
-    const defFolderId=data.folders[0]?.id;
-    const name=f.name.replace(/\.[^.]+$/,'');
-    const res=await api('video.upload',{id:uid(),folderId:defFolderId,name},f,f.name);
-    await loadData();
-    await loadTarget(res.video,null,false);
-    message('アップロード完了。「編集開始」で編集できます。');
-  }catch(e){
-    message(e.message);
-  }finally{
-    isBusy=false;updateUI();
-  }
-};
-
-$('new').onclick=async()=>{
-  if(await leavePrompt()){
-    clearState();
-    $('library').hidden=$('veil').hidden=true;
-    updateUI();
-    message('録画開始を押して画面共有を開始してください');
-  }
-};
-
-$('folder').onclick=async()=>{
-  const name=prompt('フォルダ名を入力してください:','新規フォルダ');
-  if(name){
-    await api('folder.create',{name:name.trim(),parentFolderId:null});
-    await loadData();
-  }
-};
-
-document.addEventListener('pointerdown',ev=>{
-  if(!ev.target.closest('#menu'))$('menu').hidden=true;
-});
-document.addEventListener('keydown',ev=>{
-  if(ev.key==='Escape'){
-    connectingOwner=null;
-    $('menu').hidden=true;
-  }
-});
-window.addEventListener('resize',()=>{commitText();fit();});
-window.addEventListener('beforeunload',ev=>{
-  if(isDirty||screenStream||isBusy){
-    ev.preventDefault();
-    ev.returnValue='';
-  }
-});
-
-// 再生ループ（スキップ区間のジャンプ制御および描画更新）
-async function playLoop(){
-  if(!isBusy&&isEditing&&!video.paused&&!isSkipping){
-    const next=getSkipTime(video.currentTime);
-    if(next>video.currentTime){
-      isSkipping=true;
-      try{
-        await seek(next);
-        if(next<duration()&&!video.paused)await video.play();
-      }catch(err){
-        console.error(err);
-      }finally{
-        isSkipping=false;
-      }
-    }
-  }
-  paint();
-  if(isEditing){
-    const r=getRange();
-    if(Math.abs(r.start-lastTlStart)>0.05||Math.abs(r.span-lastTlSpan)>0.01){
-      lastTlStart=r.start;
-      lastTlSpan=r.span;
-      tracks();
-    }else{
-      updateClock();
-    }
-  }
-  requestAnimationFrame(playLoop);
-}
-
-// 初期起動
-(async()=>{
-  try{
-    await loadData();
-    updateUI();
-    requestAnimationFrame(playLoop);
-  }catch(e){
-    message('初期化エラー: '+e.message);
-  }
-})();
-})();
-</script>
-</body>
-</html>
+      video.src=`index.php?api=v1&action=file.stream&id=${currentEdit.
