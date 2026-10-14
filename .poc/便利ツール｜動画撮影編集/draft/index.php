@@ -1295,4 +1295,194 @@ $('print').onclick=async()=>{
     let sheet=null;
     for(let i=0;i<times.length;i++){
       await seek(times[i]);
-      const sc=document.createElement('canvas');sc.width=canvas.
+      const sc=document.createElement('canvas');sc.width=canvas.width;sc.height=canvas.height;
+      const sctx=sc.getContext('2d');
+      sctx.drawImage(video,0,0,sc.width,sc.height);
+      paint(sctx,video.currentTime,true);
+
+      if(i%cnt===0){
+        sheet=document.createElement('div');
+        sheet.className='sheet';
+        $('printArea').append(sheet);
+      }
+      const shot=document.createElement('div'),img=new Image(),lbl=document.createElement('p');
+      shot.className='shot';
+      img.src=sc.toDataURL('image/jpeg',0.9);
+      img.style.maxHeight=cnt===2?'115mm':'245mm';
+      await img.decode();
+      lbl.textContent=`${currentVideo.name} ／ ${times[i].toFixed(1)} 秒`;
+      shot.append(img,lbl);
+      sheet.append(shot);
+    }
+    window.print();
+  }catch(e){
+    message('PDF生成エラー: '+e.message);
+  }finally{
+    await seek(ot);
+    isBusy=false;
+    updateUI();
+  }
+};
+$('cancelPDF').onclick=()=>$('pdfDialog').close();
+
+// タイムライン・ステージの各種イベント
+canvas.oncontextmenu=ev=>openElemMenu(ev,hitElem(getPt(ev)),false);
+$('tracks').oncontextmenu=ev=>openElemMenu(ev,null,true);
+
+$('tracks').onpointerdown=ev=>{
+  if(ev.button===0&&!isLocked()&&!ev.target.closest('.clip')){
+    video.pause();
+    video.currentTime=getTimeAt(ev);
+  }
+};
+
+$('handle').onpointerdown=ev=>{
+  if(isLocked())return;
+  ev.stopPropagation();
+  video.pause();
+  bindDrag(ev,mev=>{
+    video.currentTime=getTimeAt(mev);
+  });
+};
+
+$('scale').oninput=()=>{
+  lastTlSpan=-1; // 強制再描画
+  tracks();
+  paint();
+};
+
+video.onseeked=()=>{
+  tracks();
+  paint();
+};
+video.onplay=video.onpause=video.onended=updateUI;
+video.onerror=()=>message('動画の再生に失敗しました。対応コーデックか確認してください。');
+
+// 画面分割スプリッター（動画領域とタイムラインの比率変更）
+$('split').onpointerdown=ev=>{
+  ev.preventDefault();
+  const initY=ev.clientY;
+  const initTlH=$('timeline').offsetHeight;
+  const onMove=mev=>{
+    const deltaY=initY-mev.clientY;
+    const newH=clamp(initTlH+deltaY,100,window.innerHeight*0.6);
+    $('timeline').style.height=newH+'px';
+    fit();
+  };
+  const onUp=()=>{
+    window.removeEventListener('pointermove',onMove);
+    window.removeEventListener('pointerup',onUp);
+  };
+  window.addEventListener('pointermove',onMove);
+  window.addEventListener('pointerup',onUp);
+};
+
+// 表示倍率セレクト
+$('viewZoom').onchange=()=>{
+  displayZoom=+($('viewZoom').value);
+  fit();
+};
+
+// ヘッダー・ライブラリボタン
+$('list').onclick=()=>{$('library').hidden=$('veil').hidden=false;};
+$('closeList').onclick=$('veil').onclick=()=>{$('library').hidden=$('veil').hidden=true;};
+$('upload').onclick=$('upload2').onclick=()=>$('file').click();
+
+$('file').onchange=async ev=>{
+  const f=ev.target.files[0];
+  ev.target.value='';
+  if(!f||!await leavePrompt())return;
+  isBusy=true;updateUI();
+  try{
+    message(`アップロード中 (${(f.size/1024/1024).toFixed(2)} MB)...`);
+    const defFolderId=data.folders[0]?.id;
+    const name=f.name.replace(/\.[^.]+$/,'');
+    const res=await api('video.upload',{id:uid(),folderId:defFolderId,name},f,f.name);
+    await loadData();
+    await loadTarget(res.video,null,false);
+    message('アップロード完了。「編集開始」で編集できます。');
+  }catch(e){
+    message(e.message);
+  }finally{
+    isBusy=false;updateUI();
+  }
+};
+
+$('new').onclick=async()=>{
+  if(await leavePrompt()){
+    clearState();
+    $('library').hidden=$('veil').hidden=true;
+    updateUI();
+    message('録画開始を押して画面共有を開始してください');
+  }
+};
+
+$('folder').onclick=async()=>{
+  const name=prompt('フォルダ名を入力してください:','新規フォルダ');
+  if(name){
+    await api('folder.create',{name:name.trim(),parentFolderId:null});
+    await loadData();
+  }
+};
+
+document.addEventListener('pointerdown',ev=>{
+  if(!ev.target.closest('#menu'))$('menu').hidden=true;
+});
+document.addEventListener('keydown',ev=>{
+  if(ev.key==='Escape'){
+    connectingOwner=null;
+    $('menu').hidden=true;
+  }
+});
+window.addEventListener('resize',()=>{commitText();fit();});
+window.addEventListener('beforeunload',ev=>{
+  if(isDirty||screenStream||isBusy){
+    ev.preventDefault();
+    ev.returnValue='';
+  }
+});
+
+// 再生ループ（スキップ区間のジャンプ制御および描画更新）
+async function playLoop(){
+  if(!isBusy&&isEditing&&!video.paused&&!isSkipping){
+    const next=getSkipTime(video.currentTime);
+    if(next>video.currentTime){
+      isSkipping=true;
+      try{
+        await seek(next);
+        if(next<duration()&&!video.paused)await video.play();
+      }catch(err){
+        console.error(err);
+      }finally{
+        isSkipping=false;
+      }
+    }
+  }
+  paint();
+  if(isEditing){
+    const r=getRange();
+    if(Math.abs(r.start-lastTlStart)>0.05||Math.abs(r.span-lastTlSpan)>0.01){
+      lastTlStart=r.start;
+      lastTlSpan=r.span;
+      tracks();
+    }else{
+      updateClock();
+    }
+  }
+  requestAnimationFrame(playLoop);
+}
+
+// 初期起動
+(async()=>{
+  try{
+    await loadData();
+    updateUI();
+    requestAnimationFrame(playLoop);
+  }catch(e){
+    message('初期化エラー: '+e.message);
+  }
+})();
+})();
+</script>
+</body>
+</html>
