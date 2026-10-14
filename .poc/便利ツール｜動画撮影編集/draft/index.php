@@ -3,7 +3,6 @@ declare(strict_types=1);
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
 
-// アップロード・メモリ制限を動的に拡張
 @ini_set('upload_max_filesize', '512M');
 @ini_set('post_max_size', '512M');
 @ini_set('memory_limit', '512M');
@@ -51,7 +50,6 @@ if (!file_exists($metaFile)) {
 if (isset($_GET['api']) && $_GET['api'] === 'v1') {
     $action = $_GET['action'] ?? '';
 
-    // ストリーミング・ダウンロード
     if ($action === 'file.stream' || $action === 'file.download') {
         $fid = $_GET['id'] ?? '';
         $raw = @file_get_contents($metaFile);
@@ -104,7 +102,6 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
 
     header('Content-Type: application/json; charset=UTF-8');
 
-    // 排他制御付き読み込み
     $lockFp = fopen($metaFile, 'c+');
     if ($lockFp) flock($lockFp, LOCK_EX);
 
@@ -374,7 +371,7 @@ body>*:not(#printArea){display:none!important}
 <main>
   <section id="stage">
     <div id="empty">録画開始で共有画面を選択してください。<br>一覧から既存動画を開けます</div>
-    <div id="surface" hidden><video id="video" playsinline></video><canvas id="overlay"></canvas></div>
+    <div id="surface" hidden><video id="video" playsinline preload="auto"></video><canvas id="overlay"></canvas></div>
   </section>
   <div id="split"></div>
   <div id="actions" class="toolbar">
@@ -443,6 +440,7 @@ let selectedIds=new Set(),connectingOwner=null,editorNode=null,renderedPlayback=
 let displayZoom=1.0,recTimer=null,recStart=0;
 let lastTlStart=-1,lastTlSpan=-1,isSkipping=false;
 let renderAbortController=null;
+let localBlobUrl=null;
 
 const message=msg=>{$('status').textContent=msg;};
 const duration=()=>Number.isFinite(video.duration)?video.duration:0;
@@ -469,7 +467,6 @@ function triggerDownload(fid, baseName){
 }
 $('closeDlDialog').onclick=()=>$('dlDialog').close();
 
-// 安全なAPI通信ラッパー
 async function api(act,payload={},blob=null,fn='file.mp4'){
   const rid=uid();
   let res;
@@ -550,25 +547,31 @@ function updateUI(){
 
 function clearState(){
   commitText();video.pause();video.removeAttribute('src');video.load();
+  if(localBlobUrl){ URL.revokeObjectURL(localBlobUrl); localBlobUrl=null; }
   currentVideo=null;currentEdit=null;elements=[];selectedIds.clear();
   isEditing=false;isDirty=false;renderedPlayback=false;connectingOwner=null;
 }
 
+// 先頭フレームを確実にレンダリングするための堅牢なシーク
 function seek(t){
   return new Promise(res=>{
+    const target = clamp(t, 0, duration());
     let tid=null;
     const done=()=>{
       clearTimeout(tid);
       video.removeEventListener('seeked',done);
+      fit();
+      tracks();
+      paint();
       res();
     };
     tid=setTimeout(done, 1500);
     video.addEventListener('seeked',done);
-    video.currentTime=clamp(t,0,duration());
+    video.currentTime = target;
   });
 }
 
-// 編集中の離脱確認（保存せずに破棄して続行可能）
+// 編集の保存確認（破棄して続行可能）
 async function leavePrompt(){
   if(isLocked())return false;
   commitText();
@@ -578,9 +581,39 @@ async function leavePrompt(){
     const ok=await saveEdit();
     return ok;
   }
-  // キャンセル時は変更を破棄して続行
   isDirty=false;
   return true;
+}
+
+// ソースをセットして確実に先頭フレームを描画
+async function setVideoSrcAndSeekZero(srcUrl){
+  video.pause();
+  await new Promise((res,rej)=>{
+    let tid=null;
+    const onData=()=>{
+      clearTimeout(tid);
+      video.removeEventListener('loadeddata',onData);
+      video.removeEventListener('error',onErr);
+      res();
+    };
+    const onErr=()=>{
+      clearTimeout(tid);
+      video.removeEventListener('loadeddata',onData);
+      video.removeEventListener('error',onErr);
+      rej(new Error('動画の読み込みに失敗しました'));
+    };
+    tid=setTimeout(onData, 4000);
+    video.addEventListener('loadeddata',onData);
+    video.addEventListener('error',onErr);
+    video.src=srcUrl;
+    video.load();
+  });
+  // 先頭フレームを描画させるためごくわずかに時間を進めてから0へシーク
+  video.currentTime = 0.001;
+  await new Promise(r=>setTimeout(r, 60));
+  await seek(0);
+  fit();
+  paint();
 }
 
 async function loadTarget(vidObj,editObj=null,asEdit=false){
@@ -596,30 +629,10 @@ async function loadTarget(vidObj,editObj=null,asEdit=false){
     const targetFid=(!asEdit&&editObj?.renderedFileId)?editObj.renderedFileId:vidObj.originalFileId;
     renderedPlayback=(targetFid===editObj?.renderedFileId);
 
-    await new Promise((res,rej)=>{
-      let tid=null;
-      const onData=()=>{
-        clearTimeout(tid);
-        video.removeEventListener('loadeddata',onData);
-        video.removeEventListener('error',onErr);
-        res();
-      };
-      const onErr=()=>{
-        clearTimeout(tid);
-        video.removeEventListener('loadeddata',onData);
-        video.removeEventListener('error',onErr);
-        rej(new Error('動画の読み込みに失敗しました'));
-      };
-      tid=setTimeout(onData, 4000);
-      video.addEventListener('loadeddata',onData);
-      video.addEventListener('error',onErr);
-      video.src=`index.php?api=v1&action=file.stream&id=${targetFid}`;
-      video.load();
-    });
+    await setVideoSrcAndSeekZero(`index.php?api=v1&action=file.stream&id=${targetFid}`);
 
-    await seek(0);
     $('library').hidden=$('veil').hidden=true;
-    message(`${vidObj.name} ${editObj?'/ '+editObj.name:'(元動画)'} を読み込みました`);
+    message(`${vidObj.name} ${editObj?'/ '+editObj.name:'(元動画)'} を読み込みました（先頭を表示中）`);
   }catch(e){
     message(e.message);
   }finally{
@@ -1121,7 +1134,7 @@ async function saveEdit(){
   }
 }
 
-// 画面録画
+// 画面録画（録画終了直後にローカルBlobで先頭フレームを即時確実に描画）
 async function toggleRecord(){
   if(mediaRec&&mediaRec.state==='recording'){
     message('録画を停止しています...');
@@ -1175,27 +1188,34 @@ async function toggleRecord(){
     const {blob,ext}=await doneProm;
     clearInterval(recTimer);recTimer=null;
 
+    // ストリームの停止
     screenStream.getTracks().forEach(t=>t.stop());
     screenStream=null;mediaRec=null;video.srcObject=null;video.muted=false;
 
-    isBusy=true;updateUI();
-    message(`動画データを送信しています (${(blob.size/1024/1024).toFixed(2)} MB)...`);
+    // 1. 録画Blobから即座にローカルURLを生成し、先頭フレームを画面に描画・表示
+    if(localBlobUrl)URL.revokeObjectURL(localBlobUrl);
+    localBlobUrl = URL.createObjectURL(blob);
+    await setVideoSrcAndSeekZero(localBlobUrl);
+    updateUI();
 
+    // 2. 先頭フレームが表示された状態でバックグラウンドでサーバー保存
+    message(`録画動画を保存中 (${(blob.size/1024/1024).toFixed(2)} MB)...`);
     const defFolderId=data.folders[0]?.id;
     const name=`録画 ${new Date().toLocaleString('ja-JP')}`;
     const res=await api('video.upload',{id:uid(),folderId:defFolderId,name},blob,`recording.${ext}`);
 
+    currentVideo=res.video;
+    currentEdit=null;
+    isEditing=false;
     await loadData();
-    // 録画完了後、先頭フレームを表示して待機
-    await loadTarget(res.video,null,false);
-    await seek(0);
+    updateUI();
     message('録画を保存しました。先頭を表示しています。「編集開始」で編集できます。');
   }catch(e){
     clearInterval(recTimer);recTimer=null;
     message('録画が中断または失敗しました: '+e.message);
   }finally{
     if(screenStream)screenStream.getTracks().forEach(t=>t.stop());
-    screenStream=null;mediaRec=null;video.srcObject=null;video.muted=false;
+    screenStream=null;mediaRec=null;video.muted=false;
     isBusy=false;
     updateUI();
   }
@@ -1303,325 +1323,4 @@ function renderTree(){
           if(confirm(`動画「${v.name}」を削除しますか？`)){await api('video.delete',{id:v.id});await loadData();}
         }]
       ]),true);
-      root.append(vRow);
-
-      const origRow=makeRow('file',v.originalFileId,' └ 📹 元動画',depth+2,v.createdAt,()=>loadTarget(v,null,false),(ev)=>openMenu(ev,[
-        ['ダウンロード',()=>triggerDownload(v.originalFileId, v.name+'_元動画')],
-        ['PDF出力',async()=>{
-          await loadTarget(v,null,true);
-          openPdfDialog();
-        }]
-      ]));
-      root.append(origRow);
-
-      data.edits.filter(ed=>ed.videoId===v.id).forEach(ed=>{
-        const edRow=makeRow('edit',ed.id,' └ ✂ '+ed.name,depth+2,ed.createdAt,()=>loadTarget(v,ed,true),(ev,span)=>openMenu(ev,[
-          ['編集を再開',()=>loadTarget(v,ed,true)],
-          ['保存済み編集動画を再生',async()=>{
-            await loadTarget(v,ed,false);
-            if(video.paused)await video.play();
-          }],
-          ['名前変更',()=>{
-            span.contentEditable='true';span.focus();
-            span.onblur=async()=>{span.contentEditable='false';await api('edit.rename',{id:ed.id,name:span.textContent.trim()||ed.name});await loadData();};
-          }],
-          ['ダウンロード',()=>triggerDownload(ed.renderedFileId||v.originalFileId, v.name+'_'+ed.name)],
-          ['PDF出力',async()=>{
-            await loadTarget(v,ed,true);
-            openPdfDialog();
-          }],
-          ['削除',async()=>{
-           if(confirm(`編集「${ed.name}」を削除しますか？`)){await api('edit.delete',{id:ed.id});await loadData();}
-          }]
-        ]));
-        root.append(edRow);
-      });
-    });
-  }
-
-  data.folders.filter(f=>!f.parentFolderId).forEach(f=>renderFolder(f,0));
-}
-
-// ---------------- 操作イベント割り当て ----------------
-$('primary').onclick=async()=>{
-  if(screenStream||!isEditing){
-    await toggleRecord();
-  }else{
-    commitText();
-    if(video.paused){
-      if(video.ended)await seek(0);
-      video.play();
-    }else{
-      video.pause();
-    }
-    updateUI();
-  }
-};
-
-$('begin').onclick=async()=>{
-  if(!currentVideo)return;
-  if(renderedPlayback){
-    await new Promise(res=>{
-      const onData=()=>{video.removeEventListener('loadeddata',onData);res();};
-      video.addEventListener('loadeddata',onData);
-      video.src=`index.php?api=v1&action=file.stream&id=${currentVideo.originalFileId}`;
-      video.load();
-    });
-    renderedPlayback=false;
-  }
-  isEditing=true;video.pause();
-  await seek(0);updateUI();
-  message('編集モードを開始しました。右クリックで各要素を追加できます。');
-};
-
-$('save').onclick=saveEdit;
-
-// 編集作業終了：保存せずに破棄して終了可能
-$('finish').onclick=async()=>{
-  if(!await leavePrompt())return;
-  if(currentEdit?.renderedFileId){
-    await new Promise(res=>{
-      const onData=()=>{video.removeEventListener('loadeddata',onData);res();};
-      video.addEventListener('loadeddata',onData);
-      video.src=`index.php?api=v1&action=file.stream&id=${currentEdit.renderedFileId}`;
-      video.load();
-    });
-    renderedPlayback=true;
-  }
-  isEditing=false;
-  await seek(0);
-  updateUI();
-  message('編集作業を終了しました（先頭を表示中）');
-};
-
-$('download').onclick=async()=>{
-  if(!currentVideo)return;
-  if(isEditing && (isDirty || !currentEdit?.renderedFileId)){
-    if(confirm('最新の編集内容を動画に書き出して保存後、ダウンロードしますか？\n（キャンセルを押すと直前の保存済み動画または元動画をダウンロードします）')){
-      const ok=await saveEdit();
-      if(!ok)return;
-    }
-  }
-  const fid=currentEdit?.renderedFileId||currentVideo.originalFileId;
-  const name=currentVideo.name+(currentEdit?'_'+currentEdit.name:'');
-  triggerDownload(fid,name);
-};
-
-function openPdfDialog(){
-  if(!elements.some(e=>e.type==='F')){
-    message('タイムライン右クリックから「PDF位置追加」を行ってください');
-    return;
-  }
-  $('pdfDialog').showModal();
-}
-
-$('pdf').onclick=openPdfDialog;
-
-// PDF印刷実行（画像下のテキストラベル出力を完全除外）
-$('print').onclick=async()=>{
-  $('pdfDialog').close();
-  commitText();
-  video.pause();
-  const ot=video.currentTime;
-  const cnt=+document.querySelector('input[name="layout"]:checked').value;
-  const times=elements.filter(e=>e.type==='F').map(e=>e.time??e.start).sort((a,b)=>a-b);
-
-  isBusy=true;updateUI();
-  $('printArea').replaceChildren();
-
-  try{
-    let sheet=null;
-    for(let i=0;i<times.length;i++){
-      await seek(times[i]);
-      const sc=document.createElement('canvas');
-      sc.width=canvas.width;
-      sc.height=canvas.height;
-      const sctx=sc.getContext('2d');
-      sctx.drawImage(video,0,0,sc.width,sc.height);
-      paint(sctx,video.currentTime,true);
-
-      if(i%cnt===0){
-        sheet=document.createElement('div');
-        sheet.className='sheet';
-        $('printArea').append(sheet);
-      }
-      const shot=document.createElement('div'),img=new Image();
-      shot.className='shot';
-      img.src=sc.toDataURL('image/jpeg',0.9);
-      img.style.maxHeight=cnt===2?'125mm':'260mm';
-      await img.decode();
-      // テキストラベルは追加せず画像のみ配置
-      shot.append(img);
-      sheet.append(shot);
-    }
-    window.print();
-  }catch(e){
-    message('PDF生成エラー: '+e.message);
-  }finally{
-    await seek(ot);
-    isBusy=false;
-    updateUI();
-  }
-};
-$('cancelPDF').onclick=()=>$('pdfDialog').close();
-
-canvas.oncontextmenu=ev=>openElemMenu(ev,hitElem(getPt(ev)),false);
-$('tracks').oncontextmenu=ev=>openElemMenu(ev,null,true);
-
-$('tracks').onpointerdown=ev=>{
-  if(ev.button===0&&!isLocked()&&!ev.target.closest('.clip')){
-    video.pause();
-    video.currentTime=getTimeAt(ev);
-  }
-};
-
-$('handle').onpointerdown=ev=>{
-  if(isLocked())return;
-  ev.stopPropagation();
-  video.pause();
-  bindDrag(ev,mev=>{
-    video.currentTime=getTimeAt(mev);
-  });
-};
-
-$('scale').oninput=()=>{
-  lastTlSpan=-1;
-  tracks();
-  paint();
-};
-
-video.onseeked=()=>{
-  tracks();
-  paint();
-};
-video.onplay=video.onpause=video.onended=updateUI;
-video.onerror=()=>message('動画の再生に失敗しました。対応コーデックか確認してください。');
-
-// 画面分割スプリッター（高さ変更）
-$('split').onpointerdown=ev=>{
-  ev.preventDefault();
-  const initY=ev.clientY;
-  const initTlH=$('timeline').offsetHeight;
-  const onMove=mev=>{
-    const deltaY=initY-mev.clientY;
-    const newH=clamp(initTlH+deltaY,100,window.innerHeight*0.6);
-    $('timeline').style.height=newH+'px';
-    fit();
-  };
-  const onEnd=()=>{
-    window.removeEventListener('pointermove',onMove);
-    window.removeEventListener('pointerup',onEnd);
-  };
-  window.addEventListener('pointermove',onMove);
-  window.addEventListener('pointerup',onEnd);
-};
-
-$('viewZoom').oninput=()=>{
-  displayZoom=+($('viewZoom').value);
-  $('zoomVal').textContent=Math.round(displayZoom*100)+'%';
-  fit();
-};
-
-$('list').onclick=()=>{$('library').hidden=$('veil').hidden=false;};
-$('closeList').onclick=$('veil').onclick=()=>{$('library').hidden=$('veil').hidden=true;};
-$('upload').onclick=$('upload2').onclick=()=>$('file').click();
-
-$('file').onchange=async ev=>{
-  const f=ev.target.files[0];
-  ev.target.value='';
-  if(!f||!await leavePrompt())return;
-  isBusy=true;updateUI();
-  try{
-    message(`アップロード中 (${(f.size/1024/1024).toFixed(2)} MB)...`);
-    const defFolderId=data.folders[0]?.id;
-    const name=f.name.replace(/\.[^.]+$/,'');
-    const res=await api('video.upload',{id:uid(),folderId:defFolderId,name},f,f.name);
-    await loadData();
-    await loadTarget(res.video,null,false);
-    await seek(0);
-    message('アップロード完了。先頭を表示しています。「編集開始」で編集できます。');
-  }catch(e){
-    message(e.message);
-  }finally{
-    isBusy=false;updateUI();
-  }
-};
-
-$('new').onclick=async()=>{
-  if(await leavePrompt()){
-    clearState();
-    $('library').hidden=$('veil').hidden=true;
-    updateUI();
-    message('録画開始を押して画面共有を開始してください');
-  }
-};
-
-$('folder').onclick=async()=>{
-  const name=prompt('フォルダ名を入力してください:','新規フォルダ');
-  if(name){
-    await api('folder.create',{name:name.trim(),parentFolderId:null});
-    await loadData();
-  }
-};
-
-document.addEventListener('pointerdown',ev=>{
-  if(!ev.target.closest('#menu'))$('menu').hidden=true;
-});
-document.addEventListener('keydown',ev=>{
-  if(ev.key==='Escape'){
-    connectingOwner=null;
-    $('menu').hidden=true;
-  }
-});
-window.addEventListener('resize',()=>{commitText();fit();});
-window.addEventListener('beforeunload',ev=>{
-  if(isDirty||screenStream||isBusy){
-    ev.preventDefault();
-    ev.returnValue='';
-  }
-});
-
-// 再生ループ（スキップ区間のジャンプ制御およびタイムライン・描画更新）
-async function playLoop(){
-  if(!isBusy&&isEditing&&!video.paused&&!isSkipping){
-    const next=getSkipTime(video.currentTime);
-    if(next>video.currentTime){
-      isSkipping=true;
-      try{
-        await seek(next);
-        if(next<duration()&&!video.paused)await video.play();
-      }catch(err){
-        console.error(err);
-      }finally{
-        isSkipping=false;
-      }
-    }
-  }
-  paint();
-  if(isEditing){
-    const r=getRange();
-    if(Math.abs(r.start-lastTlStart)>0.05||Math.abs(r.span-lastTlSpan)>0.01){
-      lastTlStart=r.start;
-      lastTlSpan=r.span;
-      tracks();
-    }else{
-      updateClock();
-    }
-  }
-  requestAnimationFrame(playLoop);
-}
-
-// アプリ起動処理
-(async()=>{
-  try{
-    await loadData();
-    updateUI();
-    requestAnimationFrame(playLoop);
-  }catch(e){
-    message('初期化エラー: '+e.message);
-  }
-})();
-})();
-</script>
-</body>
-</html>
+      root.append(
