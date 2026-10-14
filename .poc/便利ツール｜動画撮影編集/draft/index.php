@@ -30,7 +30,7 @@ function getInitialMeta(): array {
     $now = gmdate('Y-m-d\TH:i:s\Z');
     return [
         'schemaVersion' => 1,
-        'folders' => [['id' => uuid(), 'parentFolderId' => null, 'name' => 'デフォルトフォルダ', 'createdAt' => $now, 'updatedAt' => $now]],
+        'folders' => [['id' => uuid(), 'parentFolderId' => null, 'name' => 'デフォルト', 'createdAt' => $now, 'updatedAt' => $now]],
         'videos' => [],
         'edits' => [],
         'files' => []
@@ -94,7 +94,6 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
     // JSON API
     header('Content-Type: application/json; charset=UTF-8');
     
-    // 安全な排他ロック（ファイルを再生成せず直接更新）
     $lockFp = fopen($metaFile, 'c+');
     if ($lockFp) flock($lockFp, LOCK_EX);
 
@@ -297,7 +296,7 @@ video{display:block;width:100%;height:100%}
 #library{position:fixed;inset:0 auto 0 0;width:min(440px,100vw);background:#fff;z-index:11;display:flex;flex-direction:column;box-shadow:3px 0 15px #0003}
 #library .toolbar{padding:6px;border-bottom:1px solid #ccd6e3}
 #tree{flex:1;overflow:auto;padding:6px}
-.row{display:flex;align-items:center;gap:5px;min-height:26px;padding:2px 4px;border-radius:2px}
+.row{display:flex;align-items:center;gap:5px;min-height:26px;padding:2px 4px;border-radius:2px;user-select:none}
 .row:hover{background:#edf4ff}
 .row.drop{background:#e0ecff;outline:1px dashed #2563eb}
 .name{flex:1;cursor:pointer;overflow-wrap:anywhere}
@@ -441,7 +440,7 @@ function fit(){
 }
 
 function updateUI(){
-  const hasV=!!video.src;
+  const hasV=!!currentVideo;
   $('surface').hidden=!hasV;$('empty').hidden=hasV;
   $('timeline').hidden=!isEditing;
   $('begin').hidden=!currentVideo||isEditing||!!screenStream;
@@ -499,14 +498,23 @@ async function loadTarget(vidObj,editObj=null,asEdit=false){
     renderedPlayback=(targetFid===editObj?.renderedFileId);
 
     await new Promise((res,rej)=>{
-      const onMeta=()=>{video.removeEventListener('loadedmetadata',onMeta);video.removeEventListener('error',onErr);res();};
-      const onErr=()=>{video.removeEventListener('loadedmetadata',onMeta);video.removeEventListener('error',onErr);rej(new Error('動画の読み込みに失敗しました'));};
-      video.addEventListener('loadedmetadata',onMeta);
+      const onData=()=>{
+        video.removeEventListener('loadeddata',onData);
+        video.removeEventListener('error',onErr);
+        res();
+      };
+      const onErr=()=>{
+        video.removeEventListener('loadeddata',onData);
+        video.removeEventListener('error',onErr);
+        rej(new Error('動画の読み込みに失敗しました'));
+      };
+      video.addEventListener('loadeddata',onData);
       video.addEventListener('error',onErr);
       video.src=`index.php?api=v1&action=file.stream&id=${targetFid}`;
       video.load();
     });
 
+    await seek(0);
     $('library').hidden=$('veil').hidden=true;
     message(`${vidObj.name} ${editObj?'/ '+editObj.name:'(元動画)'} を読み込みました`);
   }catch(e){
@@ -1003,13 +1011,13 @@ async function toggleRecord(){
   }
 }
 
-// 動画一覧ツリー
+// 動画一覧ツリー（business_ui.md 3.3 準拠）
 function renderTree(){
   const root=$('tree');root.replaceChildren();
 
   function makeRow(type,id,lbl,depth,timeText='',onClick=null,onMenu=null,canDrag=false){
     const row=document.createElement('div');
-    row.className='row';row.style.marginLeft=(depth*14)+'px';
+    row.className='row';row.style.paddingLeft=(depth*14+4)+'px';
     row.setAttribute('data-entity-type',type);row.setAttribute('data-entity-id',id);
     const span=document.createElement('span');span.className='name';span.textContent=lbl;
     if(onClick)span.onclick=()=>{if(!span.isContentEditable)onClick();};
@@ -1049,8 +1057,10 @@ function renderTree(){
     };
     root.append(fRow);
 
+    // 子フォルダのレンダリング
     data.folders.filter(cf=>cf.parentFolderId===f.id).forEach(cf=>renderFolder(cf,depth+1));
 
+    // フォルダ配下の動画のレンダリング
     data.videos.filter(v=>v.folderId===f.id).forEach(v=>{
       const vRow=makeRow('video',v.id,'🎬 '+v.name,depth+1,v.createdAt,()=>loadTarget(v,null,false),(ev,span)=>openMenu(ev,[
         ['元動画を再生',()=>loadTarget(v,null,false)],
@@ -1063,11 +1073,13 @@ function renderTree(){
       ]),true);
       root.append(vRow);
 
+      // 元動画
       const origRow=makeRow('file',v.originalFileId,' └ 📹 元動画',depth+2,v.createdAt,()=>loadTarget(v,null,false),(ev)=>openMenu(ev,[
         ['ダウンロード',()=>{window.location.href=`index.php?api=v1&action=file.download&id=${v.originalFileId}`;}]
       ]));
       root.append(origRow);
 
+      // 編集動画
       data.edits.filter(ed=>ed.videoId===v.id).forEach(ed=>{
         const edRow=makeRow('edit',ed.id,' └ ✂ '+ed.name,depth+2,ed.createdAt,()=>loadTarget(v,ed,true),(ev,span)=>openMenu(ev,[
           ['編集を再開',()=>loadTarget(v,ed,true)],
@@ -1104,8 +1116,8 @@ $('primary').onclick=()=>{
 $('begin').onclick=async()=>{
   if(renderedPlayback){
     await new Promise((res)=>{
-      const onMeta=()=>{video.removeEventListener('loadedmetadata',onMeta);res();};
-      video.addEventListener('loadedmetadata',onMeta);
+      const onData=()=>{video.removeEventListener('loadeddata',onData);res();};
+      video.addEventListener('loadeddata',onData);
       video.src=`index.php?api=v1&action=file.stream&id=${currentVideo.originalFileId}`;
       video.load();
     });
@@ -1118,8 +1130,8 @@ $('finish').onclick=async()=>{
   if(!await leavePrompt())return;
   if(currentEdit?.renderedFileId){
     await new Promise((res)=>{
-      const onMeta=()=>{video.removeEventListener('loadedmetadata',onMeta);res();};
-      video.addEventListener('loadedmetadata',onMeta);
+      const onData=()=>{video.removeEventListener('loadeddata',onData);res();};
+      video.addEventListener('loadeddata',onData);
       video.src=`index.php?api=v1&action=file.stream&id=${currentEdit.renderedFileId}`;
       video.load();
     });
