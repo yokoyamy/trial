@@ -46,34 +46,35 @@ if (!file_exists($metaFile)) {
 }
 
 // -----------------------------------------------------------------------------
-// API ルーティング
+// API ルーティング (v1)
 // -----------------------------------------------------------------------------
 if (isset($_GET['api']) && $_GET['api'] === 'v1') {
     $action = $_GET['action'] ?? '';
 
-    // 動画配信 (file.stream / file.download)
+    // 1. ファイル配信・ストリーミング (file.stream / file.download)
     if ($action === 'file.stream' || $action === 'file.download') {
         $fileId = $_GET['id'] ?? '';
         $meta = json_decode((string)@file_get_contents($metaFile), true) ?: [];
-        $fileMeta = null;
+        $targetFile = null;
         foreach ($meta['files'] ?? [] as $f) {
-            if ($f['id'] === $fileId) { $fileMeta = $f; break; }
+            if ($f['id'] === $fileId) { $targetFile = $f; break; }
         }
-        if (!$fileMeta) { http_response_code(404); exit('File not found'); }
-        $filePath = $storageDir . '/' . $fileMeta['storagePath'];
-        if (!file_exists($filePath)) { http_response_code(404); exit('File on disk missing'); }
+        if (!$targetFile) { http_response_code(404); exit('File not found'); }
+        $filePath = $storageDir . '/' . $targetFile['storagePath'];
+        if (!file_exists($filePath)) { http_response_code(404); exit('File missing'); }
 
         $size = filesize($filePath);
-        $mime = !empty($fileMeta['mimeType']) ? $fileMeta['mimeType'] : 'video/mp4';
+        $mime = !empty($targetFile['mimeType']) ? $targetFile['mimeType'] : 'video/mp4';
 
         if ($action === 'file.download') {
             header('Content-Type: ' . $mime);
-            header('Content-Disposition: attachment; filename="' . basename($fileMeta['storagePath']) . '"');
+            header('Content-Disposition: attachment; filename="' . basename($targetFile['storagePath']) . '"');
             header('Content-Length: ' . $size);
             readfile($filePath);
             exit;
         }
 
+        // HTTP Range 対応ストリーミング
         $start = 0;
         $end = $size - 1;
         if (isset($_SERVER['HTTP_RANGE']) && preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $matches)) {
@@ -89,16 +90,17 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
         fseek($fp, $start);
         $rem = $end - $start + 1;
         while ($rem > 0 && !feof($fp)) {
-            $buf = fread($fp, min(1048576, $rem));
-            echo $buf;
-            $rem -= strlen($buf);
+            $chunk = fread($fp, min(1048576, $rem));
+            echo $chunk;
+            $rem -= strlen($chunk);
         }
         fclose($fp);
         exit;
     }
 
-    // JSON API
+    // 2. JSON API
     header('Content-Type: application/json; charset=UTF-8');
+
     function apiSuccess($data, ?string $rid = null): void {
         echo json_encode(['ok' => true, 'requestId' => $rid, 'data' => $data], JSON_UNESCAPED_UNICODE);
         exit;
@@ -109,13 +111,16 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
         exit;
     }
 
+    // 排他ロック制御
     $lockFp = @fopen($metaFile, 'c+');
     if ($lockFp) @flock($lockFp, LOCK_EX);
 
-    $meta = json_decode((string)@file_get_contents($metaFile), true) ?: ['folders'=>[],'videos'=>[],'edits'=>[],'files'=>[]];
+    $meta = json_decode((string)@file_get_contents($metaFile), true) ?: [
+        'schemaVersion' => 1, 'folders' => [], 'videos' => [], 'edits' => [], 'files' => []
+    ];
     $requests = json_decode((string)@file_get_contents($reqFile), true) ?: [];
 
-    function saveMeta($lockFp, $metaFile, $reqFile, $meta, $requests): void {
+    function saveState($lockFp, $metaFile, $reqFile, $meta, $requests): void {
         @file_put_contents($metaFile . '.tmp', json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
         @rename($metaFile . '.tmp', $metaFile);
         @file_put_contents($reqFile . '.tmp', json_encode($requests, JSON_UNESCAPED_UNICODE));
@@ -125,29 +130,25 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
 
     $method = $_SERVER['REQUEST_METHOD'];
 
-    // GET 一覧
+    // GET 一覧取得
     if ($method === 'GET' && $action === 'list') {
         if ($lockFp) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
-        // 公開仕様：filesからstoragePathを除外
-        $sanitizedFiles = array_map(function($f) {
+        // storagePathを除外して安全に応答
+        $filesSanitized = array_map(function($f) {
             unset($f['storagePath']);
             return $f;
         }, $meta['files'] ?? []);
-        // editsからeditDataを除外して一覧用にする
-        $sanitizedEdits = array_map(function($e) {
-            unset($e['editData']);
-            return $e;
-        }, $meta['edits'] ?? []);
+
         apiSuccess([
-            'schemaVersion' => 1,
-            'folders' => $meta['folders'] ?? [],
-            'videos'  => $meta['videos'] ?? [],
-            'edits'   => $sanitizedEdits,
-            'files'   => $sanitizedFiles
+            'schemaVersion' => $meta['schemaVersion'] ?? 1,
+            'folders'       => $meta['folders'] ?? [],
+            'videos'        => $meta['videos'] ?? [],
+            'edits'         => $meta['edits'] ?? [],
+            'files'         => $filesSanitized
         ], null);
     }
 
-    // GET 編集詳細
+    // GET 編集詳細取得
     if ($method === 'GET' && $action === 'edit.get') {
         $editId = $_GET['id'] ?? '';
         foreach ($meta['edits'] ?? [] as $e) {
@@ -160,7 +161,7 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
         apiError('NOT_FOUND', '編集データが見つかりません', 404, null);
     }
 
-    // POST 更新系
+    // POST 更新処理
     $rid = null;
     $payload = [];
     if (isset($_SERVER['CONTENT_TYPE']) && strpos($_SERVER['CONTENT_TYPE'], 'multipart/form-data') !== false) {
@@ -175,10 +176,10 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
 
     if (!$rid) {
         if ($lockFp) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
-        apiError('INVALID_REQUEST', 'requestIdが必要です', 400, null);
+        apiError('INVALID_REQUEST', 'requestIdが指定されていません', 400, null);
     }
 
-    // 重複実行防止
+    // 冪等性チェック（重複要求防止）
     if (isset($requests[$rid])) {
         if ($lockFp) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
         apiSuccess($requests[$rid]['data'], $rid);
@@ -212,7 +213,6 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
             break;
 
         case 'folder.delete':
-            // 配下の再帰収集
             $toDelete = [$payload['id']];
             $changed = true;
             while ($changed) {
@@ -241,7 +241,7 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
             $rel = 'files/' . $fid . '.' . $ext;
             if (!@move_uploaded_file($_FILES['file']['tmp_name'], $storageDir . '/' . $rel)) {
                 if ($lockFp) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
-                apiError('FILE_MOVE_FAILED', '保存領域への書き込みに失敗しました', 500, $rid);
+                apiError('FILE_MOVE_FAILED', 'ファイルの保存に失敗しました', 500, $rid);
             }
             $meta['files'][] = [
                 'id' => $fid,
@@ -250,7 +250,7 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
                 'size' => filesize($storageDir . '/' . $rel),
                 'createdAt' => $now
             ];
-            $vObj = [
+            $video = [
                 'id' => $payload['id'] ?? genUuid(),
                 'folderId' => $payload['folderId'] ?? ($meta['folders'][0]['id'] ?? null),
                 'name' => $payload['name'] ?? '動画',
@@ -258,8 +258,8 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
                 'createdAt' => $now,
                 'updatedAt' => $now
             ];
-            $meta['videos'][] = $vObj;
-            $resData = ['video' => $vObj];
+            $meta['videos'][] = $video;
+            $resData = ['video' => $video];
             break;
 
         case 'video.rename':
@@ -291,7 +291,7 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
             break;
 
         case 'edit.save':
-            $eid = $payload['id'];
+            $eid = $payload['id'] ?? genUuid();
             $expVer = (int)($payload['expectedVersion'] ?? 0);
             $idx = -1;
             for ($i = 0; $i < count($meta['edits']); $i++) {
@@ -299,7 +299,7 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
             }
             if ($idx >= 0 && $meta['edits'][$idx]['version'] !== $expVer) {
                 if ($lockFp) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
-                apiError('VERSION_CONFLICT', '編集データが競合しています。最新を再取得してください', 409, $rid);
+                apiError('VERSION_CONFLICT', '編集データが競合しています。最新データを再取得してください', 409, $rid);
             }
             $rfid = null;
             if (isset($_FILES['file']) && $_FILES['file']['error'] === UPLOAD_ERR_OK) {
@@ -351,7 +351,7 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
     }
 
     $requests[$rid] = ['data' => $resData, 'time' => $now];
-    saveMeta($lockFp, $metaFile, $reqFile, $meta, $requests);
+    saveState($lockFp, $metaFile, $reqFile, $meta, $requests);
     apiSuccess($resData, $rid);
 }
 ?>
@@ -381,8 +381,7 @@ video{display:block;width:100%;height:100%}
 #split:hover{background:#94a3b8}
 #actions{justify-content:center}
 #primary{background:#2563eb;color:#fff;font-weight:bold}
-#primary.recording{background:#dc2626;animation:blink 1.5s infinite}
-@keyframes blink{0%{opacity:1}50%{opacity:.7}100%{opacity:1}}
+#primary.recording{background:#dc2626}
 #primary:hover{opacity:.9}
 #status{min-height:18px;color:#607089;font-size:11px}
 #timeline{background:#fff;border:1px solid #ccd6e3;display:flex;flex-direction:column;height:180px}
@@ -402,9 +401,9 @@ video{display:block;width:100%;height:100%}
 #library{position:fixed;inset:0 auto 0 0;width:min(480px,100vw);background:#fff;z-index:11;display:flex;flex-direction:column;box-shadow:4px 0 20px #0003}
 #library .toolbar{padding:8px;border-bottom:1px solid #ccd6e3}
 #tree{flex:1;overflow:auto;padding:8px}
-.row{display:flex;align-items:center;gap:6px;min-height:28px;padding:2px 4px}
+.row{display:flex;align-items:center;gap:6px;min-height:28px;padding:2px 4px;border-radius:3px}
 .row:hover{background:#edf4ff}
-.row.drop{outline:2px dashed #2563eb}
+.row.drop-target{background:#e0ecff;outline:2px dashed #2563eb}
 .name{flex:1;cursor:pointer;overflow-wrap:anywhere}
 .name[contenteditable=true]{outline:1px solid #2563eb;background:#fff}
 .row time{font-size:10px;color:#64748b}
@@ -442,7 +441,7 @@ body>*:not(#printArea){display:none!important}
 </header>
 <main>
   <section id="stage">
-    <div id="empty">録画開始で画面共有を撮影できます。<br>保存済み動画は動画一覧から選択してください。</div>
+    <div id="empty">録画開始で共有する画面を選択してください。<br>保存済み動画は動画一覧から選択できます。</div>
     <div id="surface" hidden><video id="video" playsinline></video><canvas id="overlay"></canvas></div>
   </section>
   <div id="split"></div>
@@ -523,11 +522,12 @@ async function api(action,payload={},fileBlob=null,fileName='file.mp4'){
   }
   const text=await res.text();
   let json;
-  try{ json=JSON.parse(text); }catch(e){ throw new Error(`サーバー応答形式エラー: ${text.slice(0,100)}`); }
+  try{ json=JSON.parse(text); }catch(e){ throw new Error(`サーバー応答エラー: ${text.slice(0,100)}`); }
   if(!json.ok)throw new Error(json.error?.message||'API要求エラー');
   return json.data;
 }
 
+// 動画一覧の同期
 async function reloadList(){
   const res=await fetch('index.php?api=v1&action=list');
   const json=await res.json();
@@ -1009,7 +1009,7 @@ canvas.ondblclick=ev=>{
   div.onblur=commitText;
 };
 
-// スキップ制御計算
+// スキップ制御
 function getNextPlayTime(t){
   for(let i=0;i<elements.length;i++){
     const sk=elements.find(e=>e.type==='D'&&t>=e.start&&t<e.end);
@@ -1157,7 +1157,9 @@ async function toggleRecord(){
   }
 }
 
-// 動画一覧ツリー（再帰的描画）
+// -----------------------------------------------------------------------------
+// 動画一覧ツリー（再帰的描画：仕様書データ構造に完全準拠）
+// -----------------------------------------------------------------------------
 function renderTree(){
   const root=$('tree');root.replaceChildren();
 
@@ -1208,19 +1210,21 @@ function renderTree(){
         }
       }]
     ]));
-    fRow.ondragover=ev=>ev.preventDefault();
+    fRow.ondragover=ev=>{ev.preventDefault();fRow.classList.add('drop-target');};
+    fRow.ondragleave=()=>fRow.classList.remove('drop-target');
     fRow.ondrop=async ev=>{
       ev.preventDefault();
+      fRow.classList.remove('drop-target');
       const vid=ev.dataTransfer.getData('text/plain');
       if(vid){await api('video.move',{id:vid,folderId:folder.id});await reloadList();}
     };
     root.append(fRow);
 
-    // 配下の子フォルダ
+    // 子フォルダの再帰表示
     const childFolders=serverData.folders.filter(f=>f.parentFolderId===folder.id);
     childFolders.forEach(cf=>renderFolder(cf,depth+1));
 
-    // 配下の動画
+    // フォルダ直下の動画
     const childVideos=serverData.videos.filter(v=>v.folderId===folder.id);
     childVideos.forEach(v=>{
       const vRow=makeRow('video',v.id,'🎬 '+v.name,depth+1,v.createdAt,()=>loadEntity(v,null,false),(ev,span)=>openMenu(ev,[
@@ -1238,8 +1242,8 @@ function renderTree(){
       ]),true);
       root.append(vRow);
 
-      // 元動画行
-      const origRow=makeRow('original',v.originalFileId,' └ 📹 元動画',depth+2,v.createdAt,()=>loadEntity(v,null,false),(ev)=>openMenu(ev,[
+      // 元動画（固定表示）
+      const origRow=makeRow('file',v.originalFileId,' └ 📹 元動画',depth+2,v.createdAt,()=>loadEntity(v,null,false),(ev)=>openMenu(ev,[
         ['ダウンロード',()=>{window.location.href=`index.php?api=v1&action=file.download&id=${v.originalFileId}`;}]
       ]));
       root.append(origRow);
@@ -1274,7 +1278,7 @@ function renderTree(){
     });
   }
 
-  // ルートフォルダ一覧（parentFolderId === null）
+  // 最上位フォルダ（parentFolderId === null）から開始
   const rootFolders=serverData.folders.filter(f=>!f.parentFolderId);
   rootFolders.forEach(rf=>renderFolder(rf,0));
 }
@@ -1384,61 +1388,74 @@ $('handle').onpointerdown=ev=>{
   bindDrag(ev,mev=>{video.currentTime=getTimeAtEvent(mev);});
 };
 
-// スケール変更・動画イベント
 $('scale').oninput=()=>{tracks();paint();};
 $('viewZoom').onchange=ev=>{displayZoom=+ev.target.value;fit();};
 
-video.onseeked=()=>{tracks();paint();updateClock();};
-video.onplay=video.onpause=video.onended=updateUI;
-video.onerror=()=>message('動画の再生に失敗しました。形式を確認してください。');
+video.onseeked=()=>{tracks();
+    paint();
+    updateClock();
+  };
+  video.onplay = video.onpause = video.onended = updateUI;
+  video.onerror = () => message('動画の再生に失敗しました。形式や権限を確認してください。');
 
-// グローバルイベント
-document.addEventListener('pointerdown',ev=>{if(!ev.target.closest('#menu'))$('menu').hidden=true;});
-document.addEventListener('keydown',ev=>{
-  if(ev.key==='Escape'){connectingOwner=null;$('menu').hidden=true;}
-});
-window.addEventListener('resize',()=>{commitText();fit();});
-window.addEventListener('beforeunload',ev=>{
-  if(isDirty||screenStream||isBusy){ev.preventDefault();ev.returnValue='';}
-});
+  // グローバルイベント制御
+  document.addEventListener('pointerdown', ev => {
+    if (!ev.target.closest('#menu')) $('menu').hidden = true;
+  });
+  document.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') {
+      connectingOwner = null;
+      $('menu').hidden = true;
+    }
+  });
+  window.addEventListener('resize', () => {
+    commitText();
+    fit();
+  });
+  window.addEventListener('beforeunload', ev => {
+    if (isDirty || screenStream || isBusy) {
+      ev.preventDefault();
+      ev.returnValue = '';
+    }
+  });
 
-// 再生同期＆スキップ処理ループ
-let skipping=false;
-async function playLoop(){
-  if(!isBusy&&isEditing&&!video.paused&&!skipping){
-    const next=getNextPlayTime(video.currentTime);
-    if(next>video.currentTime){
-      skipping=true;
-      try{
-        video.pause();
-        await seek(next);
-        if(next<duration())await video.play();
-      }catch(e){
-        message(e.message);
-      }finally{
-        skipping=false;
+  // 再生同期およびスキップ区間制御ループ
+  let isSkipping = false;
+  async function playLoop() {
+    if (!isBusy && isEditing && !video.paused && !isSkipping) {
+      const next = getNextPlayTime(video.currentTime);
+      if (next > video.currentTime) {
+        isSkipping = true;
+        try {
+          video.pause();
+          await seek(next);
+          if (next < duration()) await video.play();
+        } catch (e) {
+          message(e.message);
+        } finally {
+          isSkipping = false;
+        }
       }
     }
-  }
-  paint();
-  if(isEditing){
-    updateClock();
-  }
-  requestAnimationFrame(playLoop);
-}
-
-// 初期起動処理
-(async()=>{
-  try{
-    await reloadList();
-    updateUI();
+    paint();
+    if (isEditing) {
+      updateClock();
+    }
     requestAnimationFrame(playLoop);
-    message('準備完了：録画開始または動画一覧から動画を選択してください。');
-  }catch(err){
-    console.error(err);
-    message('初期化失敗: '+err.message);
   }
-})();
+
+  // アプリケーション初期化
+  (async () => {
+    try {
+      await reloadList();
+      updateUI();
+      requestAnimationFrame(playLoop);
+      message('準備完了：録画開始、または動画一覧からファイルを選択してください。');
+    } catch (err) {
+      console.error(err);
+      message('初期化エラー: ' + err.message);
+    }
+  })();
 
 })();
 </script>
