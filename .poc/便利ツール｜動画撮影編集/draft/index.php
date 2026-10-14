@@ -205,7 +205,7 @@ if (isset($_GET['api']) && $_GET['api'] === 'v1') {
         case 'video.upload':
             if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
                 $errCode = $_FILES['file']['error'] ?? 'NO_FILE';
-                $respond(false, ['code' => 'UPLOAD_ERR', 'message' => "ファイルアップロード失敗 (エラーコード: {$errCode})。PHPのupload_max_filesize設定を確認してください。"], $rid, 400);
+                $respond(false, ['code' => 'UPLOAD_ERR', 'message' => "ファイルアップロード失敗 (エラーコード: {$errCode})。"], $rid, 400);
             }
             $fid = uuid();
             $mime = $_FILES['file']['type'] ?: 'video/webm';
@@ -552,7 +552,6 @@ function clearState(){
   isEditing=false;isDirty=false;renderedPlayback=false;connectingOwner=null;
 }
 
-// 先頭フレームを確実にレンダリングするための堅牢なシーク
 function seek(t){
   return new Promise(res=>{
     const target = clamp(t, 0, duration());
@@ -571,7 +570,6 @@ function seek(t){
   });
 }
 
-// 編集の保存確認（破棄して続行可能）
 async function leavePrompt(){
   if(isLocked())return false;
   commitText();
@@ -585,7 +583,6 @@ async function leavePrompt(){
   return true;
 }
 
-// ソースをセットして確実に先頭フレームを描画
 async function setVideoSrcAndSeekZero(srcUrl){
   video.pause();
   await new Promise((res,rej)=>{
@@ -608,7 +605,6 @@ async function setVideoSrcAndSeekZero(srcUrl){
     video.src=srcUrl;
     video.load();
   });
-  // 先頭フレームを描画させるためごくわずかに時間を進めてから0へシーク
   video.currentTime = 0.001;
   await new Promise(r=>setTimeout(r, 60));
   await seek(0);
@@ -667,6 +663,16 @@ function getEnds(e){
   const p=getPort(o,e.from),q=getPort(c,e.to),no=getNorm(o,e.from),nc=getNorm(c,e.to);
   return[p,{x:p.x+20*no.x,y:p.y+20*no.y},{x:q.x+20*nc.x,y:q.y+20*nc.y},q];
 }
+
+function distToSegment(p, a, b){
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if(lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
 function isVis(e,t){
   const o=e.type==='E'?findElem(e.ownerId):e;
   return o&&!['D','F'].includes(e.type)&&t>=o.start&&t<o.end;
@@ -709,7 +715,8 @@ function paint(targetCtx=ctx,t=video.currentTime,isOut=false){
         if(!isOut){
           [p,q].forEach((pt,i)=>{
             targetCtx.fillStyle=i?'#22c55e':'#38bdf8';
-            targetCtx.beginPath();targetCtx.arc(pt.x,pt.y,selectedIds.has(e.id)?6:4,0,Math.PI*2);targetCtx.fill();
+            targetCtx.beginPath();targetCtx.arc(pt.x,pt.y,selectedIds.has(e.id)?7:5,0,Math.PI*2);targetCtx.fill();
+            targetCtx.strokeStyle='#ffffff';targetCtx.lineWidth=1.5;targetCtx.stroke();
           });
         }
       }
@@ -758,11 +765,26 @@ function hitElem(q){
   return elements.filter(e=>isVis(e,video.currentTime)).sort((a,b)=>drawOrder[b.type]-drawOrder[a.type]).find(e=>{
     if(e.type==='E'){
       const ends=getEnds(e);
-      return ends&&[ends[0],ends[3]].some(p=>Math.hypot(p.x-q.x,p.y-q.y)<16);
+      if(!ends) return false;
+      const [p, u, v, qEnd] = ends;
+      // 1. 端点（開始・終了）のクリック判定
+      if(Math.hypot(p.x - q.x, p.y - q.y) < 18 || Math.hypot(qEnd.x - q.x, qEnd.y - q.y) < 18){
+        return true;
+      }
+      // 2. 線分全体のクリック判定
+      const segments = [
+        [p, u],
+        e.line==='orthogonal' ? [u, {x:(u.x+v.x)/2, y:u.y}] : [u, v],
+        e.line==='orthogonal' ? [{x:(u.x+v.x)/2, y:u.y}, {x:(u.x+v.x)/2, y:v.y}] : [u, v],
+        e.line==='orthogonal' ? [{x:(u.x+v.x)/2, y:v.y}, v] : [u, v],
+        [v, qEnd]
+      ];
+      return segments.some(([s1, s2]) => distToSegment(q, s1, s2) < 12);
     }
     return q.x>=e.x&&q.x<=e.x+e.w&&q.y>=e.y&&q.y<=e.y+e.h;
   });
 }
+
 function getPt(ev){
   const r=canvas.getBoundingClientRect();
   return{x:(ev.clientX-r.left)*canvas.width/r.width,y:(ev.clientY-r.top)*canvas.height/r.height};
@@ -896,13 +918,19 @@ function openElemMenu(ev,item,isTl){
     }
   }else{
     ['A','B','C'].forEach(k=>items.push([titles[k]+'追加',()=>addE(k)]));
-    items.push(['接続線追加',()=>{connectingOwner='start';message('接続開始側の要素をクリックしてください');}]);
+    items.push(['接続線追加',()=>{connectingOwner='start';message('接続開始側の要素（枠またはコメント）をクリックしてください');}]);
   }
   if(item){
     if(!['D','F'].includes(item.type))items.push(['書式変更',()=>openFormatMenu(ev,item)]);
     items.push(['削除',()=>{
-      elements=elements.filter(e=>!selectedIds.has(e.id)&&!selectedIds.has(e.ownerId)&&!selectedIds.has(e.commentId));
-      selectedIds.clear();isDirty=true;tracks();paint();
+      const deleteTargets = new Set(selectedIds);
+      if(item) deleteTargets.add(item.id);
+      elements = elements.filter(e => !deleteTargets.has(e.id) && !deleteTargets.has(e.ownerId) && !deleteTargets.has(e.commentId));
+      selectedIds.clear();
+      isDirty=true;
+      tracks();
+      paint();
+      message('要素を削除しました');
     }]);
   }
   openMenu(ev,items);
@@ -948,7 +976,7 @@ function openFormatMenu(ev,item){
   m.style.top=clamp(ev.clientY,5,window.innerHeight-m.offsetHeight-10)+'px';
 }
 
-// キャンバス操作
+// キャンバス操作（接続線の両端ドラッグ・枠の移動/サイズ変更）
 canvas.onpointerdown=ev=>{
   if(ev.button!==0||!isEditing||isLocked())return;
   commitText();video.pause();
@@ -978,13 +1006,24 @@ canvas.onpointerdown=ev=>{
   const old=structuredClone(item);
   const isRes=item.type!=='E'&&q.x>item.x+item.w-18&&q.y>item.y+item.h-18;
   const ends=item.type==='E'?getEnds(item):null;
-  const endTarget=ends&&Math.hypot(ends[0].x-q.x,ends[0].y-q.y)<16?'from':'to';
+
+  // 接続線の場合：開始端(from:水色)か終了端(to:緑色)かを判定
+  let endTarget=null;
+  if(ends){
+    const distFrom = Math.hypot(ends[0].x - q.x, ends[0].y - q.y);
+    const distTo   = Math.hypot(ends[3].x - q.x, ends[3].y - q.y);
+    if(distFrom < 20) endTarget = 'from';
+    else if(distTo < 20) endTarget = 'to';
+    else endTarget = distFrom <= distTo ? 'from' : 'to'; // 線の中央付近を掴んだ場合は近い端点を移動
+  }
 
   bindDrag(ev,mev=>{
     const p=getPt(mev);
     if(item.type==='E'){
       const target=findElem(endTarget==='from'?item.ownerId:item.commentId);
-      item[endTarget]=getNearPort(target,p);
+      if(target){
+        item[endTarget]=getNearPort(target,p);
+      }
     }else if(isRes){
       item.w=clamp(old.w+p.x-q.x,30,canvas.width-item.x);
       item.h=clamp(old.h+p.y-q.y,20,canvas.height-item.y);
@@ -1134,7 +1173,7 @@ async function saveEdit(){
   }
 }
 
-// 画面録画（録画終了直後にローカルBlobで先頭フレームを即時確実に描画）
+// 画面録画
 async function toggleRecord(){
   if(mediaRec&&mediaRec.state==='recording'){
     message('録画を停止しています...');
@@ -1188,17 +1227,14 @@ async function toggleRecord(){
     const {blob,ext}=await doneProm;
     clearInterval(recTimer);recTimer=null;
 
-    // ストリームの停止
     screenStream.getTracks().forEach(t=>t.stop());
     screenStream=null;mediaRec=null;video.srcObject=null;video.muted=false;
 
-    // 1. 録画Blobから即座にローカルURLを生成し、先頭フレームを画面に描画・表示
     if(localBlobUrl)URL.revokeObjectURL(localBlobUrl);
     localBlobUrl = URL.createObjectURL(blob);
     await setVideoSrcAndSeekZero(localBlobUrl);
     updateUI();
 
-    // 2. 先頭フレームが表示された状態でバックグラウンドでサーバー保存
     message(`録画動画を保存中 (${(blob.size/1024/1024).toFixed(2)} MB)...`);
     const defFolderId=data.folders[0]?.id;
     const name=`録画 ${new Date().toLocaleString('ja-JP')}`;
@@ -1293,19 +1329,22 @@ function renderTree(){
         await api('video.move',{id,folderId:f.id});
         await loadData();
       }else if(type==='folder'){
-        if(id===f.id)return;
-        try{
-          await api('folder.move',{id,parentFolderId:f.id});
-          await loadData();
-        }catch(e){
-          message(e.message);
+        if(id!==f.id){
+          try{
+            await api('folder.move',{id,parentFolderId:f.id});
+            await loadData();
+          }catch(err){
+            message(err.message);
+          }
         }
       }
     };
     root.append(fRow);
 
-    data.folders.filter(cf=>cf.parentFolderId===f.id).forEach(cf=>renderFolder(cf,depth+1));
+    // 子フォルダの再帰描画
+    data.folders.filter(sub=>sub.parentFolderId===f.id).forEach(sub=>renderFolder(sub,depth+1));
 
+    // フォルダ内の動画
     data.videos.filter(v=>v.folderId===f.id).forEach(v=>{
       const vRow=makeRow('video',v.id,'🎬 '+v.name,depth+1,v.createdAt,()=>loadTarget(v,null,false),(ev,span)=>openMenu(ev,[
         ['元動画を再生',()=>loadTarget(v,null,false)],
@@ -1315,16 +1354,15 @@ function renderTree(){
           span.onblur=async()=>{span.contentEditable='false';await api('video.rename',{id:v.id,name:span.textContent.trim()||v.name});await loadData();};
         }],
         ['ダウンロード',()=>triggerDownload(v.originalFileId, v.name)],
-        ['PDF出力',async()=>{
-          await loadTarget(v,null,true);
-          openPdfDialog();
-        }],
         ['削除',async()=>{
-          if(confirm(`動画「${v.name}」を削除しますか？`)){await api('video.delete',{id:v.id});await loadData();}
+          if(confirm(`動画「${v.name}」を削除しますか？配下の編集もすべて削除されます。`)){
+            await api('video.delete',{id:v.id});await loadData();
+          }
         }]
       ]),true);
       root.append(vRow);
 
+      // 動画配下の編集データ
       data.edits.filter(ed=>ed.videoId===v.id).forEach(ed=>{
         const edRow=makeRow('edit',ed.id,'📝 '+ed.name,depth+2,ed.createdAt,()=>loadTarget(v,ed,false),(ev,span)=>openMenu(ev,[
           ['編集動画を再生',()=>loadTarget(v,ed,false)],
@@ -1415,7 +1453,7 @@ function openPdfDialog(){
 
 $('pdf').onclick=openPdfDialog;
 
-// PDF印刷実行（画像下のテキストラベル出力を完全除外）
+// PDF印刷実行
 $('print').onclick=async()=>{
   $('pdfDialog').close();
   commitText();
@@ -1448,7 +1486,6 @@ $('print').onclick=async()=>{
       img.src=sc.toDataURL('image/jpeg',0.9);
       img.style.maxHeight=cnt===2?'125mm':'260mm';
       await img.decode();
-      // テキストラベルは追加せず画像のみ配置
       shot.append(img);
       sheet.append(shot);
     }
